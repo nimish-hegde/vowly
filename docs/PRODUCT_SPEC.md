@@ -1,6 +1,6 @@
 # Vowly | Product specification
 
-Product requirements · v0.2 · November 2026 · Proposed pilot
+Product requirements · v0.2.1 · November 2026 · Proposed pilot
 
 ## Decision this release should answer
 
@@ -52,9 +52,9 @@ Test whether each participant can tell who acts next and whether the venue is bo
 
 | Priority | Deliverable | Rationale |
 |---|---|---|
-| Pilot essential | Event setup, shortlist, quote capture and review, comparable pricing, revisions, payment records and assigned follow-ups | One complete decision from first quote to next obligation |
-| Pilot convenience | CSV import with column mapping and preview, budget export, reminders | Prioritize when onboarding or missed deadlines block real use |
-| Later | Discovery marketplace, guest-facing schedules, coordinator handover, ceremonies and destination scenarios | Each needs different data, contributors or distribution |
+| Pilot essential | Event setup, venue quote capture and review, side-by-side comparison, quote revisions, and assigned follow-ups | One full decision loop from first quote to revised offer and next step |
+| Post-pilot (v0.6+) | Bookings and payment tracking, hourly photographer comparison, spreadsheet import/export, and reminders | Build after the pilot proves couples trust quote revisions and come back (still test hourly photography in `#2`) |
+| Later | Vendor discovery, guest schedules, coordinator handover, and destination scenarios | Separate needs and users |
 
 Instagram and WhatsApp remain user-controlled sources. The pilot accepts a selected excerpt or screenshot. A vendor account, social login and background access to private conversations are unnecessary. Generic AI chat is optional. Visible controls cover the full pilot journey.
 
@@ -73,13 +73,32 @@ Instagram and WhatsApp remain user-controlled sources. The pilot accepts a selec
 
 The model extracts facts and suggests questions. Application code calculates prices and balances from approved inputs. Store source, event coverage, revision history, booking status, payer-reported payment and linked tasks as distinct records. Use visible labels for missing fields and status changes alongside color. Permit keyboard review, correction and dismissal.
 
-## Evidence needed for the next investment
+### Statuses, helper access, and privacy
 
-Use counterbalanced, equivalent vendor examples to reduce practice effects in timed comparisons. Record time through a correct answer, including corrections. During a two-week pilot, count repeat use among couples who actually received another vendor update. A quiet week provides little evidence about retention.
+- **Vendor status per event:** `Shortlisted`, `Quoted`, `Revision pending`, `Booked`, or `Declined`. Approving a quote revision updates the price estimate without marking the venue as booked.
+- **Task status:** `Suggested`, `Assigned`, `Answered`, or `Closed`. When a helper enters a price they got from a vendor, it shows up as a proposed update for the couple to review—not an automatic change to the quote.
+- **Helper access:** Share a link to just the assigned question (vendor name, question, and relevant excerpt). Helpers should not need a full account or see the wedding budget and payments.
+- **Privacy for real quotes:** Keep real couples' quotes, spreadsheets, and screenshots private during testing. Never log or commit unredacted vendor messages to the repo, and only save real examples to test sets if the couple agrees and names/contact details are scrubbed.
 
-Proposed pilot decision: proceed if at least four of five couples can independently identify the unresolved fee and assign the follow-up, and a majority of those receiving a second update choose to use Vowly again. These are directional gates for a small sample. If trust fails, improve source review first. If couples understand the result but prefer their sheet, test exporting proposed updates. If they struggle primarily to obtain the first quotes, revisit vendor shortlisting.
+## How we'll evaluate the pilot
 
-For offline evaluation, hold back examples from prompt development. Include conflicting messages, bundled events, duplicate screenshots, minimum-spend exceptions and relative deadlines. Score source support, exact amount and currency, correct unknowns, and task owner/date only when stated. Record human correction time, latency and inference cost per accepted revision. Publish only synthetic examples and measured results.
+Recruit five self-planning couples. Have each compare two equivalent vendor offers using their current spreadsheet or notes and Vowly, swapping who goes first so practice doesn't skew the timing. Measure how long it takes to get the right answer (including fixing mistakes), how many edits they had to make, and what terms they missed. Interview both partners where possible about who saved time and who took on extra work.
+
+**Repeat use (one definition):** *Of the couples who received a new or revised venue quote during the two-week pilot, how many returned to Vowly to review it?* Report the actual count (for example, 2 of 3 eligible couples). If nobody gets a new or revised quote, mark repeat use as unmeasured.
+
+**Pilot bar (directional for five couples):** Keep going if at least four of five couples find the missing fee and assign the follow-up on their own, and most eligible couples who receive a new or revised venue quote return to Vowly to review it.
+
+- If couples don't trust the numbers, fix source review first.
+- If they understand the numbers but stick to their spreadsheet, test exporting updates back to their sheet.
+- If they mostly struggle to get initial quotes from vendors, rethink vendor discovery.
+
+**Private alpha (`v0.5`) access requirements:** Local development is fine for the first moderated walkthrough (`v0.4`), but before starting the two-week private alpha (`v0.5`), the prototype must support:
+- A helper opening their assigned task link on their own phone.
+- A couple returning to their workspace independently days later.
+
+Hosting is left open until `v0.5`—pick the simplest option that meets those two requirements.
+
+**Testing AI extraction before the pilot (`#2`):** Keep a held-out set of test quotes (redacted real quotes or fake ones built from real pricing patterns) separate from the examples used to tune prompts. Cover hourly photography with missing extras, tiered venue pricing, conflicting revisions, bundled multi-event contracts, duplicate screenshots, minimum-spend rules, and relative deadlines. Check that every extracted price matches an exact quote passage, the currency and math are right, missing fees stay unknown, and nothing gets duplicated. Track how long human fixes take, speed, and API cost per update. Never ship if the AI invents fees, shows numbers without a source passage, or double-counts a booking or payment.
 
 ## Who we are building for
 
@@ -93,13 +112,13 @@ These observations come from one household. The commercial opportunity, frequenc
 
 ## First release
 
-Help a couple take two real vendor offers from initial comparison through a booking, a payment and an assigned follow-up. Start with photographers and venues. The dashboard opens on upcoming obligations and changes awaiting review. Every core action works through visible controls.
+Help a couple take two real venue offers from first comparison through a quote revision and an assigned follow-up. The private alpha (`v0.5`) covers venue quote capture, side-by-side comparison, revision review, and assigned follow-ups. Booking and payment tracking (step 5) and hourly photographer comparison come right after in `v0.6+`, though `#2` still tests photography quotes so the data model handles them later. Every core action works through visible controls.
 
 1. Create a wedding workspace. Start with one event, allow custom names and optional dates, and add events as needed. Record event headcount, currency and budget. Switch between one event and the whole wedding.
-2. Save vendors discovered anywhere with a portfolio link, referral and personal notes. Track status per event so a photographer can be booked for one and under consideration for another.
+2. Save vendors discovered anywhere with a portfolio link, referral and personal notes. Track status per event so a vendor can be booked for one and under consideration for another.
 3. Paste a conversation or add a screenshot or quote. Show each proposed change beside its supporting text. Allow corrections, manual entry and approval. Preserve earlier offers and flag conflicting terms.
 4. Compare packages using the couple's required coverage or guest count. Calculate from explicit prices, tiers, minimums and fees. Show unknown charges and capacity limits. Keep estimates distinct from agreed amounts. Help the couple identify a specific follow-up or prepare a counteroffer.
-5. On booking, record events covered, agreed price, payment schedule and payments reported by the couple. Deduct deposits from the outstanding balance. Retain contingent amounts until the required inputs are known.
+5. *(Post-pilot, `v0.6+`)* On booking, record events covered, agreed price, payment schedule and payments reported by the couple. Deduct deposits from the outstanding balance. Retain contingent amounts until the required inputs are known.
 6. Turn explicit obligations into suggested tasks with the source and due date. Let either partner create, accept, edit, assign and complete a task. A helper receives the relevant details. Couples control financial changes and vendor communications.
 
 ## Multi-event acceptance examples
@@ -115,14 +134,20 @@ Help a couple take two real vendor offers from initial comparison through a book
 
 Our hypothesis is that couples will return when an off-platform vendor sends a revision and they can quickly verify what changed, see its impact across events and assign the follow-up. The benchmark is their current spreadsheet and messaging workflow. Competitor observations reflect public descriptions.
 
-## Pilot and success measures
-
-Recruit five self-planning couples. Have each compare two offers using their current method and the prototype. Measure time to a correct comparison, corrections required and missed terms. Then observe whether they independently return with a real revision, payment or task. Interview both partners where possible about who saved time and who picked up extra work.
-
-Evaluate extraction on synthetic or consented, redacted examples. Include an hourly quote with missing extras, tiered venue pricing, a revised quote and a bundled multi-event contract. Check extracted fields against human labels, source support, arithmetic, duplicate payments and duplicate suggested tasks. Record cost per accepted update. Treat invented charges or double-counted bookings as release blockers.
-
 ## Sequencing and open decisions
 
-Prototype the comparison and revision workflow first. Test with a second partner and a helper before expanding permissions. Test a simple spreadsheet import against real column layouts before committing to migration. Use synthetic examples in public demos and run the prototype locally to control costs.
+Build with **TypeScript** and **Gemini** so the quote extraction code from `v0.3` can be used directly in the `v0.4` app. Run locally during `v0.4` development and moderated walkthroughs to keep costs predictable, then pick the simplest hosting option that supports helper phone links and independent couple return visits for the `v0.5` private alpha. Keep real quotes and spreadsheets private while testing, and only commit fake examples to the public repo.
 
-Later opportunities include local-versus-destination feasibility, family guest-list consolidation, coordinator handover, tailored schedules and guest ceremony guidance. Revisit vendor discovery if pilot couples spend most of their effort obtaining initial prices. Test whether couples prefer event-level allocations, shared expenses or both.
+### Roadmap and pilot backlog
+
+| Milestone | What we're doing | Tracked issue |
+|---|---|---|
+| v0.3 — AI experimentation | Build the Gemini quote extractor and test it on labeled real/redacted and fake cases (venues + hourly photography) | [#2 Evaluate AI quote extraction against labeled examples](https://github.com/nimish-hegde/vowly/issues/2) |
+| v0.4 — Functional prototype | Create a single event and capture the first two venue quotes | [#7 Capture initial event setup and first two venue quotes](https://github.com/nimish-hegde/vowly/issues/7) |
+| v0.4 — Functional prototype | Paste a revised quote, check the source wording, and apply without doubling totals | [#1 Review and apply a revised venue quote](https://github.com/nimish-hegde/vowly/issues/1) |
+| v0.4 — Functional prototype | Compare two venues at the same guest count with break-even fees and capacity warnings | [#3 Compare two venues at the same guest count](https://github.com/nimish-hegde/vowly/issues/3) |
+| v0.4 — Functional prototype | Assign an open vendor question to a helper without exposing the budget | [#4 Assign a follow-up from an unresolved vendor fee](https://github.com/nimish-hegde/vowly/issues/4) |
+| v0.5 — Private alpha | Run the 2-week test with five self-planning couples and check the pilot bar | [#5 Test the quote workflow with five self-planning couples](https://github.com/nimish-hegde/vowly/issues/5) |
+| v0.6 — Iteration | Add booking/deposit tracking, photographer comparison, or spreadsheet export based on pilot feedback | Deferred until `#5` finishes |
+
+Later opportunities include local-versus-destination feasibility, family guest-list consolidation, coordinator handover, tailored schedules and guest ceremony guidance. Revisit vendor discovery if pilot couples spend most of their effort obtaining initial prices. Test spreadsheet import against real column layouts before building a full importer.
