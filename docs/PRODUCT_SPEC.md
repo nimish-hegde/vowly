@@ -82,13 +82,21 @@ The model extracts facts and suggests questions. Application code calculates pri
 
 ## How we'll evaluate the pilot
 
-Recruit five self-planning couples. Have each compare two equivalent vendor offers using their current spreadsheet or notes and Vowly, swapping who goes first so practice doesn't skew the timing. Measure how long it takes to get the right answer (including fixing mistakes), how many edits they had to make, and what terms they missed. Over two weeks, track repeat use only among couples who actually receive another vendor update, payment, or task—a quiet week doesn't tell us much about retention. Interview both partners where possible about who saved time and who took on extra work.
+Recruit five self-planning couples. Have each compare two equivalent vendor offers using their current spreadsheet or notes and Vowly, swapping who goes first so practice doesn't skew the timing. Measure how long it takes to get the right answer (including fixing mistakes), how many edits they had to make, and what terms they missed. Interview both partners where possible about who saved time and who took on extra work.
 
-**Pilot bar (directional for five couples):** Keep going if at least four of five couples find the missing fee and assign the follow-up on their own, and most couples who get a second vendor update come back to Vowly to review it.
+**Repeat use (one definition):** *Of the couples who received a new or revised venue quote during the two-week pilot, how many returned to Vowly to review it?* Report the actual count (for example, 2 of 3 eligible couples). If nobody gets a new or revised quote, mark repeat use as unmeasured.
+
+**Pilot bar (directional for five couples):** Keep going if at least four of five couples find the missing fee and assign the follow-up on their own, and most eligible couples who receive a new or revised venue quote return to Vowly to review it.
 
 - If couples don't trust the numbers, fix source review first.
 - If they understand the numbers but stick to their spreadsheet, test exporting updates back to their sheet.
 - If they mostly struggle to get initial quotes from vendors, rethink vendor discovery.
+
+**Private alpha (`v0.5`) access requirements:** Local development is fine for the first moderated walkthrough (`v0.4`), but before starting the two-week private alpha (`v0.5`), the prototype must support:
+- A helper opening their assigned task link on their own phone.
+- A couple returning to their workspace independently days later.
+
+Hosting is left open until `v0.5`—pick the simplest option that meets those two requirements.
 
 **Testing AI extraction before the pilot (`#2`):** Keep a held-out set of test quotes (redacted real quotes or fake ones built from real pricing patterns) separate from the examples used to tune prompts. Cover hourly photography with missing extras, tiered venue pricing, conflicting revisions, bundled multi-event contracts, duplicate screenshots, minimum-spend rules, and relative deadlines. Check that every extracted price matches an exact quote passage, the currency and math are right, missing fees stay unknown, and nothing gets duplicated. Track how long human fixes take, speed, and API cost per update. Never ship if the AI invents fees, shows numbers without a source passage, or double-counts a booking or payment.
 
@@ -128,7 +136,7 @@ Our hypothesis is that couples will return when an off-platform vendor sends a r
 
 ## Sequencing and open decisions
 
-Build with **TypeScript** and **Gemini** so the quote extraction code from `v0.3` can be used directly in the `v0.4` app. Run the prototype locally during testing to keep costs predictable. Keep real quotes and spreadsheets private while testing, and only commit fake examples to the public repo.
+Build with **TypeScript** and **Gemini** so the quote extraction code from `v0.3` can be used directly in the `v0.4` app. Run locally during `v0.4` development and moderated walkthroughs to keep costs predictable, then pick the simplest hosting option that supports helper phone links and independent couple return visits for the `v0.5` private alpha. Keep real quotes and spreadsheets private while testing, and only commit fake examples to the public repo.
 
 ### Roadmap and pilot backlog
 
