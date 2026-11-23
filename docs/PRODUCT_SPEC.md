@@ -1,6 +1,6 @@
 # Vowly | Product specification
 
-Product requirements · v0.2 · November 2026 · Proposed pilot
+Product requirements · v0.3 · November 2026 · Proposed pilot
 
 ## Decision this release should answer
 
@@ -73,13 +73,25 @@ Instagram and WhatsApp remain user-controlled sources. The pilot accepts a selec
 
 The model extracts facts and suggests questions. Application code calculates prices and balances from approved inputs. Store source, event coverage, revision history, booking status, payer-reported payment and linked tasks as distinct records. Use visible labels for missing fields and status changes alongside color. Permit keyboard review, correction and dismissal.
 
-## Evidence needed for the next investment
+### Lifecycle states and access boundaries
 
-Use counterbalanced, equivalent vendor examples to reduce practice effects in timed comparisons. Record time through a correct answer, including corrections. During a two-week pilot, count repeat use among couples who actually received another vendor update. A quiet week provides little evidence about retention.
+- **Vendor status per event:** `Shortlisted` → `Quoted` → `Revision pending` → `Booked` or `Declined`. Approving a quote revision updates the forecast without changing booking status.
+- **Task status:** `Suggested` → `Assigned` → `Answered` → `Closed`. A helper’s reported price creates a proposed revision for the couple to review rather than mutating the quote directly.
+- **Pilot helper access:** Share a task-scoped link or view showing only the vendor name, question and relevant excerpt. Do not require a full workspace account or expose overall wedding budgets and payments.
 
-Proposed pilot decision: proceed if at least four of five couples can independently identify the unresolved fee and assign the follow-up, and a majority of those receiving a second update choose to use Vowly again. These are directional gates for a small sample. If trust fails, improve source review first. If couples understand the result but prefer their sheet, test exporting proposed updates. If they struggle primarily to obtain the first quotes, revisit vendor shortlisting.
+## Pilot evaluation and release gates
 
-For offline evaluation, hold back examples from prompt development. Include conflicting messages, bundled events, duplicate screenshots, minimum-spend exceptions and relative deadlines. Score source support, exact amount and currency, correct unknowns, and task owner/date only when stated. Record human correction time, latency and inference cost per accepted revision. Publish only synthetic examples and measured results.
+Recruit five self-planning couples. Have each compare two equivalent vendor offers using their current method and the prototype, counterbalanced to reduce practice effects. Record time through a correct answer (including corrections), corrections required and missed terms. During a two-week pilot, count repeat use only among couples who actually receive another vendor update, payment or task—a quiet week provides little evidence about retention. Interview both partners where possible about who saved time and who picked up extra work.
+
+**Proposed pilot decision gate (directional for a small sample):** Proceed if at least four of five couples independently identify the unresolved fee and assign the follow-up, and a majority of those receiving a second update choose to use Vowly again.
+
+- If trust fails, improve source review first.
+- If couples understand the result but prefer their spreadsheet, test exporting proposed updates.
+- If they struggle primarily to obtain initial quotes, revisit vendor shortlisting.
+
+**Offline extraction evaluation:** Hold back synthetic or consented, redacted examples from prompt development. Cover hourly photography with missing extras, tiered venue pricing, conflicting revisions, bundled multi-event contracts, duplicate screenshots, minimum-spend exceptions and relative deadlines. Score source support, exact amount and currency, arithmetic, correct unknowns, duplicate payments/tasks and task owner/date only when stated. Record human correction time, latency and inference cost per accepted revision. Publish only synthetic examples and measured results.
+
+**Release blockers:** Treat invented charges, unsupported amounts without source passages, or double-counted bookings/payments as release blockers.
 
 ## Who we are building for
 
@@ -115,14 +127,19 @@ Help a couple take two real vendor offers from initial comparison through a book
 
 Our hypothesis is that couples will return when an off-platform vendor sends a revision and they can quickly verify what changed, see its impact across events and assign the follow-up. The benchmark is their current spreadsheet and messaging workflow. Competitor observations reflect public descriptions.
 
-## Pilot and success measures
-
-Recruit five self-planning couples. Have each compare two offers using their current method and the prototype. Measure time to a correct comparison, corrections required and missed terms. Then observe whether they independently return with a real revision, payment or task. Interview both partners where possible about who saved time and who picked up extra work.
-
-Evaluate extraction on synthetic or consented, redacted examples. Include an hourly quote with missing extras, tiered venue pricing, a revised quote and a bundled multi-event contract. Check extracted fields against human labels, source support, arithmetic, duplicate payments and duplicate suggested tasks. Record cost per accepted update. Treat invented charges or double-counted bookings as release blockers.
-
 ## Sequencing and open decisions
 
 Prototype the comparison and revision workflow first. Test with a second partner and a helper before expanding permissions. Test a simple spreadsheet import against real column layouts before committing to migration. Use synthetic examples in public demos and run the prototype locally to control costs.
+
+### Pilot backlog
+
+| Order | Workstream | Tracked issue |
+|---|---|---|
+| 1 | Offline extraction benchmark on labeled synthetic cases | [#2 Evaluate AI quote extraction against labeled examples](https://github.com/nimish-hegde/vowly/issues/2) |
+| 2 | Quote revision review with source passages and idempotency | [#1 Review and apply a revised venue quote](https://github.com/nimish-hegde/vowly/issues/1) |
+| 3 | Side-by-side venue comparison with break-even fee and headcount tiers | [#3 Compare two venues at the same guest count](https://github.com/nimish-hegde/vowly/issues/3) |
+| 4 | Scoped follow-up assignment to a helper | [#4 Assign a follow-up from an unresolved vendor fee](https://github.com/nimish-hegde/vowly/issues/4) |
+| 5 | Five-couple pilot study and go/no-go decision | [#5 Test the quote workflow with five self-planning couples](https://github.com/nimish-hegde/vowly/issues/5) |
+| Gap | Booking confirmation, deposit tracking and hourly photographer quotes | Not yet filed — required for full "First release" scope |
 
 Later opportunities include local-versus-destination feasibility, family guest-list consolidation, coordinator handover, tailored schedules and guest ceremony guidance. Revisit vendor discovery if pilot couples spend most of their effort obtaining initial prices. Test whether couples prefer event-level allocations, shared expenses or both.
