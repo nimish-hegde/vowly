@@ -1,0 +1,307 @@
+[
+  {
+    "id": "venue-fri-bartender-ratio",
+    "split": "held-out",
+    "description": "Friday venue quote with bartender ratio (1 per 150 guests) and optional lamb add-on",
+    "rawMessage": "Maple Event Space (CAD): For Friday Aug 13, 2027 in Hall E (capacity 200), Deluxe is $60/person. Bring-your-own-liquor requires our bartenders at $495 each (up to 150 guests per bartender). Optional lamb main upgrade is +$4/person. Prices subject to HST.",
+    "calcContext": { "guestCount": 168 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 11070,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Maple Event Space",
+      "category": "venue",
+      "events": ["Reception"],
+      "quotedDate": "2027-08-13",
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "roomName": "Hall E",
+        "maxCapacity": 200,
+        "packageName": "Deluxe",
+        "dayOfWeek": "Friday"
+      },
+      "lineItems": [
+        {
+          "label": "Deluxe menu",
+          "pricingType": "per_person",
+          "amount": 60,
+          "sourceExcerpt": "Deluxe is $60/person"
+        },
+        {
+          "label": "Bartenders (BYO liquor)",
+          "pricingType": "per_guest_ratio",
+          "amount": 495,
+          "ratioGuests": 150,
+          "sourceExcerpt": "our bartenders at $495 each (up to 150 guests per bartender)"
+        },
+        {
+          "label": "Lamb main upgrade",
+          "pricingType": "per_person",
+          "amount": 4,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional lamb main upgrade is +$4/person"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "venue-conflict-brochure-vs-note",
+    "split": "held-out",
+    "description": "Negotiated note conflicts with printed package appetizer count",
+    "rawMessage": "Orchid Banquet (CAD): Printed Royal brochure lists 4 appetizers, but our handwritten negotiated note says 5 appetizers and 2 welcome drinks at $50/person + tax + gratuity (150-person minimum) for Friday Aug 13, 2027. Confirm final appetizer count before signing.",
+    "calcContext": { "guestCount": 180 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 9000,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Orchid Banquet",
+      "category": "venue",
+      "events": ["Reception"],
+      "quotedDate": "2027-08-13",
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "venueDetails": {
+        "minGuests": 150,
+        "packageName": "Royal",
+        "dayOfWeek": "Friday"
+      },
+      "lineItems": [
+        {
+          "label": "Royal negotiated package",
+          "pricingType": "per_person",
+          "amount": 50,
+          "minGuests": 150,
+          "sourceExcerpt": "$50/person + tax + gratuity (150-person minimum)"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether negotiated Royal package includes 5 appetizers vs. printed 4",
+          "reason": "conflict",
+          "sourceExcerpt": "Printed Royal brochure lists 4 appetizers, but our handwritten negotiated note says 5 appetizers"
+        }
+      ]
+    }
+  },
+  {
+    "id": "venue-tbd-fees-extra-charge",
+    "split": "held-out",
+    "description": "Venue quote with TBD venue fee and unpriced per-person fish surcharge",
+    "rawMessage": "Linden Convention Centre (CAD): Gold Menu is $65/person. AV fee is $300 and bartender is $300. Security/venue fee is TBD. Fish pakora appetizer has an extra charge per person.",
+    "calcContext": { "guestCount": 180 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 12300,
+      "unknownItemLabels": ["venue fee", "fish pakora"],
+      "minOpenQuestions": 2
+    },
+    "mockExtraction": {
+      "vendorName": "Linden Convention Centre",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Gold Menu",
+          "pricingType": "per_person",
+          "amount": 65,
+          "sourceExcerpt": "Gold Menu is $65/person"
+        },
+        {
+          "label": "AV fee",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "AV fee is $300"
+        },
+        {
+          "label": "Bartender",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "bartender is $300"
+        },
+        {
+          "label": "Security/venue fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Security/venue fee is TBD"
+        },
+        {
+          "label": "Fish pakora surcharge",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Fish pakora appetizer has an extra charge per person"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm security/venue fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "Security/venue fee is TBD"
+        },
+        {
+          "question": "Confirm fish pakora surcharge per person",
+          "reason": "missing_price",
+          "sourceExcerpt": "Fish pakora appetizer has an extra charge per person"
+        }
+      ]
+    }
+  },
+  {
+    "id": "venue-multi-event-cash-only",
+    "split": "held-out",
+    "description": "Single flat venue contract for Sangeet with hard cash only requirement",
+    "rawMessage": "Lotus Convention Centre — Sangeet 6pm-1am: $10,000 CAD flat. Hard cash only. $1,000 deposit to book.",
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 10000,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "cash_only"
+    },
+    "mockExtraction": {
+      "vendorName": "Lotus Convention Centre",
+      "category": "venue",
+      "events": ["Sangeet"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 1000,
+        "methodRule": "cash_only",
+        "scheduleNotes": "$1,000 deposit to book; hard cash only"
+      },
+      "lineItems": [
+        {
+          "label": "Sangeet venue rental",
+          "pricingType": "flat",
+          "amount": 10000,
+          "sourceExcerpt": "$10,000 CAD flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "photo-flat-with-mini-shoot",
+    "split": "held-out",
+    "description": "Flat photography package including edited photos and small photoshoot",
+    "rawMessage": "Pinecone Films — $900 CAD for 5 hours + edited pics + small photoshoot. $200 deposit to lock in.",
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 900,
+      "unknownItemLabels": []
+    },
+    "mockExtraction": {
+      "vendorName": "Pinecone Films",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "hoursIncluded": 5,
+        "includesMiniShoot": true
+      },
+      "paymentTerms": {
+        "depositAmount": 200,
+        "methodRule": "unknown",
+        "scheduleNotes": "$200 deposit to lock in"
+      },
+      "lineItems": [
+        {
+          "label": "5-hour photography + edited pics + small photoshoot",
+          "pricingType": "flat",
+          "amount": 900,
+          "sourceExcerpt": "$900 CAD for 5 hours + edited pics + small photoshoot"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "venue-unknown-currency-relative-deadline",
+    "split": "held-out",
+    "description": "Venue quote missing currency and giving a payment deadline relative to an unknown event date",
+    "rawMessage": "Summit Banquet Hall: $55/person with a 180-person minimum. AV is $300, bartender is $300. Second payment of 25% is due 30 days before the event.",
+    "calcContext": { "guestCount": 180 },
+    "expected": {
+      "category": "venue",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 10500,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Summit Banquet Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "minGuests": 180
+      },
+      "paymentTerms": {
+        "methodRule": "unknown",
+        "scheduleNotes": "Second payment of 25% due 30 days before the event"
+      },
+      "lineItems": [
+        {
+          "label": "Catering package",
+          "pricingType": "per_person",
+          "amount": 55,
+          "minGuests": 180,
+          "sourceExcerpt": "$55/person with a 180-person minimum"
+        },
+        {
+          "label": "AV fee",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "AV is $300"
+        },
+        {
+          "label": "Bartender",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "bartender is $300"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Set event date to schedule the 30-day payment reminder",
+          "reason": "missing_date",
+          "sourceExcerpt": "Second payment of 25% is due 30 days before the event"
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "name": "vowly",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "test": "node --test src/calculator.test.ts",
+    "eval": "node src/eval.ts",
+    "eval:dev": "node src/eval.ts --split dev",
+    "eval:held-out": "node src/eval.ts --split held-out"
+  }
+}
