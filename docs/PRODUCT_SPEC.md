@@ -1,6 +1,6 @@
 # Vowly | Product specification
 
-Product requirements · v0.3 · November 2026 · Proposed pilot
+Product requirements · v0.2.1 · November 2026 · Proposed pilot
 
 ## Decision this release should answer
 
@@ -52,8 +52,8 @@ Test whether each participant can tell who acts next and whether the venue is bo
 
 | Priority | Deliverable | Rationale |
 |---|---|---|
-| Pilot essential | Event setup, shortlist, quote capture and review, comparable pricing, revisions, payment records and assigned follow-ups | One complete decision from first quote to next obligation |
-| Pilot convenience | CSV import with column mapping and preview, budget export, reminders | Prioritize when onboarding or missed deadlines block real use |
+| Pilot essential | Event setup, initial quote capture and review, comparable venue pricing, revisions and assigned follow-ups | One complete decision loop from first quote to revised offer and next obligation |
+| Post-pilot (v0.6+) | Booking confirmation, payment schedules and deposit records, hourly photographer comparison UI, CSV import with column mapping and preview, budget export, reminders | Prioritize after the pilot validates trust in quote revisions and repeat use (keep hourly photography in offline extraction eval `#2`) |
 | Later | Discovery marketplace, guest-facing schedules, coordinator handover, ceremonies and destination scenarios | Each needs different data, contributors or distribution |
 
 Instagram and WhatsApp remain user-controlled sources. The pilot accepts a selected excerpt or screenshot. A vendor account, social login and background access to private conversations are unnecessary. Generic AI chat is optional. Visible controls cover the full pilot journey.
@@ -78,6 +78,7 @@ The model extracts facts and suggests questions. Application code calculates pri
 - **Vendor status per event:** `Shortlisted` → `Quoted` → `Revision pending` → `Booked` or `Declined`. Approving a quote revision updates the forecast without changing booking status.
 - **Task status:** `Suggested` → `Assigned` → `Answered` → `Closed`. A helper’s reported price creates a proposed revision for the couple to review rather than mutating the quote directly.
 - **Pilot helper access:** Share a task-scoped link or view showing only the vendor name, question and relevant excerpt. Do not require a full workspace account or expose overall wedding budgets and payments.
+- **Pilot privacy and PII:** Keep real couples' vendor quotes and screenshots private (local-only or isolated workspace storage). Never log or publish unredacted vendor messages, and require explicit consent and redaction before adding real examples to offline evaluation sets.
 
 ## Pilot evaluation and release gates
 
@@ -105,7 +106,7 @@ These observations come from one household. The commercial opportunity, frequenc
 
 ## First release
 
-Help a couple take two real vendor offers from initial comparison through a booking, a payment and an assigned follow-up. Start with photographers and venues. The dashboard opens on upcoming obligations and changes awaiting review. Every core action works through visible controls.
+Help a couple take two real vendor offers from initial comparison through a booking, a payment and an assigned follow-up. The private alpha pilot (`v0.5`) focuses on venue quote capture, side-by-side comparison, revision review and assigned follow-ups; booking/payment schedules (step 5) and hourly photographer UI follow in post-pilot iteration (`v0.6+`) while remaining covered in the extraction schema and offline benchmark. The dashboard opens on upcoming obligations and changes awaiting review. Every core action works through visible controls.
 
 1. Create a wedding workspace. Start with one event, allow custom names and optional dates, and add events as needed. Record event headcount, currency and budget. Switch between one event and the whole wedding.
 2. Save vendors discovered anywhere with a portfolio link, referral and personal notes. Track status per event so a photographer can be booked for one and under consideration for another.
@@ -133,13 +134,14 @@ Prototype the comparison and revision workflow first. Test with a second partner
 
 ### Pilot backlog
 
-| Order | Workstream | Tracked issue |
+| Milestone | Workstream | Tracked issue |
 |---|---|---|
-| 1 | Offline extraction benchmark on labeled synthetic cases | [#2 Evaluate AI quote extraction against labeled examples](https://github.com/nimish-hegde/vowly/issues/2) |
-| 2 | Quote revision review with source passages and idempotency | [#1 Review and apply a revised venue quote](https://github.com/nimish-hegde/vowly/issues/1) |
-| 3 | Side-by-side venue comparison with break-even fee and headcount tiers | [#3 Compare two venues at the same guest count](https://github.com/nimish-hegde/vowly/issues/3) |
-| 4 | Scoped follow-up assignment to a helper | [#4 Assign a follow-up from an unresolved vendor fee](https://github.com/nimish-hegde/vowly/issues/4) |
-| 5 | Five-couple pilot study and go/no-go decision | [#5 Test the quote workflow with five self-planning couples](https://github.com/nimish-hegde/vowly/issues/5) |
-| Gap | Booking confirmation, deposit tracking and hourly photographer quotes | Not yet filed — required for full "First release" scope |
+| v0.3 — AI experimentation | Offline extraction benchmark on labeled synthetic cases (venues + hourly photography) | [#2 Evaluate AI quote extraction against labeled examples](https://github.com/nimish-hegde/vowly/issues/2) |
+| v0.4 — Functional prototype | Cold-start event setup and initial two venue quotes | [#7 Capture initial event setup and first two venue quotes](https://github.com/nimish-hegde/vowly/issues/7) |
+| v0.4 — Functional prototype | Quote revision review with source passages and idempotency | [#1 Review and apply a revised venue quote](https://github.com/nimish-hegde/vowly/issues/1) |
+| v0.4 — Functional prototype | Side-by-side venue comparison with break-even fee and headcount tiers | [#3 Compare two venues at the same guest count](https://github.com/nimish-hegde/vowly/issues/3) |
+| v0.4 — Functional prototype | Scoped follow-up assignment to a helper | [#4 Assign a follow-up from an unresolved vendor fee](https://github.com/nimish-hegde/vowly/issues/4) |
+| v0.5 — Private alpha | Five-couple pilot study and go/no-go decision | [#5 Test the quote workflow with five self-planning couples](https://github.com/nimish-hegde/vowly/issues/5) |
+| v0.6 — Iteration | Booking confirmation, deposit tracking, hourly photographer UI and pilot feedback | Deferred until `#5` validates quote-revision trust and repeat use |
 
 Later opportunities include local-versus-destination feasibility, family guest-list consolidation, coordinator handover, tailored schedules and guest ceremony guidance. Revisit vendor discovery if pilot couples spend most of their effort obtaining initial prices. Test whether couples prefer event-level allocations, shared expenses or both.
