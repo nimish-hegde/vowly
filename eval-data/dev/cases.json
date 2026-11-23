@@ -1,0 +1,202 @@
+[
+  {
+    "id": "venue-initial-min-guests",
+    "split": "dev",
+    "description": "Initial venue quote with per-person pricing, 150-guest minimum, plus tax/gratuity, and TBD AV fee",
+    "rawMessage": "Hi! For Friday August 13, 2027 in our Cedar Ballroom (max 200 guests), our Royal Package is $50 CAD/person + tax + gratuity with a 150-person minimum. Hall rental, tables, chairs, linens, and soft drinks are included. Audio-visual packages cost extra through our in-house AV team — pricing TBD once you pick a lighting setup.",
+    "calcContext": { "guestCount": 140 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 7500,
+      "unknownItemLabels": ["AV"],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Cedar Ballroom",
+      "category": "venue",
+      "events": ["Reception"],
+      "quotedDate": "2027-08-13",
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "venueDetails": {
+        "roomName": "Cedar Ballroom",
+        "maxCapacity": 200,
+        "minGuests": 150,
+        "packageName": "Royal Package",
+        "dayOfWeek": "Friday"
+      },
+      "lineItems": [
+        {
+          "label": "Royal Package",
+          "pricingType": "per_person",
+          "amount": 50,
+          "minGuests": 150,
+          "sourceExcerpt": "our Royal Package is $50 CAD/person + tax + gratuity with a 150-person minimum"
+        },
+        {
+          "label": "Hall rental, tables, chairs, linens, soft drinks",
+          "pricingType": "included",
+          "amount": 0,
+          "sourceExcerpt": "Hall rental, tables, chairs, linens, and soft drinks are included"
+        },
+        {
+          "label": "In-house AV package",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Audio-visual packages cost extra through our in-house AV team — pricing TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm in-house AV package pricing",
+          "reason": "missing_price",
+          "sourceExcerpt": "Audio-visual packages cost extra through our in-house AV team — pricing TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "venue-revision-av-drop",
+    "split": "dev",
+    "description": "Revised venue quote lowering AV fee from $600 to $300 while bartender fee remains open",
+    "rawMessage": "Following up on our earlier quote for Juniper Hall (160 guests, CAD): we can drop the AV fee from $600 down to $300. Catering stays at $100/person. Still waiting on our bar manager to confirm the bartender staffing fee.",
+    "calcContext": { "guestCount": 160 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 16300,
+      "unknownItemLabels": ["bartender"],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Juniper Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Catering",
+          "pricingType": "per_person",
+          "amount": 100,
+          "sourceExcerpt": "Catering stays at $100/person"
+        },
+        {
+          "label": "AV fee",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "we can drop the AV fee from $600 down to $300"
+        },
+        {
+          "label": "Bartender staffing fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Still waiting on our bar manager to confirm the bartender staffing fee"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm bartender staffing fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "Still waiting on our bar manager to confirm the bartender staffing fee"
+        }
+      ]
+    }
+  },
+  {
+    "id": "photo-hourly-missing-mini",
+    "split": "dev",
+    "description": "Hourly photographer quote with team size and deposit, no mention of mini-shoot",
+    "rawMessage": "Hey! For your wedding we charge $2,500 CAD for five hours with two photographers. Additional hours are $300/hr. We require a 30% deposit by e-transfer to hold the date.",
+    "calcContext": { "hours": 5 },
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 2500,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "Unknown Photographer",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "hoursIncluded": 5,
+        "extraHourRate": 300,
+        "teamSize": 2,
+        "includesMiniShoot": "unknown"
+      },
+      "paymentTerms": {
+        "depositPercent": 30,
+        "methodRule": "etransfer",
+        "scheduleNotes": "30% deposit by e-transfer to hold the date"
+      },
+      "lineItems": [
+        {
+          "label": "5-hour photography package (2 photographers)",
+          "pricingType": "flat",
+          "amount": 2500,
+          "sourceExcerpt": "we charge $2,500 CAD for five hours with two photographers"
+        },
+        {
+          "label": "Additional hours",
+          "pricingType": "per_hour",
+          "amount": 300,
+          "optionalAddon": true,
+          "sourceExcerpt": "Additional hours are $300/hr"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dj-flat-cash-only",
+    "split": "dev",
+    "description": "DJ flat package with equipment list, deposit, and cash-only balance rule",
+    "rawMessage": "DJ Orbit — $550 CAD total for Reception. Includes DJ controller, facade, two wireless mics, disco light, and smoke machine. $150 deposit now, cash only on day of event for the remaining $400.",
+    "expected": {
+      "category": "dj",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 550,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "cash_only"
+    },
+    "mockExtraction": {
+      "vendorName": "DJ Orbit",
+      "category": "dj",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 150,
+        "methodRule": "cash_only",
+        "scheduleNotes": "$150 deposit now, cash only on day of event for remaining $400"
+      },
+      "lineItems": [
+        {
+          "label": "Reception DJ package",
+          "pricingType": "flat",
+          "amount": 550,
+          "sourceExcerpt": "DJ Orbit — $550 CAD total for Reception"
+        }
+      ],
+      "openQuestions": []
+    }
+  }
+]
