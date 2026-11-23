@@ -123,13 +123,25 @@ async function main() {
   const scores: CaseScore[] = [];
 
   for (const c of cases) {
-    const res = await extractQuote(c.rawMessage, {
-      provider: providerArg,
-      mockLookup: mockMap[c.id],
-    });
-    usedProvider = res.provider;
-    usedModel = res.model;
-    scores.push(gradeCase(c, res.quote, res.latencyMs));
+    try {
+      const res = await extractQuote(c.rawMessage, {
+        provider: providerArg,
+        mockLookup: mockMap[c.id],
+      });
+      usedProvider = res.provider;
+      usedModel = res.model;
+      scores.push(gradeCase(c, res.quote, res.latencyMs));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      scores.push({
+        id: c.id,
+        split: c.split,
+        passed: false,
+        failures: [`Extraction error: ${message}`],
+        releaseBlockers: [],
+        latencyMs: 0,
+      });
+    }
   }
 
   const passedCount = scores.filter((s) => s.passed).length;

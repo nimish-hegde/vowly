@@ -102,31 +102,50 @@ export async function extractQuote(
   const model = process.env.GEMINI_MODEL ?? 'gemini-3.8-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-      contents: [
-        {
-          role: 'user',
-          parts: [{ text: `Extract quote facts from this vendor message:\n\n${rawMessage}` }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: 'application/json',
-      },
-    }),
-  });
+  const maxAttempts = 4;
+  let data: {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  } | null = null;
 
-  if (!res.ok) {
-    throw new Error(`Gemini request failed (${res.status}): ${await res.text()}`);
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+        contents: [
+          {
+            role: 'user',
+            parts: [{ text: `Extract quote facts from this vendor message:\n\n${rawMessage}` }],
+          },
+        ],
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+        },
+      }),
+    });
+
+    if (res.ok) {
+      data = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      break;
+    }
+
+    const body = await res.text();
+    const isTransient = res.status === 429 || (res.status >= 500 && res.status < 600);
+    if (!isTransient || attempt === maxAttempts) {
+      throw new Error(`Gemini request failed (${res.status}): ${body}`);
+    }
+
+    const delayMs = 1000 * 2 ** (attempt - 1);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
 
-  const data = (await res.json()) as {
-    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
-  };
+  if (!data) {
+    throw new Error('Gemini request failed after retries.');
+  }
   const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) {
     throw new Error('Gemini returned an empty response.');
