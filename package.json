@@ -7,9 +7,10 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "node --test src/calculator.test.ts",
+    "test": "node --test src/calculator.test.ts src/validator.test.ts src/eval.test.ts src/extractor.test.ts",
     "eval": "node src/eval.ts",
     "eval:dev": "node src/eval.ts --split dev",
+    "eval:regression": "node src/eval.ts --split regression",
     "eval:held-out": "node src/eval.ts --split held-out"
   }
 }

@@ -16,6 +16,14 @@ export type TaxOrGratuityStatus = 'included' | 'excluded' | 'unknown';
 
 export type PaymentMethodRule = 'cash_only' | 'etransfer' | 'card' | 'any' | 'unknown';
 
+export type OpenQuestionReason =
+  | 'missing_price'
+  | 'conflict'
+  | 'ambiguous_rule'
+  | 'missing_date';
+
+export type EvalSplit = 'dev' | 'regression' | 'held-out';
+
 export interface LineItem {
   label: string;
   pricingType: PricingType;
@@ -27,7 +35,7 @@ export interface LineItem {
   ratioGuests?: number;
   /** Default hours included if this is a per_hour item. */
   hours?: number;
-  /** True for optional upgrades (e.g., lamb +$4/person, dry ice $300) not counted in base subtotal. */
+  /** True only when the message explicitly says the item is an optional upgrade or add-on. */
   optionalAddon?: boolean;
   /** Exact substring from the raw vendor message supporting this item. */
   sourceExcerpt: string;
@@ -57,7 +65,7 @@ export interface PaymentTerms {
 
 export interface OpenQuestion {
   question: string;
-  reason: 'missing_price' | 'conflict' | 'ambiguous_rule' | 'missing_date';
+  reason: OpenQuestionReason;
   sourceExcerpt: string;
 }
 
@@ -77,9 +85,15 @@ export interface ExtractedQuote {
   openQuestions: OpenQuestion[];
 }
 
+export interface TokenUsage {
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
 export interface EvalCase {
   id: string;
-  split: 'dev' | 'held-out';
+  split: EvalSplit;
   description: string;
   rawMessage: string;
   /** Optional context for deterministic total calculation in the grading script. */
