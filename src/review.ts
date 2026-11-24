@@ -1,10 +1,24 @@
 import { calculateQuoteTotal, type QuoteCalculation } from './calculator.ts';
 import type { TelemetryTracker } from './telemetry.ts';
-import type { CurrencyCode, ExtractedQuote, LineItem, PricingType } from './types.ts';
+import type {
+  ChargeRequirement,
+  CurrencyCode,
+  ExtractedQuote,
+  LineItem,
+  PricingType,
+} from './types.ts';
 
 export interface ResolvedQuestion {
   index: number;
   resolutionNote: string;
+  resolvedAt: string;
+}
+
+export interface ResolvedPriceConflict {
+  lineItemIndex: number;
+  label: string;
+  chosenSourceLabel: string;
+  chosenAmount: number;
   resolvedAt: string;
 }
 
@@ -17,6 +31,7 @@ export interface QuoteReviewSession {
   status: 'pending_review' | 'approved' | 'dismissed';
   correctionsByField: Record<string, number>;
   resolvedQuestions: ResolvedQuestion[];
+  resolvedPriceConflicts: ResolvedPriceConflict[];
   calculation: QuoteCalculation;
   /** Validator messages for excerpts that could not be found in the original message. */
   sourceWarnings: string[];
@@ -58,6 +73,7 @@ export function createReviewSession(
     status: 'pending_review',
     correctionsByField: {},
     resolvedQuestions: [],
+    resolvedPriceConflicts: [],
     calculation: calculateQuoteTotal(draftQuote, ctx),
     sourceWarnings: [...(ctx.sourceWarnings ?? [])],
     sourceWarningsAcknowledged: false,
@@ -70,6 +86,7 @@ export interface LineItemPatch {
   amount?: number | null;
   minGuests?: number;
   ratioGuests?: number;
+  chargeType?: ChargeRequirement;
   optionalAddon?: boolean;
 }
 
@@ -92,6 +109,7 @@ export function correctLineItem(
     'amount',
     'minGuests',
     'ratioGuests',
+    'chargeType',
     'optionalAddon',
   ];
 
@@ -101,6 +119,64 @@ export function correctLineItem(
       session.correctionsByField[field] = (session.correctionsByField[field] ?? 0) + 1;
     }
   }
+
+  // Keep optionalAddon and chargeType consistent when toggled from the UI
+  if (patch.optionalAddon === true && patch.chargeType === undefined) {
+    item.chargeType = 'optional';
+  } else if (patch.optionalAddon === false && item.chargeType === 'optional') {
+    item.chargeType = 'mandatory';
+  }
+
+  session.calculation = calculateQuoteTotal(session.draftQuote, {
+    guestCount: session.guestCount,
+    hours: session.hours,
+  });
+  return session;
+}
+
+/**
+ * Resolves a conflicting-price line item by selecting one of its extracted
+ * candidate prices, clearing the conflict, and recalculating the quote subtotal.
+ */
+export function resolvePriceConflict(
+  session: QuoteReviewSession,
+  lineItemIndex: number,
+  optionIndex: number,
+): QuoteReviewSession {
+  if (session.status !== 'pending_review') {
+    throw new Error('Cannot resolve price conflicts after a quote has been approved or dismissed.');
+  }
+  const item = session.draftQuote.lineItems[lineItemIndex];
+  if (!item) {
+    throw new Error(`Line item index ${lineItemIndex} out of range.`);
+  }
+  const options = item.conflictingOptions;
+  if (!options || options.length < 2) {
+    throw new Error(`Line item ${lineItemIndex} does not have a price conflict to resolve.`);
+  }
+  const chosen = options[optionIndex];
+  if (!chosen) {
+    throw new Error(`Price option index ${optionIndex} out of range.`);
+  }
+
+  const prevAmount = item.amount;
+  item.amount = chosen.amount;
+  item.pricingType = chosen.pricingType;
+  item.sourceExcerpt = chosen.sourceExcerpt;
+  delete item.conflictingOptions;
+
+  session.correctionsByField.priceConflict = (session.correctionsByField.priceConflict ?? 0) + 1;
+  if (prevAmount !== chosen.amount) {
+    session.correctionsByField.amount = (session.correctionsByField.amount ?? 0) + 1;
+  }
+
+  session.resolvedPriceConflicts.push({
+    lineItemIndex,
+    label: item.label,
+    chosenSourceLabel: chosen.sourceLabel,
+    chosenAmount: chosen.amount,
+    resolvedAt: new Date().toISOString(),
+  });
 
   session.calculation = calculateQuoteTotal(session.draftQuote, {
     guestCount: session.guestCount,
@@ -166,6 +242,17 @@ export function getApprovalBlockers(session: QuoteReviewSession): string[] {
   const blockers: string[] = [];
   if (session.draftQuote.currency === 'UNKNOWN') {
     blockers.push('Confirm the quote currency before adding it to the budget.');
+  }
+  if (session.calculation.priceConflicts.length > 0) {
+    for (const conflict of session.calculation.priceConflicts) {
+      const choices = conflict.options
+        .map((o) => `${o.sourceLabel}: ${o.calculatedTotal ?? o.unitAmount}`)
+        .join(' vs ');
+      const diffText = conflict.discrepancy !== null ? ` (${conflict.discrepancy} difference)` : '';
+      blockers.push(
+        `Resolve conflicting prices for ${conflict.label} (${choices}${diffText}) before adding this quote to the budget.`,
+      );
+    }
   }
   if (session.calculation.unknownItems.length > 0) {
     blockers.push(

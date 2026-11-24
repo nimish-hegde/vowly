@@ -1,0 +1,704 @@
+[
+  {
+    "id": "heldout2-venue-menu-heavy-space",
+    "split": "held-out-v2",
+    "description": "Event hall quoting dinner menu, appetizers, and unpriced conditional coat-check fee",
+    "rawMessage": "Birchwood Grand Hall (CAD): Signature dinner package is $72/person for 170 guests, with 6 appetizers and banquet room included. Coat check staffing costs extra depending on winter attendance — pricing TBD. Prices plus HST.",
+    "calcContext": {
+      "guestCount": 170
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 12240,
+      "unknownItemLabels": [
+        "coat check"
+      ],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Birchwood Grand Hall",
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Signature dinner package",
+          "pricingType": "per_person",
+          "amount": 72,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Signature dinner package is $72/person for 170 guests"
+        },
+        {
+          "label": "Banquet room and 6 appetizers",
+          "pricingType": "included",
+          "amount": 0,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "with 6 appetizers and banquet room included"
+        },
+        {
+          "label": "Coat check staffing",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Coat check staffing costs extra depending on winter attendance — pricing TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm coat check staffing fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "Coat check staffing costs extra depending on winter attendance — pricing TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-catering-at-hotel-venue",
+    "split": "held-out-v2",
+    "description": "Independent caterer delivering and serving buffet at a separate hotel venue",
+    "rawMessage": "Mirch Masala Caterers (CAD): For your wedding dinner at Grand Harbour Hotel, we will cater the full buffet at $46/person (150-guest minimum) plus $500 flat for kitchen transport and buffet warmers. Optional kulfi cart add-on is +$5/person. Prices plus HST.",
+    "calcContext": {
+      "guestCount": 140
+    },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 7400,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Mirch Masala Caterers",
+      "category": "catering",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Full buffet catering",
+          "pricingType": "per_person",
+          "amount": 46,
+          "minGuests": 150,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "cater the full buffet at $46/person (150-guest minimum)"
+        },
+        {
+          "label": "Kitchen transport and buffet warmers",
+          "pricingType": "flat",
+          "amount": 500,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "$500 flat for kitchen transport and buffet warmers"
+        },
+        {
+          "label": "Kulfi cart add-on",
+          "pricingType": "per_person",
+          "amount": 5,
+          "chargeType": "optional",
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional kulfi cart add-on is +$5/person"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout2-dj-price-conflict-dm-vs-invoice",
+    "split": "held-out-v2",
+    "description": "DJ package with conflicting WhatsApp vs invoice price ($350 discrepancy)",
+    "rawMessage": "Pulse Sound DJs (CAD): On WhatsApp you confirmed $1,900 flat for reception DJ and sound, but the invoice emailed today bills $2,250. Please confirm which price applies before we send the $500 e-transfer deposit.",
+    "expected": {
+      "category": "dj",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 1900,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "paymentMethodRule": "etransfer",
+      "expectedPriceConflictDiscrepancy": 350
+    },
+    "mockExtraction": {
+      "vendorName": "Pulse Sound DJs",
+      "category": "dj",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 500,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$500 e-transfer deposit"
+      },
+      "lineItems": [
+        {
+          "label": "Reception DJ and sound",
+          "pricingType": "flat",
+          "amount": 1900,
+          "chargeType": "mandatory",
+          "conflictingOptions": [
+            {
+              "sourceLabel": "WhatsApp",
+              "pricingType": "flat",
+              "amount": 1900,
+              "sourceExcerpt": "On WhatsApp you confirmed $1,900 flat for reception DJ and sound"
+            },
+            {
+              "sourceLabel": "Invoice",
+              "pricingType": "flat",
+              "amount": 2250,
+              "sourceExcerpt": "the invoice emailed today bills $2,250"
+            }
+          ],
+          "sourceExcerpt": "On WhatsApp you confirmed $1,900 flat for reception DJ and sound"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether reception DJ and sound is $1,900 (WhatsApp) or $2,250 (invoice) — $350 difference",
+          "reason": "conflict",
+          "sourceExcerpt": "On WhatsApp you confirmed $1,900 flat for reception DJ and sound, but the invoice emailed today bills $2,250"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-decor-price-conflict-email-vs-contract",
+    "split": "held-out-v2",
+    "description": "Decor bundle with conflicting email vs contract price ($500 discrepancy)",
+    "rawMessage": "Marigold Stage & Decor (CAD): Your March email quoted $4,800 flat for ceremony mandap and reception backdrop, while the contract lists $5,300 for the same package. Tax included.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 4800,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "included",
+      "expectedPriceConflictDiscrepancy": 500
+    },
+    "mockExtraction": {
+      "vendorName": "Marigold Stage & Decor",
+      "category": "decor",
+      "events": [
+        "Ceremony",
+        "Reception"
+      ],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Ceremony mandap and reception backdrop",
+          "pricingType": "flat",
+          "amount": 4800,
+          "chargeType": "mandatory",
+          "conflictingOptions": [
+            {
+              "sourceLabel": "March email",
+              "pricingType": "flat",
+              "amount": 4800,
+              "sourceExcerpt": "Your March email quoted $4,800 flat for ceremony mandap and reception backdrop"
+            },
+            {
+              "sourceLabel": "Contract",
+              "pricingType": "flat",
+              "amount": 5300,
+              "sourceExcerpt": "the contract lists $5,300 for the same package"
+            }
+          ],
+          "sourceExcerpt": "Your March email quoted $4,800 flat for ceremony mandap and reception backdrop"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Resolve $500 price conflict between $4,800 email quote and $5,300 contract",
+          "reason": "conflict",
+          "sourceExcerpt": "Your March email quoted $4,800 flat for ceremony mandap and reception backdrop, while the contract lists $5,300 for the same package"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-photo-conditional-travel-and-optional-album",
+    "split": "held-out-v2",
+    "description": "Photographer with conditional unpriced travel fee and explicitly optional album",
+    "rawMessage": "Amber Lens Photography (CAD): Full-day coverage (10 hours, 2 photographers) is $3,900 flat, HST included. Out-of-city mileage fee applies beyond 50 km — pricing TBD once venues are finalized. Optional heirloom album upgrade is $650.",
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 3900,
+      "unknownItemLabels": [
+        "mileage"
+      ],
+      "minOpenQuestions": 1,
+      "taxStatus": "included"
+    },
+    "mockExtraction": {
+      "vendorName": "Amber Lens Photography",
+      "category": "photographer",
+      "events": [
+        "Wedding"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "hoursIncluded": 10,
+        "teamSize": 2,
+        "includesMiniShoot": "unknown"
+      },
+      "lineItems": [
+        {
+          "label": "Full-day coverage",
+          "pricingType": "flat",
+          "amount": 3900,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Full-day coverage (10 hours, 2 photographers) is $3,900 flat"
+        },
+        {
+          "label": "Out-of-city mileage fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Out-of-city mileage fee applies beyond 50 km — pricing TBD once venues are finalized"
+        },
+        {
+          "label": "Heirloom album upgrade",
+          "pricingType": "flat",
+          "amount": 650,
+          "chargeType": "optional",
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional heirloom album upgrade is $650"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm out-of-city mileage fee beyond 50 km",
+          "reason": "missing_price",
+          "sourceExcerpt": "Out-of-city mileage fee applies beyond 50 km — pricing TBD once venues are finalized"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-venue-conditional-surcharge-and-ratio",
+    "split": "held-out-v2",
+    "description": "Banquet venue with staffing ratio and unpriced conditional menu surcharge",
+    "rawMessage": "Rosewood Convention Centre (CAD): Diamond menu is $60/person (150-guest minimum). Bartenders are $350 each (1 bartender per 125 guests). Seafood appetizer selection has an extra charge per person. Prices plus HST.",
+    "calcContext": {
+      "guestCount": 160
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 10300,
+      "unknownItemLabels": [
+        "seafood"
+      ],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Rosewood Convention Centre",
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "minGuests": 150,
+        "packageName": "Diamond menu"
+      },
+      "lineItems": [
+        {
+          "label": "Diamond menu",
+          "pricingType": "per_person",
+          "amount": 60,
+          "minGuests": 150,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Diamond menu is $60/person (150-guest minimum)"
+        },
+        {
+          "label": "Bartenders",
+          "pricingType": "per_guest_ratio",
+          "amount": 350,
+          "ratioGuests": 125,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Bartenders are $350 each (1 bartender per 125 guests)"
+        },
+        {
+          "label": "Seafood appetizer surcharge",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Seafood appetizer selection has an extra charge per person"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm per-person surcharge for seafood appetizer selection",
+          "reason": "missing_price",
+          "sourceExcerpt": "Seafood appetizer selection has an extra charge per person"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-catering-unpriced-dish-surcharge",
+    "split": "held-out-v2",
+    "description": "Independent caterer with unpriced specialty surcharge and flat delivery fee",
+    "rawMessage": "Deccan Kitchen Catering (CAD): Sangeet catering buffet is $40/person for 130 guests plus $300 delivery and setup. Goat biryani upgrade has an extra charge per person — rate on request.",
+    "calcContext": {
+      "guestCount": 130
+    },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 5500,
+      "unknownItemLabels": [
+        "goat biryani"
+      ],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Deccan Kitchen Catering",
+      "category": "catering",
+      "events": [
+        "Sangeet"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Sangeet catering buffet",
+          "pricingType": "per_person",
+          "amount": 40,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Sangeet catering buffet is $40/person for 130 guests"
+        },
+        {
+          "label": "Delivery and setup",
+          "pricingType": "flat",
+          "amount": 300,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "$300 delivery and setup"
+        },
+        {
+          "label": "Goat biryani surcharge",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Goat biryani upgrade has an extra charge per person — rate on request"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm per-person surcharge for goat biryani",
+          "reason": "missing_price",
+          "sourceExcerpt": "Goat biryani upgrade has an extra charge per person — rate on request"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-entertainment-conditional-power-and-cash",
+    "split": "held-out-v2",
+    "description": "Live dhol and sax duo, cash only, with unpriced conditional outdoor power fee",
+    "rawMessage": "Rhythm Collective Entertainment (CAD): Live dhol and sax duo for baraat and cocktail hour is $1,400 flat, cash only. Outdoor battery-powered PA package costs extra if your courtyard has no power — pricing TBD.",
+    "expected": {
+      "category": "entertainment",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 1400,
+      "unknownItemLabels": [
+        "pa"
+      ],
+      "minOpenQuestions": 1,
+      "paymentMethodRule": "cash_only"
+    },
+    "mockExtraction": {
+      "vendorName": "Rhythm Collective Entertainment",
+      "category": "entertainment",
+      "events": [
+        "Baraat",
+        "Cocktail hour"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "methodRule": "cash_only"
+      },
+      "lineItems": [
+        {
+          "label": "Live dhol and sax duo",
+          "pricingType": "flat",
+          "amount": 1400,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Live dhol and sax duo for baraat and cocktail hour is $1,400 flat, cash only"
+        },
+        {
+          "label": "Outdoor battery-powered PA package",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Outdoor battery-powered PA package costs extra if your courtyard has no power — pricing TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm outdoor battery-powered PA package fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "Outdoor battery-powered PA package costs extra if your courtyard has no power — pricing TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-category-ambiguous-reception-package",
+    "split": "held-out-v2",
+    "description": "Generic vendor name with per-person dinner pricing and no venue/caterer cues",
+    "rawMessage": "Crescent Hospitality Group (CAD): Reception dinner package is $64/person for 140 guests. Prices include tax.",
+    "calcContext": {
+      "guestCount": 140
+    },
+    "expected": {
+      "category": "unknown",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 8960,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "included"
+    },
+    "mockExtraction": {
+      "vendorName": "Crescent Hospitality Group",
+      "category": "unknown",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Reception dinner package",
+          "pricingType": "per_person",
+          "amount": 64,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Reception dinner package is $64/person for 140 guests"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether Crescent Hospitality Group provides the venue space or catering only",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "Crescent Hospitality Group (CAD): Reception dinner package is $64/person for 140 guests"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-venue-unknown-currency-relative-deadline",
+    "split": "held-out-v2",
+    "description": "Venue quote with bare dollar signs and unresolved relative payment deadline",
+    "rawMessage": "Silverpine Estate Ballroom: Room rental is $2,500 flat and dinner is $58/person for 150 guests. Remaining balance is due 45 days before the event.",
+    "calcContext": {
+      "guestCount": 150
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 11200,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 2
+    },
+    "mockExtraction": {
+      "vendorName": "Silverpine Estate Ballroom",
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "methodRule": "unknown",
+        "scheduleNotes": "Remaining balance is due 45 days before the event"
+      },
+      "lineItems": [
+        {
+          "label": "Room rental",
+          "pricingType": "flat",
+          "amount": 2500,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Room rental is $2,500 flat"
+        },
+        {
+          "label": "Dinner",
+          "pricingType": "per_person",
+          "amount": 58,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "dinner is $58/person for 150 guests"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm currency (CAD or USD) for Silverpine Estate Ballroom quote",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "Room rental is $2,500 flat and dinner is $58/person for 150 guests"
+        },
+        {
+          "question": "Provide event date to determine the 45-day balance due date",
+          "reason": "missing_date",
+          "sourceExcerpt": "Remaining balance is due 45 days before the event"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-decor-teardown-tbd-and-deposit",
+    "split": "held-out-v2",
+    "description": "Decor quote with deposit excluded from subtotal and unpriced late-night teardown",
+    "rawMessage": "Petal & Arch Decor (CAD): Ceremony floral arch and reception head table decor is $4,200 flat plus HST. A $1,500 deposit via card secures the date. After-midnight venue strike/teardown fee is TBD.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 4200,
+      "unknownItemLabels": [
+        "teardown"
+      ],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded",
+      "paymentMethodRule": "card"
+    },
+    "mockExtraction": {
+      "vendorName": "Petal & Arch Decor",
+      "category": "decor",
+      "events": [
+        "Ceremony",
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 1500,
+        "methodRule": "card",
+        "scheduleNotes": "$1,500 deposit via card secures the date"
+      },
+      "lineItems": [
+        {
+          "label": "Ceremony floral arch and reception head table decor",
+          "pricingType": "flat",
+          "amount": 4200,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Ceremony floral arch and reception head table decor is $4,200 flat"
+        },
+        {
+          "label": "After-midnight strike/teardown fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "mandatory",
+          "optionalAddon": false,
+          "sourceExcerpt": "After-midnight venue strike/teardown fee is TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm after-midnight venue strike/teardown fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "After-midnight venue strike/teardown fee is TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout2-photo-hourly-2-shooters-usd",
+    "split": "held-out-v2",
+    "description": "Explicit USD hourly photography with 2 shooters and optional second-day add-on",
+    "rawMessage": "Harborview Photo Co (USD): Wedding photography with 2 photographers is $320 USD/hour for 9 hours. Optional next-day brunch coverage add-on is $900 flat. All taxes included.",
+    "calcContext": {
+      "hours": 9
+    },
+    "expected": {
+      "category": "photographer",
+      "currency": "USD",
+      "quoteKind": "initial",
+      "knownSubtotal": 2880,
+      "unknownItemLabels": [],
+      "taxStatus": "included"
+    },
+    "mockExtraction": {
+      "vendorName": "Harborview Photo Co",
+      "category": "photographer",
+      "events": [
+        "Wedding"
+      ],
+      "quoteKind": "initial",
+      "currency": "USD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "hoursIncluded": 9,
+        "teamSize": 2,
+        "includesMiniShoot": "unknown"
+      },
+      "lineItems": [
+        {
+          "label": "Wedding photography (2 photographers)",
+          "pricingType": "per_hour",
+          "amount": 320,
+          "hours": 9,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Wedding photography with 2 photographers is $320 USD/hour for 9 hours"
+        },
+        {
+          "label": "Next-day brunch coverage add-on",
+          "pricingType": "flat",
+          "amount": 900,
+          "chargeType": "optional",
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional next-day brunch coverage add-on is $900 flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  }
+]

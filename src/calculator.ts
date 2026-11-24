@@ -1,4 +1,4 @@
-import type { CurrencyCode, ExtractedQuote, LineItem } from './types.ts';
+import type { CurrencyCode, ExtractedQuote, LineItem, PricingType } from './types.ts';
 
 export interface CalcContext {
   guestCount?: number;
@@ -11,12 +11,30 @@ export interface LineItemTotal {
   note?: string;
 }
 
+export interface PriceConflictOption {
+  sourceLabel: string;
+  pricingType: PricingType;
+  unitAmount: number;
+  calculatedTotal: number | null;
+  sourceExcerpt: string;
+}
+
+export interface PriceConflict {
+  lineItemIndex: number;
+  label: string;
+  options: PriceConflictOption[];
+  minTotal: number | null;
+  maxTotal: number | null;
+  discrepancy: number | null;
+}
+
 export interface QuoteCalculation {
   currency: CurrencyCode;
   knownSubtotal: number;
   itemTotals: LineItemTotal[];
   unknownItems: string[];
   optionalAddons: string[];
+  priceConflicts: PriceConflict[];
   capacityExceeded: boolean;
   capacityWarning?: string;
   minGuestsApplied: boolean;
@@ -31,12 +49,16 @@ export interface VenueComparison {
   breakEvenNote?: string;
 }
 
+function isOptionalItem(item: LineItem): boolean {
+  return item.optionalAddon === true || item.chargeType === 'optional';
+}
+
 function calculateLineItem(
   item: LineItem,
   quote: ExtractedQuote,
   ctx: CalcContext,
 ): { total: number | null; note?: string; minApplied?: boolean } {
-  if (item.optionalAddon) {
+  if (isOptionalItem(item)) {
     return { total: null, note: 'Optional add-on (excluded from base subtotal)' };
   }
 
@@ -102,11 +124,53 @@ export function calculateQuoteTotal(
   const itemTotals: LineItemTotal[] = [];
   const unknownItems: string[] = [];
   const optionalAddons: string[] = [];
+  const priceConflicts: PriceConflict[] = [];
 
-  for (const item of quote.lineItems) {
-    if (item.optionalAddon) {
+  for (let idx = 0; idx < quote.lineItems.length; idx++) {
+    const item = quote.lineItems[idx]!;
+    if (isOptionalItem(item)) {
       optionalAddons.push(item.label);
       continue;
+    }
+
+    if (item.conflictingOptions && item.conflictingOptions.length >= 2) {
+      const evaluated = item.conflictingOptions.map((opt) => {
+        const optionRes = calculateLineItem(
+          {
+            ...item,
+            pricingType: opt.pricingType,
+            amount: opt.amount,
+            optionalAddon: false,
+            chargeType: item.chargeType === 'optional' ? 'mandatory' : item.chargeType,
+          },
+          quote,
+          ctx,
+        );
+        return {
+          sourceLabel: opt.sourceLabel,
+          pricingType: opt.pricingType,
+          unitAmount: opt.amount,
+          calculatedTotal: optionRes.total,
+          sourceExcerpt: opt.sourceExcerpt,
+        };
+      });
+
+      const numericTotals = evaluated
+        .map((o) => o.calculatedTotal)
+        .filter((v): v is number => v !== null);
+      const minTotal = numericTotals.length > 0 ? Math.min(...numericTotals) : null;
+      const maxTotal = numericTotals.length > 0 ? Math.max(...numericTotals) : null;
+      const discrepancy =
+        minTotal !== null && maxTotal !== null ? roundMoney(maxTotal - minTotal) : null;
+
+      priceConflicts.push({
+        lineItemIndex: idx,
+        label: item.label,
+        options: evaluated,
+        minTotal,
+        maxTotal,
+        discrepancy,
+      });
     }
 
     const res = calculateLineItem(item, quote, ctx);
@@ -133,6 +197,7 @@ export function calculateQuoteTotal(
     itemTotals,
     unknownItems,
     optionalAddons,
+    priceConflicts,
     capacityExceeded,
     capacityWarning: capacityExceeded
       ? `Guest count (${ctx.guestCount}) exceeds room capacity (${maxCap}).`

@@ -26,8 +26,10 @@ export interface CaseScore {
   unsupportedCurrencyAssumption: boolean;
   failures: string[];
   latencyMs: number;
+  latencyWithoutRetriesMs: number;
   retryCount: number;
   tokenUsage?: TokenUsage;
+  rawResponse?: unknown;
 }
 
 function loadCases(splitArg?: string): CaseWithMock[] {
@@ -40,6 +42,9 @@ function loadCases(splitArg?: string): CaseWithMock[] {
   }
   if (!splitArg || splitArg === 'all' || splitArg === 'held-out') {
     files.push(resolve('eval-data/held-out/cases.json'));
+  }
+  if (!splitArg || splitArg === 'all' || splitArg === 'held-out-v2') {
+    files.push(resolve('eval-data/held-out-v2/cases.json'));
   }
 
   const all: CaseWithMock[] = [];
@@ -56,6 +61,7 @@ export function gradeExtraction(
   latencyMs: number,
   retryCount: number,
   tokenUsage?: TokenUsage,
+  latencyWithoutRetriesMs?: number,
 ): CaseScore {
   const validation = validateExtractedQuote(rawResponse, testCase.rawMessage);
   const schemaErrors = [...validation.schemaErrors];
@@ -63,6 +69,7 @@ export function gradeExtraction(
   const failures: string[] = [];
   let criticalFinancialError = false;
   let unsupportedCurrencyAssumption = false;
+  const noRetryLatency = latencyWithoutRetriesMs ?? latencyMs;
 
   if (!validation.quote) {
     return {
@@ -76,8 +83,10 @@ export function gradeExtraction(
       unsupportedCurrencyAssumption: false,
       failures: ['Skipped financial grading because response failed schema validation'],
       latencyMs,
+      latencyWithoutRetriesMs: noRetryLatency,
       retryCount,
       tokenUsage,
+      rawResponse,
     };
   }
 
@@ -139,6 +148,18 @@ export function gradeExtraction(
     }
   }
 
+  // Price conflict discrepancy check (when the case has conflicting prices for the same service)
+  if (testCase.expected.expectedPriceConflictDiscrepancy !== undefined) {
+    const expectedDiff = testCase.expected.expectedPriceConflictDiscrepancy;
+    const matchedConflict = calc.priceConflicts.some((c) => c.discrepancy === expectedDiff);
+    if (!matchedConflict) {
+      const gotDiffs = calc.priceConflicts.map((c) => c.discrepancy).join(', ');
+      failures.push(
+        `priceConflict discrepancy: expected ${expectedDiff}, got [${gotDiffs || 'none'}]`,
+      );
+    }
+  }
+
   // Open questions check
   if (
     testCase.expected.minOpenQuestions !== undefined &&
@@ -163,8 +184,10 @@ export function gradeExtraction(
     unsupportedCurrencyAssumption,
     failures,
     latencyMs,
+    latencyWithoutRetriesMs: noRetryLatency,
     retryCount,
     tokenUsage,
+    rawResponse,
   };
 }
 
@@ -185,6 +208,7 @@ export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScor
       unsupportedCurrencyAssumption: false,
       failures: [],
       latencyMs: err.latencyMs,
+      latencyWithoutRetriesMs: err.latencyWithoutRetriesMs,
       retryCount: err.retryCount,
     };
   }
@@ -201,6 +225,7 @@ export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScor
     unsupportedCurrencyAssumption: false,
     failures: [],
     latencyMs: isKnown ? err.latencyMs : 0,
+    latencyWithoutRetriesMs: isKnown ? err.latencyWithoutRetriesMs : 0,
     retryCount: isKnown ? err.retryCount : 0,
   };
 }
@@ -209,7 +234,8 @@ export function summarizeScores(scores: CaseScore[]) {
   const total = scores.length;
   const apiErrors = scores.filter((s) => s.apiError !== undefined).length;
   const parseErrors = scores.filter((s) => s.parseError !== undefined).length;
-  const completed = total - apiErrors;
+  const completedScores = scores.filter((s) => s.apiError === undefined);
+  const completed = completedScores.length;
   const schemaCompliant = scores.filter(
     (s) => s.apiError === undefined && s.parseError === undefined && s.schemaErrors.length === 0,
   ).length;
@@ -221,6 +247,15 @@ export function summarizeScores(scores: CaseScore[]) {
   const avgLatency = Math.round(
     scores.reduce((sum, s) => sum + s.latencyMs, 0) / Math.max(total, 1),
   );
+  const noRetryPool = completedScores.length > 0 ? completedScores : scores;
+  const avgLatencyWithoutRetries = Math.round(
+    noRetryPool.reduce((sum, s) => sum + s.latencyWithoutRetriesMs, 0) /
+      Math.max(noRetryPool.length, 1),
+  );
+  const apiAvailabilityRate = total > 0 ? completed / total : 0;
+  const schemaValidityRate = completed > 0 ? schemaCompliant / completed : 0;
+  const extractionAccuracyRate = completed > 0 ? passedCount / completed : 0;
+  const endToEndSuccessRate = total > 0 ? passedCount / total : 0;
   const promptTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.promptTokens ?? 0), 0);
   const outputTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.outputTokens ?? 0), 0);
   const estPaidCostUsd = estimateExtractionCostUsd({
@@ -241,6 +276,11 @@ export function summarizeScores(scores: CaseScore[]) {
     blockerCount,
     totalRetries,
     avgLatency,
+    avgLatencyWithoutRetries,
+    apiAvailabilityRate,
+    schemaValidityRate,
+    extractionAccuracyRate,
+    endToEndSuccessRate,
     promptTokens,
     outputTokens,
     estPaidCostUsd,
@@ -271,6 +311,7 @@ async function main() {
   const splitArg = splitIdx >= 0 ? args[splitIdx + 1] : 'all';
   const delayIdx = args.indexOf('--delay-ms');
   const explicitDelayMs = delayIdx >= 0 ? Number(args[delayIdx + 1]) : undefined;
+  const showRaw = args.includes('--show-raw');
 
   const providerArg = process.env.EXTRACTOR_PROVIDER as ProviderName | undefined;
   const effectiveProvider =
@@ -319,6 +360,7 @@ async function main() {
         res.latencyMs,
         res.retryCount,
         res.tokenUsage,
+        res.latencyWithoutRetriesMs,
       );
       scores.push(score);
 
@@ -337,7 +379,10 @@ async function main() {
       });
 
       const status = score.passed ? 'PASS' : 'FAIL';
-      const retryNote = score.retryCount > 0 ? `, ${score.retryCount} retries` : '';
+      const retryNote =
+        score.retryCount > 0
+          ? `, ${score.retryCount} retries, ${score.latencyWithoutRetriesMs}ms excl. retries`
+          : '';
       console.log(`${status} (${score.latencyMs}ms${retryNote})`);
     } catch (err) {
       const score = scoreExtractionError(c, err);
@@ -358,32 +403,28 @@ async function main() {
 
   const summary = summarizeScores(scores);
   const telSummary = telemetry.getSummary();
-  const accuracyPct =
-    summary.total > 0 ? ((summary.passedCount / summary.total) * 100).toFixed(1) : '0.0';
-  const availPct =
-    summary.total > 0 ? ((summary.completed / summary.total) * 100).toFixed(1) : '0.0';
-  const schemaPct =
-    summary.completed > 0
-      ? ((summary.schemaCompliant / summary.completed) * 100).toFixed(1)
-      : '0.0';
-  const extractSuccessPct = (telSummary.extractionSuccessRate * 100).toFixed(1);
+  const fmtPct = (rate: number) => `${(rate * 100).toFixed(1)}%`;
 
   console.log(`\nVowly Quote Extraction Eval`);
   console.log(
     `Provider: ${usedProvider} | Configured model: ${usedModel || 'n/a'} | Resolved: ${resolvedModelVersion || 'n/a'}`,
   );
   console.log(`Split: ${splitArg} (${summary.total} cases)`);
-  console.log(`Passed: ${summary.passedCount}/${summary.total} (${accuracyPct}%)`);
   console.log(
-    `API availability: ${summary.completed}/${summary.total} (${availPct}%) | Schema valid: ${summary.schemaCompliant}/${summary.completed} (${schemaPct}%) | Parse errors: ${summary.parseErrors}`,
+    `End-to-end success: ${summary.passedCount}/${summary.total} (${fmtPct(summary.endToEndSuccessRate)}) | Extraction accuracy (completed): ${summary.passedCount}/${summary.completed} (${fmtPct(summary.extractionAccuracyRate)})`,
   );
   console.log(
-    `Extraction success rate: ${telSummary.extractionSuccesses}/${telSummary.extractionAttempts} (${extractSuccessPct}%) | Unresolved questions extracted: ${telSummary.unresolvedQuestions}`,
+    `API availability: ${summary.completed}/${summary.total} (${fmtPct(summary.apiAvailabilityRate)}) | Schema validity: ${summary.schemaCompliant}/${summary.completed} (${fmtPct(summary.schemaValidityRate)}) | Parse errors: ${summary.parseErrors}`,
+  );
+  console.log(
+    `Unresolved questions extracted: ${telSummary.unresolvedQuestions}`,
   );
   console.log(
     `Critical financial errors: ${summary.financialErrors} | Unsupported currency guesses: ${summary.currencyGuesses} | Release blockers: ${summary.blockerCount}`,
   );
-  console.log(`Avg latency: ${summary.avgLatency}ms | Total retries: ${summary.totalRetries}`);
+  console.log(
+    `Avg latency (incl. retries): ${summary.avgLatency}ms | Avg latency (excl. retries): ${summary.avgLatencyWithoutRetries}ms | Total retries: ${summary.totalRetries}`,
+  );
   if (summary.promptTokens > 0 || summary.outputTokens > 0) {
     console.log(
       `Tokens: ${summary.promptTokens} in / ${summary.outputTokens} out | Est. paid cost: $${summary.estPaidCostUsd.toFixed(5)} ($0 on Gemini free tier)`,
@@ -396,12 +437,10 @@ async function main() {
   ) => {
     console.log(`\n${heading}`);
     for (const [label, g] of Object.entries(groups)) {
-      const pct = g.total > 0 ? ((g.passedCount / g.total) * 100).toFixed(1) : '0.0';
-      const sPct = g.completed > 0 ? ((g.schemaCompliant / g.completed) * 100).toFixed(1) : '0.0';
       const costStr =
         g.promptTokens > 0 || g.outputTokens > 0 ? ` | cost $${g.estPaidCostUsd.toFixed(5)}` : '';
       console.log(
-        `  ${label.padEnd(14)} ${g.passedCount}/${g.total} (${pct}%) | schema ${g.schemaCompliant}/${g.completed} (${sPct}%) | finErr ${g.financialErrors} | blockers ${g.blockerCount} | avg ${g.avgLatency}ms | retries ${g.totalRetries}${costStr}`,
+        `  ${label.padEnd(14)} e2e ${g.passedCount}/${g.total} (${fmtPct(g.endToEndSuccessRate)}) | acc ${g.passedCount}/${g.completed} (${fmtPct(g.extractionAccuracyRate)}) | avail ${g.completed}/${g.total} | schema ${g.schemaCompliant}/${g.completed} (${fmtPct(g.schemaValidityRate)}) | finErr ${g.financialErrors} | blockers ${g.blockerCount} | lat ${g.avgLatency}ms (no-retry ${g.avgLatencyWithoutRetries}ms) | retries ${g.totalRetries}${costStr}`,
       );
     }
   };
@@ -418,7 +457,9 @@ async function main() {
     if (s.passed) continue;
     const tag = s.apiError ? 'API_ERR' : s.parseError ? 'PARSE_ERR' : 'FAIL';
     const retryNote = s.retryCount > 0 ? ` (${s.retryCount} retries)` : '';
-    console.log(`[${tag}] (${s.split}) ${s.id} — ${s.latencyMs}ms${retryNote}`);
+    console.log(
+      `[${tag}] (${s.split}) ${s.id} — ${s.latencyMs}ms (no-retry ${s.latencyWithoutRetriesMs}ms)${retryNote}`,
+    );
     if (s.apiError) {
       console.log(`   API ERROR:   ${s.apiError}`);
     }
@@ -433,6 +474,9 @@ async function main() {
     }
     for (const f of s.failures) {
       console.log(`   FAIL:        ${f}`);
+    }
+    if (showRaw && s.rawResponse !== undefined) {
+      console.log(`   RAW OUTPUT:  ${JSON.stringify(s.rawResponse)}`);
     }
   }
 

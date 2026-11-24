@@ -11,6 +11,7 @@ import {
   getApprovalBlockers,
   getUnresolvedQuestionCount,
   resolveOpenQuestion,
+  resolvePriceConflict,
 } from './review.ts';
 import { TelemetryTracker } from './telemetry.ts';
 import type { ExtractedQuote } from './types.ts';
@@ -178,4 +179,78 @@ test('mandatory TBD costs block approval until priced or marked optional', () =>
   const updated = approveQuote(session, budget);
   assert.equal(session.status, 'approved');
   assert.deepEqual(updated.committedTotals, { CAD: 10500 });
+});
+
+test('price conflict ($3,200 DM vs $3,600 contract) blocks approval and recalculates budget for either choice', () => {
+  const photoConflictQuote: ExtractedQuote = {
+    vendorName: 'Northstar Studios',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    paymentTerms: { depositAmount: 800, methodRule: 'unknown', scheduleNotes: '$800 deposit' },
+    lineItems: [
+      {
+        label: 'Full-day wedding coverage',
+        pricingType: 'flat',
+        amount: 3200,
+        chargeType: 'mandatory',
+        conflictingOptions: [
+          {
+            sourceLabel: 'Instagram DM',
+            pricingType: 'flat',
+            amount: 3200,
+            sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+          },
+          {
+            sourceLabel: 'PDF contract',
+            pricingType: 'flat',
+            amount: 3600,
+            sourceExcerpt: 'the PDF contract sent today says $3,600',
+          },
+        ],
+        sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+      },
+    ],
+    openQuestions: [
+      {
+        question: 'Clarify whether $3,200 DM rate or $3,600 PDF contract applies ($400 difference)',
+        reason: 'conflict',
+        sourceExcerpt:
+          'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage, but the PDF contract sent today says $3,600',
+      },
+    ],
+  };
+
+  // Path A: select the $3,200 Instagram DM rate
+  let budgetA = createBudgetState();
+  const sessionA = createReviewSession('conflict-a', photoConflictQuote);
+  assert.equal(sessionA.calculation.knownSubtotal, 3200);
+  assert.equal(sessionA.calculation.priceConflicts.length, 1);
+  assert.equal(sessionA.calculation.priceConflicts[0]?.discrepancy, 400);
+  assert.throws(() => approveQuote(sessionA, budgetA), /conflicting prices/i);
+  assert.equal(sessionA.status, 'pending_review');
+  assert.deepEqual(budgetA.committedTotals, {});
+
+  resolvePriceConflict(sessionA, 0, 0);
+  assert.equal(sessionA.calculation.priceConflicts.length, 0);
+  assert.equal(sessionA.calculation.knownSubtotal, 3200);
+  budgetA = approveQuote(sessionA, budgetA);
+  assert.equal(sessionA.status, 'approved');
+  assert.deepEqual(budgetA.committedTotals, { CAD: 3200 });
+
+  // Path B: select the $3,600 PDF contract rate
+  let budgetB = createBudgetState();
+  const sessionB = createReviewSession('conflict-b', photoConflictQuote);
+  assert.throws(() => approveQuote(sessionB, budgetB), /400 difference/);
+
+  resolvePriceConflict(sessionB, 0, 1);
+  assert.equal(sessionB.calculation.priceConflicts.length, 0);
+  assert.equal(sessionB.calculation.knownSubtotal, 3600);
+  budgetB = approveQuote(sessionB, budgetB);
+  assert.equal(sessionB.status, 'approved');
+  assert.deepEqual(budgetB.committedTotals, { CAD: 3600 });
+  assert.equal(sessionB.resolvedPriceConflicts[0]?.chosenSourceLabel, 'PDF contract');
 });

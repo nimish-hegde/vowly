@@ -4,20 +4,26 @@
     "split": "dev",
     "description": "Initial venue quote with per-person pricing, 150-guest minimum, plus tax/gratuity, and TBD AV fee",
     "rawMessage": "Hi! For Friday August 13, 2027 in our Cedar Ballroom (max 200 guests), our Royal Package is $50 CAD/person + tax + gratuity with a 150-person minimum. Hall rental, tables, chairs, linens, and soft drinks are included. Audio-visual packages cost extra through our in-house AV team — pricing TBD once you pick a lighting setup.",
-    "calcContext": { "guestCount": 140 },
+    "calcContext": {
+      "guestCount": 140
+    },
     "expected": {
       "category": "venue",
       "currency": "CAD",
       "quoteKind": "initial",
       "knownSubtotal": 7500,
-      "unknownItemLabels": ["AV"],
+      "unknownItemLabels": [
+        "AV"
+      ],
       "minOpenQuestions": 1,
       "taxStatus": "excluded"
     },
     "mockExtraction": {
       "vendorName": "Cedar Ballroom",
       "category": "venue",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quotedDate": "2027-08-13",
       "quoteKind": "initial",
       "currency": "CAD",
@@ -65,19 +71,25 @@
     "split": "dev",
     "description": "Revised venue quote lowering AV fee from $600 to $300 while bartender fee remains open",
     "rawMessage": "Following up on our earlier quote for Juniper Hall (160 guests, CAD): we can drop the AV fee from $600 down to $300. Catering stays at $100/person. Still waiting on our bar manager to confirm the bartender staffing fee.",
-    "calcContext": { "guestCount": 160 },
+    "calcContext": {
+      "guestCount": 160
+    },
     "expected": {
       "category": "venue",
       "currency": "CAD",
       "quoteKind": "revision",
       "knownSubtotal": 16300,
-      "unknownItemLabels": ["bartender"],
+      "unknownItemLabels": [
+        "bartender"
+      ],
       "minOpenQuestions": 1
     },
     "mockExtraction": {
       "vendorName": "Juniper Hall",
       "category": "venue",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "revision",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -116,7 +128,9 @@
     "split": "dev",
     "description": "Hourly photographer quote with team size and deposit, no mention of mini-shoot",
     "rawMessage": "Hey! For your wedding we charge $2,500 CAD for five hours with two photographers. Additional hours are $300/hr. We require a 30% deposit by e-transfer to hold the date.",
-    "calcContext": { "hours": 5 },
+    "calcContext": {
+      "hours": 5
+    },
     "expected": {
       "category": "photographer",
       "currency": "CAD",
@@ -128,7 +142,9 @@
     "mockExtraction": {
       "vendorName": "Unknown Photographer",
       "category": "photographer",
-      "events": ["Wedding"],
+      "events": [
+        "Wedding"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -178,7 +194,9 @@
     "mockExtraction": {
       "vendorName": "DJ Orbit",
       "category": "dj",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -204,7 +222,9 @@
     "split": "dev",
     "description": "Catering quote with per-person buffet, delivery fee, tax excluded, and optional live chaat station",
     "rawMessage": "Saffron Kitchen Catering (CAD): Wedding buffet is $42/person (120-person minimum) plus a flat $350 delivery and setup fee. Optional live gol gappa station is +$6/person. Prices are plus HST and 15% service charge.",
-    "calcContext": { "guestCount": 130 },
+    "calcContext": {
+      "guestCount": 130
+    },
     "expected": {
       "category": "catering",
       "currency": "CAD",
@@ -216,7 +236,9 @@
     "mockExtraction": {
       "vendorName": "Saffron Kitchen Catering",
       "category": "catering",
-      "events": ["Wedding"],
+      "events": [
+        "Wedding"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "excluded",
@@ -262,7 +284,9 @@
     "mockExtraction": {
       "vendorName": "Encore Hosting & Booths",
       "category": "entertainment",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -299,13 +323,17 @@
       "currency": "CAD",
       "quoteKind": "initial",
       "knownSubtotal": 2150,
-      "unknownItemLabels": ["teardown"],
+      "unknownItemLabels": [
+        "teardown"
+      ],
       "minOpenQuestions": 1
     },
     "mockExtraction": {
       "vendorName": "Velvet Bloom Decor",
       "category": "decor",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -349,14 +377,18 @@
       "currency": "CAD",
       "quoteKind": "initial",
       "knownSubtotal": 5450,
-      "unknownItemLabels": ["extra hours"],
+      "unknownItemLabels": [
+        "extra hours"
+      ],
       "minOpenQuestions": 1,
       "taxStatus": "included"
     },
     "mockExtraction": {
       "vendorName": "Heritage Mandir Hall",
       "category": "venue",
-      "events": ["Wedding"],
+      "events": [
+        "Wedding"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "included",
@@ -395,12 +427,15 @@
       "quoteKind": "revision",
       "knownSubtotal": 3200,
       "unknownItemLabels": [],
-      "minOpenQuestions": 1
+      "minOpenQuestions": 1,
+      "expectedPriceConflictDiscrepancy": 400
     },
     "mockExtraction": {
       "vendorName": "Northstar Studios",
       "category": "photographer",
-      "events": ["Wedding"],
+      "events": [
+        "Wedding"
+      ],
       "quoteKind": "revision",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -412,15 +447,30 @@
       },
       "lineItems": [
         {
-          "label": "Full-day wedding coverage (DM agreed rate)",
+          "label": "Full-day wedding coverage",
           "pricingType": "flat",
           "amount": 3200,
+          "chargeType": "mandatory",
+          "conflictingOptions": [
+            {
+              "sourceLabel": "Instagram DM",
+              "pricingType": "flat",
+              "amount": 3200,
+              "sourceExcerpt": "In Instagram DM you agreed to $3,200 flat for full-day wedding coverage"
+            },
+            {
+              "sourceLabel": "PDF contract",
+              "pricingType": "flat",
+              "amount": 3600,
+              "sourceExcerpt": "the PDF contract sent today says $3,600"
+            }
+          ],
           "sourceExcerpt": "In Instagram DM you agreed to $3,200 flat for full-day wedding coverage"
         }
       ],
       "openQuestions": [
         {
-          "question": "Reconcile $3,200 DM rate against $3,600 PDF contract before paying deposit",
+          "question": "Reconcile $400 discrepancy between $3,200 Instagram DM rate and $3,600 PDF contract before sending the $800 deposit",
           "reason": "conflict",
           "sourceExcerpt": "In Instagram DM you agreed to $3,200 flat for full-day wedding coverage, but the PDF contract sent today says $3,600"
         }
@@ -432,7 +482,9 @@
     "split": "dev",
     "description": "Catering quote with bare $ currency and relative final payment deadline",
     "rawMessage": "Spice Route Caterers: Reception dinner is $48/person for 150 guests plus $250 chafing dish rental. Final 50% balance is due 14 days before the event.",
-    "calcContext": { "guestCount": 150 },
+    "calcContext": {
+      "guestCount": 150
+    },
     "expected": {
       "category": "catering",
       "currency": "UNKNOWN",
@@ -444,7 +496,9 @@
     "mockExtraction": {
       "vendorName": "Spice Route Caterers",
       "category": "catering",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "UNKNOWN",
       "taxStatus": "unknown",
@@ -486,7 +540,9 @@
     "split": "dev",
     "description": "Venue revision switching from Saturday to Friday with lower per-person rate",
     "rawMessage": "Updated quote for Oakridge Hall (CAD): switching from Saturday to Friday August 13, 2027 drops the Deluxe menu from $95/person down to $60/person (150-person minimum). Bartenders are $400 each (1 per 150 guests). Prices plus HST.",
-    "calcContext": { "guestCount": 165 },
+    "calcContext": {
+      "guestCount": 165
+    },
     "expected": {
       "category": "venue",
       "currency": "CAD",
@@ -498,7 +554,9 @@
     "mockExtraction": {
       "vendorName": "Oakridge Hall",
       "category": "venue",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quotedDate": "2027-08-13",
       "quoteKind": "revision",
       "currency": "CAD",
@@ -533,7 +591,9 @@
     "split": "dev",
     "description": "Live dhol players quoted hourly with cash-only payment rule",
     "rawMessage": "Rhythm Dhol Collective (CAD): 2 dhol players for your Baraat and Reception entrance at $225/hr for 2 hours. Cash only on the day of the event.",
-    "calcContext": { "hours": 2 },
+    "calcContext": {
+      "hours": 2
+    },
     "expected": {
       "category": "entertainment",
       "currency": "CAD",
@@ -545,7 +605,10 @@
     "mockExtraction": {
       "vendorName": "Rhythm Dhol Collective",
       "category": "entertainment",
-      "events": ["Baraat", "Reception"],
+      "events": [
+        "Baraat",
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -581,7 +644,10 @@
     "mockExtraction": {
       "vendorName": "Marigold Events",
       "category": "decor",
-      "events": ["Sangeet", "Reception"],
+      "events": [
+        "Sangeet",
+        "Reception"
+      ],
       "quoteKind": "revision",
       "currency": "CAD",
       "taxStatus": "unknown",
@@ -609,7 +675,9 @@
     "split": "dev",
     "description": "USD venue quote with explicit mandatory cleaning fee and optional valet",
     "rawMessage": "Lakeview Pavilion (USD): Reception dinner is $80/person (100-person minimum) plus a mandatory $500 cleaning fee. Optional valet parking is $450. Prices exclude tax and 20% gratuity.",
-    "calcContext": { "guestCount": 120 },
+    "calcContext": {
+      "guestCount": 120
+    },
     "expected": {
       "category": "venue",
       "currency": "USD",
@@ -621,7 +689,9 @@
     "mockExtraction": {
       "vendorName": "Lakeview Pavilion",
       "category": "venue",
-      "events": ["Reception"],
+      "events": [
+        "Reception"
+      ],
       "quoteKind": "initial",
       "currency": "USD",
       "taxStatus": "excluded",
@@ -652,6 +722,176 @@
         }
       ],
       "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-venue-bundled-inhouse-catering",
+    "split": "dev",
+    "description": "Banquet hall with heavy food/menu language still classifies as venue (paired with independent caterer)",
+    "rawMessage": "Willowbrook Banquet Hall (CAD): Our Emerald Reception Menu is $68/person for 160 guests, including 5 appetizers, main buffet dinner, dessert table, ballroom rental, and tables/linens. Late-night chai station has an extra charge per person (pricing TBD). Prices plus HST.",
+    "calcContext": {
+      "guestCount": 160
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 10880,
+      "unknownItemLabels": [
+        "chai"
+      ],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Willowbrook Banquet Hall",
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "packageName": "Emerald Reception Menu"
+      },
+      "lineItems": [
+        {
+          "label": "Emerald Reception Menu",
+          "pricingType": "per_person",
+          "amount": 68,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Our Emerald Reception Menu is $68/person for 160 guests"
+        },
+        {
+          "label": "Ballroom rental, tables and linens",
+          "pricingType": "included",
+          "amount": 0,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "including 5 appetizers, main buffet dinner, dessert table, ballroom rental, and tables/linens"
+        },
+        {
+          "label": "Late-night chai station surcharge",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "conditional",
+          "optionalAddon": false,
+          "sourceExcerpt": "Late-night chai station has an extra charge per person (pricing TBD)"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm per-person pricing for the late-night chai station",
+          "reason": "missing_price",
+          "sourceExcerpt": "Late-night chai station has an extra charge per person (pricing TBD)"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-catering-independent-at-venue",
+    "split": "dev",
+    "description": "Independent caterer operating at a separate named venue classifies as catering",
+    "rawMessage": "Tandoor Express Catering (CAD): For your reception at Maple Pavilion, our off-site catering team will provide full dinner buffet at $44/person for 160 guests, plus $400 flat for food delivery and chafing setup. Optional live dosa counter is +$7/person. Prices plus HST.",
+    "calcContext": {
+      "guestCount": 160
+    },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 7440,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Tandoor Express Catering",
+      "category": "catering",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Full dinner buffet",
+          "pricingType": "per_person",
+          "amount": 44,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "full dinner buffet at $44/person for 160 guests"
+        },
+        {
+          "label": "Food delivery and chafing setup",
+          "pricingType": "flat",
+          "amount": 400,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "$400 flat for food delivery and chafing setup"
+        },
+        {
+          "label": "Live dosa counter",
+          "pricingType": "per_person",
+          "amount": 7,
+          "chargeType": "optional",
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional live dosa counter is +$7/person"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-category-ambiguous-vendor",
+    "split": "dev",
+    "description": "Genuinely ambiguous vendor role preserves unknown category and asks for clarification",
+    "rawMessage": "Sunrise Events (CAD): Reception dinner package is $58/person for 150 guests plus a $350 setup fee. Prices are plus HST.",
+    "calcContext": {
+      "guestCount": 150
+    },
+    "expected": {
+      "category": "unknown",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 9050,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Sunrise Events",
+      "category": "unknown",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Reception dinner package",
+          "pricingType": "per_person",
+          "amount": 58,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Reception dinner package is $58/person for 150 guests"
+        },
+        {
+          "label": "Setup fee",
+          "pricingType": "flat",
+          "amount": 350,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "$350 setup fee"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether Sunrise Events provides the event venue space or off-site catering only",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "Sunrise Events (CAD): Reception dinner package is $58/person for 150 guests"
+        }
+      ]
     }
   }
 ]

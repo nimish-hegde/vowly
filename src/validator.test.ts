@@ -80,3 +80,57 @@ test('normalizes equivalent vendor terminology cleanly', () => {
   assert.equal(normalizeLineItemLabel('Bartender staffing fee'), 'bartender fee');
   assert.equal(normalizeLineItemLabel('Bar staff'), 'bartender');
 });
+
+test('validates conflictingOptions verbatim excerpts, unknown category, and rejects optionalAddon on conditional charges', () => {
+  const conflictMsg =
+    'Northstar Studios (CAD): In Instagram DM you agreed to $3,200 flat, but the PDF contract says $3,600.';
+  const validConflict = {
+    vendorName: 'Northstar Studios',
+    category: 'unknown',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Full-day coverage',
+        pricingType: 'flat',
+        amount: 3200,
+        chargeType: 'mandatory',
+        conflictingOptions: [
+          {
+            sourceLabel: 'Instagram DM',
+            pricingType: 'flat',
+            amount: 3200,
+            sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat',
+          },
+          {
+            sourceLabel: 'PDF contract',
+            pricingType: 'flat',
+            amount: 3600,
+            sourceExcerpt: 'the PDF contract says $3,600',
+          },
+        ],
+        sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const okRes = validateExtractedQuote(validConflict, conflictMsg);
+  assert.equal(okRes.valid, true);
+
+  const badExcerpt = structuredClone(validConflict);
+  badExcerpt.lineItems[0]!.conflictingOptions[1]!.sourceExcerpt = 'Invented contract line $3,600';
+  const badExcerptRes = validateExtractedQuote(badExcerpt, conflictMsg);
+  assert.equal(badExcerptRes.valid, false);
+  assert.equal(badExcerptRes.sourceErrors.length, 1);
+
+  const badChargeType = structuredClone(validConflict);
+  badChargeType.lineItems[0]!.chargeType = 'conditional';
+  (badChargeType.lineItems[0] as Record<string, unknown>).optionalAddon = true;
+  const badChargeRes = validateExtractedQuote(badChargeType, conflictMsg);
+  assert.equal(badChargeRes.valid, false);
+  assert.ok(badChargeRes.schemaErrors.some((e) => e.includes('optionalAddon cannot be true')));
+});

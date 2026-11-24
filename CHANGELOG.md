@@ -17,8 +17,13 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
   - If an extracted excerpt can't be found in the original message, the review screen now shows that excerpt in red and blocks approval until the couple confirms they checked it.
   - Failed extraction requests (API errors, bad JSON) now count in the UI's success rate, latency and retry numbers. Before, only successful calls were counted, so the success rate looked better than it was.
   - Quotes with unresolved mandatory TBD costs can no longer be approved into the committed budget until each TBD item is priced, marked included, or marked as an optional add-on.
-- Added per-split and per-vendor-category summary breakdowns to `src/eval.ts`.
-- Unit tests: `26/26` passing offline. Mock evals: `45/45`.
+- Recorded the first 45-case live baseline on `gemini-3.5-flash-lite` (`36/45` end-to-end, `44/45` API availability, `44/44` schema validity, `1` critical financial error, `0` currency guesses, `14` retries) in [the eval report](docs/EVAL_REPORT.md) and addressed all four failure patterns:
+  - **P0 conflicting prices:** added `conflictingOptions` on `LineItem`, discrepancy calculation in `src/calculator.ts`, prompt/schema rules preventing double-counting, and conflict resolution in `src/review.ts`, `src/server.ts`, and `ui/index.html` (blocking budget approval until the couple picks which price applies).
+  - **P1 venue vs. catering:** defined `venue` (provides the event space, even with bundled food) vs. `catering` (independent food service, even at a venue) and added `unknown` category with paired dev examples.
+  - **P1 unpriced mandatory/conditional charges:** added `chargeType` (`mandatory` | `conditional` | `optional`) and general cross-category rules so unpriced mandatory and conditional charges stay non-optional, raise `missing_price` questions, and block approval.
+  - **P2 provider reliability metrics:** separated API availability, schema validity, extraction accuracy (completed), end-to-end success, latency including retries, and latency excluding retries in `src/eval.ts`, and added `--show-raw`.
+- Preserved the 6-case `regression` and 25-case `held-out` baselines untouched, expanded `dev` to 17 cases, and added a fresh 12-case `held-out-v2` split (`60` mock cases total).
+- Unit tests: `33/33` passing offline. Mock evals: `60/60`. Live re-verification pending.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 

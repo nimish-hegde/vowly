@@ -12,6 +12,7 @@
     "eval:dev": "node src/eval.ts --split dev",
     "eval:regression": "node src/eval.ts --split regression",
     "eval:held-out": "node src/eval.ts --split held-out",
+    "eval:held-out-v2": "node src/eval.ts --split held-out-v2",
     "ui": "node src/server.ts"
   }
 }

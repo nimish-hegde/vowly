@@ -304,6 +304,39 @@
                </div>`
             : '';
 
+        const conflictHtml =
+          s.calculation.priceConflicts && s.calculation.priceConflicts.length
+            ? s.calculation.priceConflicts
+                .map(
+                  (c) => `
+                    <div class="item">
+                      <strong class="error">Price conflict on "${escapeHtml(c.label)}"${c.discrepancy !== null ? ` — ${s.calculation.currency} ${c.discrepancy.toLocaleString()} difference` : ''}</strong>
+                      <div style="font-size:13px; color:var(--muted); margin-top:4px">
+                        Pick which price applies before approving this quote into your budget (both will never be added together).
+                      </div>
+                      ${c.options
+                        .map(
+                          (opt, optIdx) => `
+                            <div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border)">
+                              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+                                <span><strong>${escapeHtml(opt.sourceLabel)}</strong>: ${s.calculation.currency} ${(opt.calculatedTotal ?? opt.unitAmount).toLocaleString()}</span>
+                                ${
+                                  locked
+                                    ? ''
+                                    : `<button class="btn-secondary" style="flex:0; white-space:nowrap" onclick="resolveConflict(${c.lineItemIndex}, ${optIdx})">Use ${escapeHtml(opt.sourceLabel)}</button>`
+                                }
+                              </div>
+                              ${excerptHtml(opt.sourceExcerpt)}
+                            </div>
+                          `,
+                        )
+                        .join('')}
+                    </div>
+                  `,
+                )
+                .join('')
+            : '';
+
         const unresolvedCostHtml =
           s.calculation.unknownItems && s.calculation.unknownItems.length
             ? `<div class="item">
@@ -317,6 +350,7 @@
         el.innerHTML = `
           <div class="status-banner ${s.status === 'approved' ? 'approved' : ''}">${bannerText}</div>
           ${sourceWarningHtml}
+          ${conflictHtml}
           ${unresolvedCostHtml}
           <div id="approveError" class="error"></div>
           <div class="row" style="margin-bottom: 14px">
@@ -384,6 +418,18 @@
           sessionId: state.session.id,
           questionIndex: idx,
           resolutionNote: note,
+        });
+        state.session = data.session;
+        state.telemetry = data.telemetry;
+        renderReview();
+        renderBudgetAndTelemetry();
+      };
+
+      window.resolveConflict = async (lineItemIndex, optionIndex) => {
+        const data = await api('/api/review/resolve-conflict', {
+          sessionId: state.session.id,
+          lineItemIndex,
+          optionIndex,
         });
         state.session = data.session;
         state.telemetry = data.telemetry;

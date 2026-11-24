@@ -175,3 +175,95 @@ test('calculates hourly photographer quotes cleanly', () => {
   const result = calculateQuoteTotal(photoQuote, { hours: 6 });
   assert.equal(result.knownSubtotal, 1800);
 });
+
+test('conflicting prices for one service compute discrepancy without double-counting', () => {
+  const conflictQuote: ExtractedQuote = {
+    vendorName: 'Northstar Studios',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Full-day wedding coverage',
+        pricingType: 'flat',
+        amount: 3200,
+        chargeType: 'mandatory',
+        conflictingOptions: [
+          {
+            sourceLabel: 'Instagram DM',
+            pricingType: 'flat',
+            amount: 3200,
+            sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+          },
+          {
+            sourceLabel: 'PDF contract',
+            pricingType: 'flat',
+            amount: 3600,
+            sourceExcerpt: 'the PDF contract sent today says $3,600',
+          },
+        ],
+        sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+      },
+    ],
+    openQuestions: [
+      {
+        question: 'Confirm whether $3,200 DM rate or $3,600 PDF contract applies ($400 difference)',
+        reason: 'conflict',
+        sourceExcerpt: 'the PDF contract sent today says $3,600',
+      },
+    ],
+  };
+
+  const result = calculateQuoteTotal(conflictQuote);
+  assert.equal(result.knownSubtotal, 3200);
+  assert.equal(result.priceConflicts.length, 1);
+  assert.equal(result.priceConflicts[0]?.discrepancy, 400);
+  assert.equal(result.priceConflicts[0]?.minTotal, 3200);
+  assert.equal(result.priceConflicts[0]?.maxTotal, 3600);
+});
+
+test('keeps unpriced conditional charges in unknownItems while excluding explicit optional add-ons', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Willowbrook Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Dinner package',
+        pricingType: 'per_person',
+        amount: 60,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Dinner package is $60/person',
+      },
+      {
+        label: 'Late-night lighting setup',
+        pricingType: 'unknown',
+        amount: null,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'lighting setup costs extra depending on layout',
+      },
+      {
+        label: 'Ice sculpture',
+        pricingType: 'flat',
+        amount: 450,
+        chargeType: 'optional',
+        optionalAddon: true,
+        sourceExcerpt: 'Optional ice sculpture is $450',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote, { guestCount: 150 });
+  assert.equal(result.knownSubtotal, 9000);
+  assert.deepEqual(result.unknownItems, ['Late-night lighting setup']);
+  assert.deepEqual(result.optionalAddons, ['Ice sculpture']);
+});

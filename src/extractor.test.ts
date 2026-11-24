@@ -99,3 +99,11 @@ test('extractQuote preserves Gemini responseSchema and throws parse_error on mal
     else process.env.GEMINI_API_KEY = originalKey;
   }
 });
+
+test('Ollama and Gemini schemas include conflictingOptions, chargeType, and unknown category', () => {
+  const categories = OLLAMA_RESPONSE_SCHEMA.properties.category.enum;
+  assert.ok(categories.includes('unknown'));
+  const lineProps = OLLAMA_RESPONSE_SCHEMA.properties.lineItems.items.properties;
+  assert.ok('chargeType' in lineProps);
+  assert.ok('conflictingOptions' in lineProps);
+});

@@ -13,6 +13,7 @@ import {
   type LineItemPatch,
   type QuoteReviewSession,
   resolveOpenQuestion,
+  resolvePriceConflict,
 } from './review.ts';
 import { TelemetryTracker } from './telemetry.ts';
 import type { CurrencyCode, EvalCase, ExtractedQuote } from './types.ts';
@@ -27,7 +28,7 @@ function loadSamples(): SampleCase[] {
   const reg = JSON.parse(
     readFileSync(resolve('eval-data/regression/cases.json'), 'utf8'),
   ) as SampleCase[];
-  return [...dev.slice(0, 4), ...reg];
+  return [...dev, ...reg];
 }
 
 const samples = loadSamples();
@@ -145,6 +146,22 @@ const server = createServer(async (req, res) => {
         session,
         Number(body.questionIndex),
         String(body.resolutionNote ?? ''),
+      );
+      sendJson(res, 200, { session, budget, telemetry: telemetry.getSummary() });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/review/resolve-conflict') {
+      const body = await readBody(req);
+      const session = sessions.get(String(body.sessionId ?? ''));
+      if (!session) {
+        sendJson(res, 404, { error: 'Review session not found' });
+        return;
+      }
+      resolvePriceConflict(
+        session,
+        Number(body.lineItemIndex),
+        Number(body.optionIndex),
       );
       sendJson(res, 200, { session, budget, telemetry: telemetry.getSummary() });
       return;

@@ -101,45 +101,92 @@ To close out the remaining regression failure and prepare for `v0.4`:
 3. **Expanded dataset (45 cases total):** Kept the 6 regression cases untouched, added 10 new `dev` cases (14 total), and added 15 new `held-out` cases (25 total) across venues, photography, decor, catering, and entertainment.
 4. **Quote Review UI & instrumentation (`src/review.ts`, `src/server.ts`, `ui/index.html`, `src/telemetry.ts`):** Added a local Quote Review screen (`npm run ui`) where couples can review extracted line items beside source text, fix mistakes, resolve open questions, and approve a quote before it changes their wedding budget—backed by telemetry tracking extraction success rate, latency, tokens, estimated cost, field corrections, unresolved questions, and approval rate.
 
-### Offline validation on PR #11
+## 7. Third live run — 45-case baseline (`gemini-3.5-flash-lite`)
 
-All offline checks pass after the review UI fixes (multi-currency budgets, unsupported source evidence checks, failure telemetry, and blocking approval when mandatory costs are still TBD):
+Running the full 45-case dataset live on `gemini-3.5-flash-lite` gave our first real measurement across all splits and vendor categories (preserved here as the first-attempt baseline before the fixes below):
 
-- **Unit tests (`npm test`):** **26/26 passed** (calculator, validator, eval grader, extractor, telemetry, review workflow, and extract handler).
-- **Offline mock eval (`npm run eval`):** **45/45 passed (100.0%)**, 0 critical financial errors, 0 unsupported currency guesses, 0 release blockers, 100% schema validity.
-  - **By split:** `dev` 14/14, `regression` 6/6, `held-out` 25/25.
-  - **By vendor category:** `venue` 19/19, `photographer` 7/7, `decor` 6/6, `catering` 5/5, `entertainment` 5/5, `dj` 3/3.
+| Metric | First-attempt live baseline (`gemini-3.5-flash-lite`) |
+|---|---:|
+| End-to-end success (all cases) | **36/45 (80.0%)** |
+| Extraction accuracy (completed responses) | **36/44 (81.8%)** |
+| API availability | **44/45 (97.8%)** |
+| Schema validity (of completed responses) | **44/44 (100.0%)** |
+| Regression split | **4/6 (66.7%)** |
+| Dev split | **12/14 (85.7%)** |
+| Original held-out split | **20/25 (80.0%)** |
+| Critical financial errors | **1** (`dev-photo-conflict-contract-vs-dm`: `$6,800` vs `$3,200`) |
+| Unsupported currency guesses | **0** |
+| Total retries | **14** |
+
+### Root-cause analysis of the 9 failures
+
+1. **P0 — Conflicting prices double-counted (`dev-photo-conflict-contract-vs-dm`, `$6,800` instead of `$3,200`):**
+   - **Root cause:** The data model (`LineItem`) only had a single `amount` and `sourceExcerpt`, with no field to hold competing candidate prices for the same service. Trying to preserve both the `$3,200` Instagram DM rate and the `$3,600` PDF contract rate, the model emitted two separate billable line items, and the calculator summed both (`$3,200 + $3,600 = $6,800`). Approval also didn't block unresolved price conflicts.
+   - **Fix across all layers:**
+     - `src/types.ts` & `src/validator.ts`: Added `conflictingOptions: PriceOption[]` on `LineItem` and verbatim `sourceExcerpt` validation for every option.
+     - `src/extractor.ts`: Instructed the model to represent conflicting prices for the same service as **one** line item (never two), preserve all candidate prices and verbatim excerpts in `conflictingOptions`, and emit a `conflict` open question stating both amounts and the discrepancy.
+     - `src/calculator.ts`: Computes `priceConflicts` (including exact numeric `discrepancy`, e.g. `$400`) without ever adding candidate prices together.
+     - `src/review.ts`, `src/server.ts`, `ui/index.html`: Blocks budget approval until the couple picks which candidate price applies (`resolvePriceConflict` / `POST /api/review/resolve-conflict`), then recalculates the subtotal and budget cleanly for whichever option is chosen.
+
+2. **P1 — Venue vs. catering classification (6 failures: `venue-conflict-brochure-vs-note`, `venue-tbd-fees-extra-charge`, `heldout-venue-email-contract-conflict`, `heldout-venue-optional-station-tbd-corkage`, `heldout-venue-open-bar-ratio-plus-min`, `heldout-venue-revision-conflict-gratuity`):**
+   - **Root cause:** Adding `catering` to the category enum without defining `venue` vs. `catering` caused the model to label banquet halls and convention centres as `catering` whenever food words ("dinner", "menu", "appetizers", "catering") appeared.
+   - **Fix:** Added a clear commercial-role rule in `src/extractor.ts` (`venue` provides the physical event space even when food/drinks/staffing are bundled; `catering` provides food/beverage independently of the space, including off-site caterers operating at a separate venue). Added `'unknown'` to `VendorCategory` so genuinely ambiguous vendor roles stay `unknown` with an `ambiguous_rule` clarification question instead of guessing. Added paired dev cases (`dev-venue-bundled-inhouse-catering`, `dev-catering-independent-at-venue`, `dev-category-ambiguous-vendor`).
+
+3. **P1 — Missing unpriced mandatory/conditional charges (2 failures: `venue-initial-min-guests`, `venue-tbd-fees-extra-charge`):**
+   - **Root cause:** Stated additional charges without a dollar figure — especially conditional surcharges phrased as *"costs extra ... pricing TBD once you pick a setup"* or *"has an extra charge per person"* — were either omitted or treated as optional add-ons, dropping them from `unknownItems`.
+   - **Fix:** Added `chargeType: 'mandatory' | 'conditional' | 'optional'` to `LineItem` (validated in `src/validator.ts`, where `optionalAddon: true` is rejected on `mandatory` or `conditional` items). Updated `src/extractor.ts` with general cross-category rules to extract every distinct stated additional charge with `amount: null`, keep mandatory and conditional unpriced charges non-optional, and raise `missing_price` open questions. `src/calculator.ts` keeps both mandatory and conditional unpriced charges in `unknownItems`, and `src/review.ts` blocks budget approval until resolved.
+
+4. **P2 — Provider reliability (1 failure on held-out photography after 3 HTTP 503 retries):**
+   - **Root cause:** Transient Gemini free-tier 503 overload exhausted all 3 retries — a provider outage, not a schema or extraction error.
+   - **Fix:** Added `latencyWithoutRetriesMs` in `src/extractor.ts` and updated `src/eval.ts` to report six distinct metrics: **API availability**, **schema validity**, **extraction accuracy (completed responses)**, **end-to-end success (all cases)**, **average latency including retries**, and **average latency excluding retries**, plus a `--show-raw` flag for inspecting failed raw JSON outputs.
+
+### Offline validation after these fixes
+
+All offline tests and mock evaluations pass. **Live Gemini re-verification has not been run yet — do not assume improved live accuracy until verified against Gemini.**
+
+- **Unit tests (`npm test`):** **33/33 passed** (including P0 conflict resolution for both `$3,200` and `$3,600` choices, `chargeType` / `conflictingOptions` validation, P2 separated reliability/latency metrics, and schema checks).
+- **Offline mock eval (`npm run eval`):** **60/60 passed (100.0%)**, 0 critical financial errors, 0 unsupported currency guesses, 0 release blockers, 100% schema validity:
+  - `dev`: **17/17** (14 original + 3 paired venue/catering/ambiguous-category cases; `dev-photo-conflict-contract-vs-dm` now also asserts the `$400` conflict discrepancy).
+  - `regression`: **6/6** (original 6 cases preserved untouched).
+  - `held-out`: **25/25** (original 25-case held-out baseline preserved untouched).
+  - `held-out-v2`: **12/12** (fresh unseen holdout split testing generalization of price conflicts, venue vs. independent catering at venues, conditional unpriced surcharges, ambiguous category, missing currency, and relative deadlines).
 - **Quote review workflow (HTTP E2E against `src/server.ts`):**
-  - `UNKNOWN` currency returns HTTP `409` on approve until the couple selects a currency.
-  - Mandatory TBD line items (`calculation.unknownItems`) return HTTP `409` on approve until priced, marked included, or marked optional.
-  - Unsupported `sourceExcerpt` warnings return HTTP `409` on approve until explicitly acknowledged.
-  - Approved quotes in `CAD` and `USD` stay in separate `committedTotals` buckets (`{ USD: 10500, CAD: 12800 }`).
-  - Failed extractions (HTTP `502`) are recorded in `/api/state` telemetry (`extractionAttempts` and `extractionSuccessRate`).
+  - Unresolved price conflict (`dev-photo-conflict-contract-vs-dm`) returns HTTP `409` on approve, recalculates to `CAD 3,600` after `POST /api/review/resolve-conflict` chooses the PDF contract rate, and approves cleanly into `committedTotals: { CAD: 3600 }`.
+  - `UNKNOWN` currency, mandatory/conditional TBD costs, and unacknowledged source warnings all return HTTP `409` until resolved.
+  - Approved quotes in `CAD` and `USD` remain in separate `committedTotals` buckets, and failed extractions (`HTTP 502`) are recorded in `/api/state` telemetry.
 
 ### Status against `v0.3` release criteria
 
-Live Gemini runs cannot execute in this cloud sandbox because `GEMINI_API_KEY` is only configured on your local machine. **Running the live Gemini splits below is the only remaining release blocker for `v0.3`.**
+| Metric | Release bar | First-attempt live baseline (`gemini-3.5-flash-lite`) | Post-fix status |
+|---|---|---|---|
+| Unit tests (`npm test`) | 100% pass | 26/26 | **33/33 passing offline** |
+| Offline mock eval (`npm run eval`) | 100% pass | 45/45 | **60/60 passing offline** |
+| Regression pass rate (live) | 100% (6/6) | 4/6 (66.7%) | **Live rerun required** |
+| Original held-out accuracy (live) | Preserved baseline | 20/25 e2e (20/24 completed) | **Live rerun required** |
+| Fresh `held-out-v2` accuracy (live) | Unseen generalization | Not yet run | **Live run required** |
+| Critical financial errors (live) | 0 | 1 (`dev-photo-conflict-contract-vs-dm`) | **Live rerun required** |
+| Unsupported currency guesses (live) | 0 | 0 | **Re-verify live** |
+| Schema validity (live) | ≥99% | 44/44 (100.0%) | **Re-verify live** |
+| Average latency excl. retries (live) | <5s | Not separated in first run | **Measure live** |
 
-| Metric | Release bar | Latest measured status |
-|---|---|---|
-| Unit tests (`npm test`) | 100% pass | **26/26 passing offline** |
-| Offline mock eval (`npm run eval`) | 100% pass | **45/45 passing offline** |
-| Regression pass rate (live) | 100% (6/6) | 5/6 before open-question fix — **live rerun required** |
-| Dev & held-out accuracy (live) | Measured across 14 dev + 25 held-out | **Live run required** |
-| Critical financial errors (live) | 0 | 0 on latest live regression run — **re-verify on all splits** |
-| Unsupported currency guesses (live) | 0 | 0 on latest live regression run — **re-verify on all splits** |
-| Schema validity (live) | ≥99% | 100% on latest live regression run — **re-verify on all splits** |
-| Average extraction latency (live) | <5s | **Live run required on expanded splits** |
+### PowerShell commands for live verification
 
-### How to run the live verification and Quote Review UI
-
-`src/eval.ts` now prints accuracy, schema validity, financial errors, blockers, latency, retries, and estimated cost broken down by both split and vendor category:
+Pull the latest PR #11 branch on Windows, keep `GEMINI_MODEL` explicit so we compare apples to apples against the baseline, and run each split (passing `--show-raw` prints exact JSON for any remaining failure):
 
 ```powershell
+git pull
 $env:GEMINI_API_KEY="your-free-key"
+$env:GEMINI_MODEL="gemini-3.5-flash-lite"
+
 npm test
-npm run eval:regression
-npm run eval:dev
-npm run eval:held-out
+node src/eval.ts --split regression --show-raw
+node src/eval.ts --split dev --show-raw
+node src/eval.ts --split held-out --show-raw
+node src/eval.ts --split held-out-v2 --show-raw
+```
+
+To also test the updated Quote Review UI locally (including the conflicting-price selector on `dev-photo-conflict-contract-vs-dm`):
+
+```powershell
 npm run ui
 ```
