@@ -5,6 +5,7 @@ import type { TokenUsage } from './types.ts';
 export interface ExtractionMetricEvent {
   type: 'extraction';
   timestamp: string;
+  quoteId?: string;
   provider: string;
   model: string;
   success: boolean;
@@ -59,6 +60,7 @@ export function estimateExtractionCostUsd(usage?: TokenUsage): number {
 
 export class TelemetryTracker {
   private readonly events: TelemetryEvent[] = [];
+  private readonly unresolvedByQuote = new Map<string, number>();
   private readonly logFilePath?: string;
 
   constructor(logFilePath?: string) {
@@ -72,7 +74,14 @@ export class TelemetryTracker {
       ...event,
     };
     this.events.push(full);
+    if (event.quoteId && event.success) {
+      this.unresolvedByQuote.set(event.quoteId, event.unresolvedQuestions);
+    }
     this.persist(full);
+  }
+
+  updateUnresolvedQuestions(quoteId: string, remaining: number): void {
+    this.unresolvedByQuote.set(quoteId, Math.max(0, remaining));
   }
 
   recordReviewDecision(event: Omit<ReviewMetricEvent, 'type' | 'timestamp'>): void {
@@ -82,6 +91,7 @@ export class TelemetryTracker {
       ...event,
     };
     this.events.push(full);
+    this.unresolvedByQuote.set(event.quoteId, event.unresolvedQuestionsRemaining);
     this.persist(full);
   }
 
@@ -128,8 +138,8 @@ export class TelemetryTracker {
     }
 
     const unresolvedQuestions =
-      reviews.length > 0
-        ? reviews.reduce((sum, r) => sum + r.unresolvedQuestionsRemaining, 0)
+      this.unresolvedByQuote.size > 0
+        ? [...this.unresolvedByQuote.values()].reduce((sum, count) => sum + count, 0)
         : extractions.reduce((sum, e) => sum + e.unresolvedQuestions, 0);
 
     const quotesReviewed = reviews.length;

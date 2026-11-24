@@ -79,6 +79,7 @@ export async function handleExtractRequest(
   });
 
   telemetry.recordExtraction({
+    quoteId: session.id,
     provider: result.provider,
     model: result.resolvedModelVersion ?? result.model,
     success: true,

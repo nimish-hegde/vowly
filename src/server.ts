@@ -10,6 +10,7 @@ import {
   correctLineItem,
   createBudgetState,
   dismissQuote,
+  getUnresolvedQuestionCount,
   type LineItemPatch,
   type QuoteReviewSession,
   resolveOpenQuestion,
@@ -147,6 +148,7 @@ const server = createServer(async (req, res) => {
         Number(body.questionIndex),
         String(body.resolutionNote ?? ''),
       );
+      telemetry.updateUnresolvedQuestions(session.id, getUnresolvedQuestionCount(session));
       sendJson(res, 200, { session, budget, telemetry: telemetry.getSummary() });
       return;
     }
