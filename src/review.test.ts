@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  acknowledgeSourceWarnings,
   approveQuote,
   correctCurrency,
   correctLineItem,
   createBudgetState,
   createReviewSession,
   dismissQuote,
+  getApprovalBlockers,
   getUnresolvedQuestionCount,
   resolveOpenQuestion,
 } from './review.ts';
@@ -63,7 +65,7 @@ test('pending edits and resolved questions do not change budget until explicit a
   const session = createReviewSession('q-1', sampleQuote, { guestCount: 180 });
 
   // Before approval, budget stays 0
-  assert.equal(budget.committedTotal, 0);
+  assert.deepEqual(budget.committedTotals, {});
   assert.equal(session.calculation.knownSubtotal, 10500);
   assert.equal(getUnresolvedQuestionCount(session), 2);
 
@@ -75,12 +77,12 @@ test('pending edits and resolved questions do not change budget until explicit a
   assert.equal(session.calculation.knownSubtotal, 10200);
   assert.equal(session.draftQuote.currency, 'CAD');
   assert.equal(getUnresolvedQuestionCount(session), 1);
-  assert.equal(budget.committedTotal, 0); // Still 0 before approval!
+  assert.deepEqual(budget.committedTotals, {}); // Still empty before approval!
 
   // Approve quote -> now budget updates
   budget = approveQuote(session, budget, telemetry);
   assert.equal(session.status, 'approved');
-  assert.equal(budget.committedTotal, 10200);
+  assert.deepEqual(budget.committedTotals, { CAD: 10200 });
   assert.equal(budget.approvedQuotes.length, 1);
 
   const summary = telemetry.getSummary();
@@ -97,11 +99,46 @@ test('dismissing a quote leaves wedding budget untouched and records telemetry',
 
   budget = dismissQuote(session, budget, telemetry);
   assert.equal(session.status, 'dismissed');
-  assert.equal(budget.committedTotal, 0);
+  assert.deepEqual(budget.committedTotals, {});
   assert.equal(budget.approvedQuotes.length, 0);
 
   const summary = telemetry.getSummary();
   assert.equal(summary.quotesReviewed, 1);
   assert.equal(summary.quotesApproved, 0);
   assert.equal(summary.quoteApprovalRate, 0);
+});
+
+test('approved quotes in different currencies keep separate totals', () => {
+  let budget = createBudgetState();
+  const cad = createReviewSession('q-cad', { ...sampleQuote, currency: 'CAD' }, { guestCount: 180 });
+  const usd = createReviewSession('q-usd', { ...sampleQuote, currency: 'USD' }, { guestCount: 180 });
+  budget = approveQuote(cad, budget);
+  budget = approveQuote(usd, budget);
+  assert.deepEqual(budget.committedTotals, { CAD: 10500, USD: 10500 });
+});
+
+test('a quote with UNKNOWN currency cannot be approved into the budget', () => {
+  const budget = createBudgetState();
+  const session = createReviewSession('q-unknown', sampleQuote, { guestCount: 180 });
+  assert.equal(getApprovalBlockers(session).length, 1);
+  assert.throws(() => approveQuote(session, budget), /currency/);
+  assert.equal(session.status, 'pending_review');
+
+  correctCurrency(session, 'CAD');
+  const updated = approveQuote(session, budget);
+  assert.deepEqual(updated.committedTotals, { CAD: 10500 });
+});
+
+test('unsupported source excerpts block approval until the couple checks them', () => {
+  const budget = createBudgetState();
+  const session = createReviewSession(
+    'q-src',
+    { ...sampleQuote, currency: 'CAD' },
+    { guestCount: 180, sourceWarnings: ['lineItems[1].sourceExcerpt not found in raw message'] },
+  );
+  assert.throws(() => approveQuote(session, budget), /source excerpts/);
+  acknowledgeSourceWarnings(session);
+  const updated = approveQuote(session, budget);
+  assert.equal(session.status, 'approved');
+  assert.equal(updated.approvedQuotes.length, 1);
 });

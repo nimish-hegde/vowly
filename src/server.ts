@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
-import { extractQuote, type ProviderName } from './extractor.ts';
+import { handleExtractRequest } from './extract-handler.ts';
+import type { ProviderName } from './extractor.ts';
 import {
+  acknowledgeSourceWarnings,
   approveQuote,
   correctCurrency,
   correctLineItem,
   createBudgetState,
-  createReviewSession,
   dismissQuote,
   type LineItemPatch,
   type QuoteReviewSession,
@@ -15,7 +16,6 @@ import {
 } from './review.ts';
 import { TelemetryTracker } from './telemetry.ts';
 import type { CurrencyCode, EvalCase, ExtractedQuote } from './types.ts';
-import { validateExtractedQuote } from './validator.ts';
 
 type SampleCase = EvalCase & { mockExtraction?: ExtractedQuote };
 
@@ -93,55 +93,24 @@ const server = createServer(async (req, res) => {
         | ProviderName
         | undefined;
 
-      const result = await extractQuote(rawMessage, {
-        provider: provider ?? (process.env.GEMINI_API_KEY ? 'gemini' : 'mock'),
-        mockLookup: sampleMatch?.mockExtraction,
-      });
-
-      const validation = validateExtractedQuote(result.rawResponse, rawMessage);
-      if (!validation.quote) {
-        telemetry.recordExtraction({
-          provider: result.provider,
-          model: result.resolvedModelVersion ?? result.model,
-          success: false,
-          latencyMs: result.latencyMs,
-          retryCount: result.retryCount,
-          tokenUsage: result.tokenUsage,
-          unresolvedQuestions: 0,
-          errorKind: 'schema_error',
-        });
-        sendJson(res, 422, {
-          error: 'Extracted quote failed schema validation',
-          schemaErrors: validation.schemaErrors,
-          sourceErrors: validation.sourceErrors,
+      const outcome = await handleExtractRequest(
+        {
           rawMessage,
-        });
-        return;
-      }
-
-      const id = `quote-${nextId++}`;
-      const session = createReviewSession(id, validation.quote, { guestCount });
-      sessions.set(id, session);
-
-      telemetry.recordExtraction({
-        provider: result.provider,
-        model: result.resolvedModelVersion ?? result.model,
-        success: true,
-        latencyMs: result.latencyMs,
-        retryCount: result.retryCount,
-        tokenUsage: result.tokenUsage,
-        unresolvedQuestions: session.draftQuote.openQuestions.length,
-      });
-
-      sendJson(res, 200, {
-        session,
-        sourceWarnings: validation.sourceErrors,
-        meta: {
-          provider: result.provider,
-          model: result.resolvedModelVersion ?? result.model,
-          latencyMs: result.latencyMs,
-          tokenUsage: result.tokenUsage,
+          guestCount,
+          sessionId: `quote-${nextId}`,
+          options: {
+            provider: provider ?? (process.env.GEMINI_API_KEY ? 'gemini' : 'mock'),
+            mockLookup: sampleMatch?.mockExtraction,
+          },
         },
+        telemetry,
+      );
+      if (outcome.session) {
+        nextId++;
+        sessions.set(outcome.session.id, outcome.session);
+      }
+      sendJson(res, outcome.status, {
+        ...outcome.payload,
         budget,
         telemetry: telemetry.getSummary(),
       });
@@ -181,6 +150,18 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'POST' && url.pathname === '/api/review/acknowledge-source') {
+      const body = await readBody(req);
+      const session = sessions.get(String(body.sessionId ?? ''));
+      if (!session) {
+        sendJson(res, 404, { error: 'Review session not found' });
+        return;
+      }
+      acknowledgeSourceWarnings(session);
+      sendJson(res, 200, { session, budget, telemetry: telemetry.getSummary() });
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/review/approve') {
       const body = await readBody(req);
       const session = sessions.get(String(body.sessionId ?? ''));
@@ -188,7 +169,12 @@ const server = createServer(async (req, res) => {
         sendJson(res, 404, { error: 'Review session not found' });
         return;
       }
-      budget = approveQuote(session, budget, telemetry);
+      try {
+        budget = approveQuote(session, budget, telemetry);
+      } catch (err) {
+        sendJson(res, 409, { error: err instanceof Error ? err.message : String(err), session });
+        return;
+      }
       sendJson(res, 200, { session, budget, telemetry: telemetry.getSummary() });
       return;
     }

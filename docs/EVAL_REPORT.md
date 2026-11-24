@@ -107,7 +107,7 @@ Live verification of the new open-question rule and the expanded 25-case held-ou
 
 | Metric | Release bar | Latest measured status |
 |---|---|---|
-| Unit tests (`npm test`) | 100% pass | 20/20 passing offline |
+| Unit tests (`npm test`) | 100% pass | 25/25 passing offline |
 | Offline mock eval (`npm run eval`) | 100% pass | 45/45 passing offline |
 | Regression pass rate (live) | 100% (6/6) | 5/6 before open-question fix — rerun pending |
 | Critical financial errors (live) | 0 | 0 on latest live regression run |

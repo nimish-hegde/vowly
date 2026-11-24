@@ -18,10 +18,18 @@ export interface QuoteReviewSession {
   correctionsByField: Record<string, number>;
   resolvedQuestions: ResolvedQuestion[];
   calculation: QuoteCalculation;
+  /** Validator messages for excerpts that could not be found in the original message. */
+  sourceWarnings: string[];
+  /** The couple has checked the flagged evidence against the original message. */
+  sourceWarningsAcknowledged: boolean;
 }
 
 export interface WeddingBudgetState {
-  committedTotal: number;
+  /**
+   * Committed totals kept per currency. We never add CAD to USD without a
+   * real conversion, so each currency gets its own running total.
+   */
+  committedTotals: Partial<Record<CurrencyCode, number>>;
   approvedQuotes: Array<{
     id: string;
     vendorName: string;
@@ -32,13 +40,13 @@ export interface WeddingBudgetState {
 }
 
 export function createBudgetState(): WeddingBudgetState {
-  return { committedTotal: 0, approvedQuotes: [] };
+  return { committedTotals: {}, approvedQuotes: [] };
 }
 
 export function createReviewSession(
   id: string,
   extractedQuote: ExtractedQuote,
-  ctx: { guestCount?: number; hours?: number } = {},
+  ctx: { guestCount?: number; hours?: number; sourceWarnings?: string[] } = {},
 ): QuoteReviewSession {
   const draftQuote = structuredClone(extractedQuote);
   return {
@@ -51,6 +59,8 @@ export function createReviewSession(
     correctionsByField: {},
     resolvedQuestions: [],
     calculation: calculateQuoteTotal(draftQuote, ctx),
+    sourceWarnings: [...(ctx.sourceWarnings ?? [])],
+    sourceWarningsAcknowledged: false,
   };
 }
 
@@ -143,6 +153,28 @@ export function getUnresolvedQuestionCount(session: QuoteReviewSession): number 
   return session.draftQuote.openQuestions.filter((_, idx) => !resolvedSet.has(idx)).length;
 }
 
+export function acknowledgeSourceWarnings(session: QuoteReviewSession): QuoteReviewSession {
+  if (session.status !== 'pending_review') {
+    throw new Error('Cannot change a quote after it has been approved or dismissed.');
+  }
+  session.sourceWarningsAcknowledged = true;
+  return session;
+}
+
+/** Reasons the quote cannot be approved yet. Empty means it is safe to approve. */
+export function getApprovalBlockers(session: QuoteReviewSession): string[] {
+  const blockers: string[] = [];
+  if (session.draftQuote.currency === 'UNKNOWN') {
+    blockers.push('Confirm the quote currency before adding it to the budget.');
+  }
+  if (session.sourceWarnings.length > 0 && !session.sourceWarningsAcknowledged) {
+    blockers.push(
+      'Some source excerpts were not found in the original message. Check them before approving.',
+    );
+  }
+  return blockers;
+}
+
 export function approveQuote(
   session: QuoteReviewSession,
   budget: WeddingBudgetState,
@@ -150,6 +182,10 @@ export function approveQuote(
 ): WeddingBudgetState {
   if (session.status !== 'pending_review') {
     return budget;
+  }
+  const blockers = getApprovalBlockers(session);
+  if (blockers.length > 0) {
+    throw new Error(blockers.join(' '));
   }
   session.status = 'approved';
 
@@ -159,8 +195,13 @@ export function approveQuote(
   });
   session.calculation = calc;
 
+  const currency = session.draftQuote.currency;
+  const previous = budget.committedTotals[currency] ?? 0;
   const updatedBudget: WeddingBudgetState = {
-    committedTotal: Math.round((budget.committedTotal + calc.knownSubtotal) * 100) / 100,
+    committedTotals: {
+      ...budget.committedTotals,
+      [currency]: Math.round((previous + calc.knownSubtotal) * 100) / 100,
+    },
     approvedQuotes: [
       ...budget.approvedQuotes,
       {

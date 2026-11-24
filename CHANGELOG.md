@@ -12,6 +12,11 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
 - Expanded the dataset with 25 new realistic cases (10 `dev`, 15 `held-out`, keeping the 6 `regression` cases untouched — 45 cases total).
 - Added a local Quote Review UI (`npm run ui` via `src/server.ts`, `src/review.ts`, `ui/index.html`) so users can review line items beside source excerpts, edit values, resolve open questions, and explicitly approve quotes before updating their wedding budget.
 - Added telemetry instrumentation (`src/telemetry.ts`) tracking extraction success rate, latency, tokens, estimated cost, user corrections by field, unresolved questions, and quote approval rate.
+- Fixed three issues from code review of the review UI:
+  - The budget no longer adds different currencies together. Approved totals are kept per currency (for example `CAD 8,000 + USD 1,000`), and a quote marked `UNKNOWN` currency can't be approved until the couple sets the currency.
+  - If an extracted excerpt can't be found in the original message, the review screen now shows that excerpt in red and blocks approval until the couple confirms they checked it.
+  - Failed extraction requests (API errors, bad JSON) now count in the UI's success rate, latency and retry numbers. Before, only successful calls were counted, so the success rate looked better than it was.
+- Unit tests: `25/25` passing offline. Mock evals: `45/45`.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 

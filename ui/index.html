@@ -141,7 +141,7 @@
   <body>
     <header>
       <div class="brand">Vowly · Quote Review</div>
-      <div class="budget-pill" id="budgetPill">Committed wedding budget: $0</div>
+      <div class="budget-pill" id="budgetPill">Committed wedding budget: none yet</div>
     </header>
 
     <main>
@@ -200,7 +200,7 @@
         const b = state.budget;
         if (b) {
           document.getElementById('budgetPill').textContent =
-            `Committed wedding budget: $${b.committedTotal.toLocaleString()} (${b.approvedQuotes.length} approved)`;
+            `Committed wedding budget: ${formatTotals(b.committedTotals)} (${b.approvedQuotes.length} approved)`;
         }
         const t = state.telemetry;
         if (!t) return;
@@ -253,7 +253,7 @@
                   <input type="number" step="0.01" data-idx="${idx}" data-field="amount" value="${item.amount ?? ''}" placeholder="TBD" ${locked ? 'disabled' : ''} />
                 </div>
               </div>
-              <div class="excerpt">Source: "${escapeHtml(item.sourceExcerpt)}"</div>
+              ${excerptHtml(item.sourceExcerpt)}
             </div>
           `)
           .join('');
@@ -268,7 +268,7 @@
                       <strong>${escapeHtml(q.question)}</strong>
                       <span class="badge ${done ? 'ok' : ''}">${done ? 'Resolved' : q.reason}</span>
                     </div>
-                    <div class="excerpt">Source: "${escapeHtml(q.sourceExcerpt)}"</div>
+                    ${excerptHtml(q.sourceExcerpt)}
                     ${
                       done || locked
                         ? ''
@@ -283,8 +283,25 @@
               .join('')
           : '<p style="font-size:13px; color:var(--muted)">No open questions.</p>';
 
+        const sourceWarningHtml =
+          s.sourceWarnings && s.sourceWarnings.length
+            ? `<div class="item">
+                 <strong class="error">Some evidence could not be found in the original message.</strong>
+                 <ul class="error">${s.sourceWarnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+                 ${
+                   s.sourceWarningsAcknowledged
+                     ? '<span class="badge ok">Checked by you</span>'
+                     : locked
+                       ? ''
+                       : '<button class="btn-secondary" onclick="ackSource()">I checked these against the original message</button>'
+                 }
+               </div>`
+            : '';
+
         el.innerHTML = `
           <div class="status-banner ${s.status === 'approved' ? 'approved' : ''}">${bannerText}</div>
+          ${sourceWarningHtml}
+          <div id="approveError" class="error"></div>
           <div class="row" style="margin-bottom: 14px">
             <div>
               <strong>${escapeHtml(s.draftQuote.vendorName)}</strong>
@@ -357,8 +374,20 @@
         renderBudgetAndTelemetry();
       };
 
+      window.ackSource = async () => {
+        const data = await api('/api/review/acknowledge-source', { sessionId: state.session.id });
+        state.session = data.session;
+        renderReview();
+      };
+
       window.approve = async () => {
-        const data = await api('/api/review/approve', { sessionId: state.session.id });
+        let data;
+        try {
+          data = await api('/api/review/approve', { sessionId: state.session.id });
+        } catch (err) {
+          document.getElementById('approveError').textContent = err.message;
+          return;
+        }
         state.session = data.session;
         state.budget = data.budget;
         state.telemetry = data.telemetry;
@@ -374,6 +403,26 @@
         renderReview();
         renderBudgetAndTelemetry();
       };
+
+      // Totals stay separate per currency. We never add CAD and USD together.
+      function formatTotals(totals) {
+        const parts = Object.entries(totals || {}).map(
+          ([cur, amt]) => `${cur} ${Number(amt).toLocaleString()}`,
+        );
+        return parts.length ? parts.join(' + ') : 'none yet';
+      }
+
+      function normalizeText(str) {
+        return String(str ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+      }
+
+      function excerptHtml(excerpt) {
+        const raw = normalizeText(state.rawMessage);
+        const found = !raw || raw.includes(normalizeText(excerpt));
+        return found
+          ? `<div class="excerpt">Source: "${escapeHtml(excerpt)}"</div>`
+          : `<div class="excerpt error">Not found in the original message: "${escapeHtml(excerpt)}"</div>`;
+      }
 
       function escapeHtml(str) {
         return String(str ?? '')
@@ -412,6 +461,7 @@
               guestCount: Number(document.getElementById('guestCount').value) || 160,
             });
             state.session = res.session;
+            state.rawMessage = document.getElementById('rawMessage').value;
             state.budget = res.budget;
             state.telemetry = res.telemetry;
             renderReview();
