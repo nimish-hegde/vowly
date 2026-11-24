@@ -198,5 +198,460 @@
       ],
       "openQuestions": []
     }
+  },
+  {
+    "id": "dev-catering-per-person-addons",
+    "split": "dev",
+    "description": "Catering quote with per-person buffet, delivery fee, tax excluded, and optional live chaat station",
+    "rawMessage": "Saffron Kitchen Catering (CAD): Wedding buffet is $42/person (120-person minimum) plus a flat $350 delivery and setup fee. Optional live gol gappa station is +$6/person. Prices are plus HST and 15% service charge.",
+    "calcContext": { "guestCount": 130 },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 5810,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Saffron Kitchen Catering",
+      "category": "catering",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "lineItems": [
+        {
+          "label": "Wedding buffet",
+          "pricingType": "per_person",
+          "amount": 42,
+          "minGuests": 120,
+          "sourceExcerpt": "Wedding buffet is $42/person (120-person minimum)"
+        },
+        {
+          "label": "Delivery and setup fee",
+          "pricingType": "flat",
+          "amount": 350,
+          "sourceExcerpt": "flat $350 delivery and setup fee"
+        },
+        {
+          "label": "Live gol gappa station",
+          "pricingType": "per_person",
+          "amount": 6,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional live gol gappa station is +$6/person"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-entertainment-mc-photobooth",
+    "split": "dev",
+    "description": "Entertainment bundle (MC + photobooth) with deposit and e-transfer rule",
+    "rawMessage": "Encore Hosting & Booths (CAD): Reception MC is $1,000 flat and 3-hour 360 photobooth is $600 flat. $400 deposit by e-transfer to book.",
+    "expected": {
+      "category": "entertainment",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 1600,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "Encore Hosting & Booths",
+      "category": "entertainment",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 400,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$400 deposit by e-transfer to book"
+      },
+      "lineItems": [
+        {
+          "label": "Reception MC",
+          "pricingType": "flat",
+          "amount": 1000,
+          "sourceExcerpt": "Reception MC is $1,000 flat"
+        },
+        {
+          "label": "3-hour 360 photobooth",
+          "pricingType": "flat",
+          "amount": 600,
+          "sourceExcerpt": "3-hour 360 photobooth is $600 flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-decor-floorwrap-tbd-teardown",
+    "split": "dev",
+    "description": "Decor quote with flat floor wrap and TBD late-night teardown fee",
+    "rawMessage": "Velvet Bloom Decor (CAD): 20x20 custom dance floor wrap is $750 flat and stage backdrop is $1,400 flat. Late-night teardown fee after 1am is TBD once the venue confirms load-out hours.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 2150,
+      "unknownItemLabels": ["teardown"],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Velvet Bloom Decor",
+      "category": "decor",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "20x20 custom dance floor wrap",
+          "pricingType": "flat",
+          "amount": 750,
+          "sourceExcerpt": "20x20 custom dance floor wrap is $750 flat"
+        },
+        {
+          "label": "Stage backdrop",
+          "pricingType": "flat",
+          "amount": 1400,
+          "sourceExcerpt": "stage backdrop is $1,400 flat"
+        },
+        {
+          "label": "Late-night teardown fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Late-night teardown fee after 1am is TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm late-night teardown fee after 1am",
+          "reason": "missing_price",
+          "sourceExcerpt": "Late-night teardown fee after 1am is TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-venue-tax-included-flat",
+    "split": "dev",
+    "description": "Temple ceremony hall with tax included and extra-hour rate TBD",
+    "rawMessage": "Heritage Mandir Hall (CAD): Wedding ceremony rental 8am-3pm is $5,450 flat, all taxes included. Extra hours beyond 3pm are extra charge — confirm rate if you need 1-2 more hours.",
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 5450,
+      "unknownItemLabels": ["extra hours"],
+      "minOpenQuestions": 1,
+      "taxStatus": "included"
+    },
+    "mockExtraction": {
+      "vendorName": "Heritage Mandir Hall",
+      "category": "venue",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Wedding ceremony rental (8am-3pm)",
+          "pricingType": "flat",
+          "amount": 5450,
+          "sourceExcerpt": "Wedding ceremony rental 8am-3pm is $5,450 flat, all taxes included"
+        },
+        {
+          "label": "Extra hours beyond 3pm",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Extra hours beyond 3pm are extra charge"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm rate for extra hours beyond 3pm",
+          "reason": "missing_price",
+          "sourceExcerpt": "Extra hours beyond 3pm are extra charge — confirm rate if you need 1-2 more hours"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-photo-conflict-contract-vs-dm",
+    "split": "dev",
+    "description": "Photographer DM vs signed contract conflict on total price",
+    "rawMessage": "Northstar Studios (CAD): In Instagram DM you agreed to $3,200 flat for full-day wedding coverage, but the PDF contract sent today says $3,600. Please clarify which rate applies before we send the $800 deposit.",
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 3200,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Northstar Studios",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 800,
+        "methodRule": "unknown",
+        "scheduleNotes": "$800 deposit"
+      },
+      "lineItems": [
+        {
+          "label": "Full-day wedding coverage (DM agreed rate)",
+          "pricingType": "flat",
+          "amount": 3200,
+          "sourceExcerpt": "In Instagram DM you agreed to $3,200 flat for full-day wedding coverage"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Reconcile $3,200 DM rate against $3,600 PDF contract before paying deposit",
+          "reason": "conflict",
+          "sourceExcerpt": "In Instagram DM you agreed to $3,200 flat for full-day wedding coverage, but the PDF contract sent today says $3,600"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-catering-unknown-currency-deadline",
+    "split": "dev",
+    "description": "Catering quote with bare $ currency and relative final payment deadline",
+    "rawMessage": "Spice Route Caterers: Reception dinner is $48/person for 150 guests plus $250 chafing dish rental. Final 50% balance is due 14 days before the event.",
+    "calcContext": { "guestCount": 150 },
+    "expected": {
+      "category": "catering",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 7450,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Spice Route Caterers",
+      "category": "catering",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "methodRule": "unknown",
+        "scheduleNotes": "Final 50% balance is due 14 days before the event"
+      },
+      "lineItems": [
+        {
+          "label": "Reception dinner",
+          "pricingType": "per_person",
+          "amount": 48,
+          "sourceExcerpt": "Reception dinner is $48/person for 150 guests"
+        },
+        {
+          "label": "Chafing dish rental",
+          "pricingType": "flat",
+          "amount": 250,
+          "sourceExcerpt": "$250 chafing dish rental"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm currency (CAD or USD)",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "Reception dinner is $48/person for 150 guests"
+        },
+        {
+          "question": "Set event date to schedule the 14-day final balance reminder",
+          "reason": "missing_date",
+          "sourceExcerpt": "Final 50% balance is due 14 days before the event"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-venue-revision-friday-switch",
+    "split": "dev",
+    "description": "Venue revision switching from Saturday to Friday with lower per-person rate",
+    "rawMessage": "Updated quote for Oakridge Hall (CAD): switching from Saturday to Friday August 13, 2027 drops the Deluxe menu from $95/person down to $60/person (150-person minimum). Bartenders are $400 each (1 per 150 guests). Prices plus HST.",
+    "calcContext": { "guestCount": 165 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 10700,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Oakridge Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quotedDate": "2027-08-13",
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "minGuests": 150,
+        "packageName": "Deluxe",
+        "dayOfWeek": "Friday"
+      },
+      "lineItems": [
+        {
+          "label": "Deluxe menu (Friday)",
+          "pricingType": "per_person",
+          "amount": 60,
+          "minGuests": 150,
+          "sourceExcerpt": "drops the Deluxe menu from $95/person down to $60/person (150-person minimum)"
+        },
+        {
+          "label": "Bartenders",
+          "pricingType": "per_guest_ratio",
+          "amount": 400,
+          "ratioGuests": 150,
+          "sourceExcerpt": "Bartenders are $400 each (1 per 150 guests)"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-entertainment-dhol-cash",
+    "split": "dev",
+    "description": "Live dhol players quoted hourly with cash-only payment rule",
+    "rawMessage": "Rhythm Dhol Collective (CAD): 2 dhol players for your Baraat and Reception entrance at $225/hr for 2 hours. Cash only on the day of the event.",
+    "calcContext": { "hours": 2 },
+    "expected": {
+      "category": "entertainment",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 450,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "cash_only"
+    },
+    "mockExtraction": {
+      "vendorName": "Rhythm Dhol Collective",
+      "category": "entertainment",
+      "events": ["Baraat", "Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "methodRule": "cash_only",
+        "scheduleNotes": "Cash only on the day of the event"
+      },
+      "lineItems": [
+        {
+          "label": "2 dhol players",
+          "pricingType": "per_hour",
+          "amount": 225,
+          "hours": 2,
+          "sourceExcerpt": "2 dhol players for your Baraat and Reception entrance at $225/hr for 2 hours"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-decor-revision-optional-upgrade",
+    "split": "dev",
+    "description": "Decor revision discounting stage decor with optional fresh floral upgrade",
+    "rawMessage": "Revised quote from Marigold Events (CAD): we can bring the Sangeet + Reception stage decor package down from $4,500 to $4,000 flat. Optional fresh floral upgrade is +$900.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 4000,
+      "unknownItemLabels": []
+    },
+    "mockExtraction": {
+      "vendorName": "Marigold Events",
+      "category": "decor",
+      "events": ["Sangeet", "Reception"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Sangeet + Reception stage decor package",
+          "pricingType": "flat",
+          "amount": 4000,
+          "sourceExcerpt": "bring the Sangeet + Reception stage decor package down from $4,500 to $4,000 flat"
+        },
+        {
+          "label": "Fresh floral upgrade",
+          "pricingType": "flat",
+          "amount": 900,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional fresh floral upgrade is +$900"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-venue-usd-explicit-hidden-fees",
+    "split": "dev",
+    "description": "USD venue quote with explicit mandatory cleaning fee and optional valet",
+    "rawMessage": "Lakeview Pavilion (USD): Reception dinner is $80/person (100-person minimum) plus a mandatory $500 cleaning fee. Optional valet parking is $450. Prices exclude tax and 20% gratuity.",
+    "calcContext": { "guestCount": 120 },
+    "expected": {
+      "category": "venue",
+      "currency": "USD",
+      "quoteKind": "initial",
+      "knownSubtotal": 10100,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Lakeview Pavilion",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "USD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "venueDetails": {
+        "minGuests": 100
+      },
+      "lineItems": [
+        {
+          "label": "Reception dinner",
+          "pricingType": "per_person",
+          "amount": 80,
+          "minGuests": 100,
+          "sourceExcerpt": "Reception dinner is $80/person (100-person minimum)"
+        },
+        {
+          "label": "Mandatory cleaning fee",
+          "pricingType": "flat",
+          "amount": 500,
+          "sourceExcerpt": "mandatory $500 cleaning fee"
+        },
+        {
+          "label": "Valet parking",
+          "pricingType": "flat",
+          "amount": 450,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional valet parking is $450"
+        }
+      ],
+      "openQuestions": []
+    }
   }
 ]

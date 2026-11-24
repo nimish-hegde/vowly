@@ -78,29 +78,50 @@ Looking at those four failures, none of them were "the AI is dumb" problems—ev
    Frequent 503s killed whole runs, and `process.exit(1)` triggered a Node handle warning on Windows.
    - **Fix:** Consolidated `fetchWithRetry` (handles 429, 502, 503, and 504 with 5s/10s/20s backoff, respects `Retry-After`, adds a 30s timeout), added a small default 1.5s gap between free-tier Gemini calls, and switched to `process.exitCode = 1`.
 
-## 5. Dataset update and next measurement
+## 5. Second live run (after PR #10)
 
-Because we already looked at the failures on the original 6 held-out cases, those 6 are no longer unseen. I moved them to `eval-data/regression/cases.json` so we never regress on them, and added **10 fresh, untouched quotes** in `eval-data/held-out/cases.json` (20 cases total—small enough to run cleanly on the Gemini free tier).
+Re-running `npm run eval:regression` on the Gemini free tier (`gemini-flash-lite-latest`) after PR #10 showed a big jump:
 
-### Status against `v0.3` targets
+| Metric | Baseline (before PR #10) | After PR #10 |
+|---|---:|---:|
+| Regression pass rate | 2/6 (33.3%) | **5/6 (83.3%)** |
+| Critical financial errors | 1 ($495 undercount) | **0** |
+| Unsupported currency guesses | 1 (`CAD` on bare `$`) | **0** |
+| Dropped required arrays | 3 | **0** |
+| Release blockers | 3 | **0** |
 
-**`v0.3` has NOT passed its live acceptance bar yet.** These numbers will be filled in after running the updated code against live Gemini on the regression and new held-out splits:
+The only remaining failure was `venue-unknown-currency-relative-deadline`: the model correctly kept currency as `UNKNOWN` and got the math right, but did not generate an `openQuestions` entry for the unresolved relative payment deadline / missing currency.
 
-| Metric | Target | Current status |
+## 6. Follow-up fixes, expanded dataset, and Quote Review UI
+
+To close out the remaining regression failure and prepare for `v0.4`:
+
+1. **Actionable open questions (`src/extractor.ts`):** Updated the prompt so Gemini explicitly generates an open question when currency is `UNKNOWN` or a payment deadline is relative to an unstated event date, without adding noisy questions for complete quotes.
+2. **Live progress and retry indicators (`src/eval.ts`, `src/extractor.ts`):** Added live `[i/N]` progress printing and retry notices so you can see which quote is running and when a backoff wait happens.
+3. **Expanded dataset (45 cases total):** Kept the 6 regression cases untouched, added 10 new `dev` cases (14 total), and added 15 new `held-out` cases (25 total) across venues, photography, decor, catering, and entertainment.
+4. **Quote Review UI & instrumentation (`src/review.ts`, `src/server.ts`, `ui/index.html`, `src/telemetry.ts`):** Added a local Quote Review screen (`npm run ui`) where couples can review extracted line items beside source text, fix mistakes, resolve open questions, and approve a quote before it changes their wedding budget—backed by telemetry tracking extraction success rate, latency, tokens, estimated cost, field corrections, unresolved questions, and approval rate.
+
+### Status against `v0.3` release criteria
+
+Live verification of the new open-question rule and the expanded 25-case held-out split is still pending on your Gemini key:
+
+| Metric | Release bar | Latest measured status |
 |---|---|---|
-| Unit tests (calculator, validator, grader) | 100% pass | Passing offline (`npm test`) |
-| Offline mock eval (all 20 cases) | 100% pass | Passing offline (`npm run eval`) |
-| Live case-level accuracy (new held-out) | ≥90% | Pending live rerun |
-| Critical financial errors | 0 | Pending live rerun |
-| Unsupported currency guesses | 0 | Pending live rerun |
-| Missing required fields | 0 | Pending live rerun |
-| Eval crashes on single failed call | 0 | Fixed and unit-tested |
+| Unit tests (`npm test`) | 100% pass | 20/20 passing offline |
+| Offline mock eval (`npm run eval`) | 100% pass | 45/45 passing offline |
+| Regression pass rate (live) | 100% (6/6) | 5/6 before open-question fix — rerun pending |
+| Critical financial errors (live) | 0 | 0 on latest live regression run |
+| Unsupported currency guesses (live) | 0 | 0 on latest live regression run |
+| Schema validity (live) | ≥99% | 100% on latest live regression run |
+| Average extraction latency (live) | <5s | Rerun pending on expanded splits |
 
-### How to run the live re-evaluation
+### How to run the live verification and Quote Review UI
 
 ```powershell
 $env:GEMINI_API_KEY="your-free-key"
-npm run eval:dev
+npm test
 npm run eval:regression
+npm run eval:dev
 npm run eval:held-out
+npm run ui
 ```

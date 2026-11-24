@@ -1,4 +1,11 @@
-export type VendorCategory = 'venue' | 'photographer' | 'dj' | 'decor' | 'other';
+export type VendorCategory =
+  | 'venue'
+  | 'photographer'
+  | 'dj'
+  | 'decor'
+  | 'catering'
+  | 'entertainment'
+  | 'other';
 
 export type QuoteKind = 'initial' | 'revision';
 

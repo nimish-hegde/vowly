@@ -481,5 +481,703 @@
         }
       ]
     }
+  },
+  {
+    "id": "heldout-catering-min-floor-service-charge",
+    "split": "held-out",
+    "description": "Catering quote applying 140-guest minimum floor to 115 guests plus flat server fee",
+    "rawMessage": "Cardamom Table Catering (CAD): Sangeet buffet is $38/person with a 140-person minimum, plus $450 flat for serving staff. All prices are plus HST and 18% gratuity.",
+    "calcContext": { "guestCount": 115 },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 5770,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Cardamom Table Catering",
+      "category": "catering",
+      "events": ["Sangeet"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "lineItems": [
+        {
+          "label": "Sangeet buffet",
+          "pricingType": "per_person",
+          "amount": 38,
+          "minGuests": 140,
+          "sourceExcerpt": "Sangeet buffet is $38/person with a 140-person minimum"
+        },
+        {
+          "label": "Serving staff",
+          "pricingType": "flat",
+          "amount": 450,
+          "sourceExcerpt": "$450 flat for serving staff"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-catering-optional-sweet-table-tbd-delivery",
+    "split": "held-out",
+    "description": "Catering quote with optional sweet table and TBD out-of-zone delivery fee",
+    "rawMessage": "Royal Tiffin Caterers (CAD): Wedding lunch is $35/person for 160 guests. Optional sweet table upgrade is +$8/person. Delivery fee outside Brampton is TBD.",
+    "calcContext": { "guestCount": 160 },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 5600,
+      "unknownItemLabels": ["delivery"],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Royal Tiffin Caterers",
+      "category": "catering",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Wedding lunch",
+          "pricingType": "per_person",
+          "amount": 35,
+          "sourceExcerpt": "Wedding lunch is $35/person for 160 guests"
+        },
+        {
+          "label": "Sweet table upgrade",
+          "pricingType": "per_person",
+          "amount": 8,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional sweet table upgrade is +$8/person"
+        },
+        {
+          "label": "Delivery fee outside Brampton",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Delivery fee outside Brampton is TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm delivery fee outside Brampton",
+          "reason": "missing_price",
+          "sourceExcerpt": "Delivery fee outside Brampton is TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout-catering-revision-price-drop",
+    "split": "held-out",
+    "description": "Revised catering quote dropping per-person price from $52 to $46",
+    "rawMessage": "Following up from Banyan Catering (CAD): we can revise your wedding dinner quote from $52/person down to $46/person for 150 guests. Chafing dishes and warmers are included. $1,000 e-transfer deposit holds the date.",
+    "calcContext": { "guestCount": 150 },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 6900,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "Banyan Catering",
+      "category": "catering",
+      "events": ["Wedding"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 1000,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$1,000 e-transfer deposit holds the date"
+      },
+      "lineItems": [
+        {
+          "label": "Wedding dinner",
+          "pricingType": "per_person",
+          "amount": 46,
+          "sourceExcerpt": "revise your wedding dinner quote from $52/person down to $46/person for 150 guests"
+        },
+        {
+          "label": "Chafing dishes and warmers",
+          "pricingType": "included",
+          "amount": 0,
+          "sourceExcerpt": "Chafing dishes and warmers are included"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-entertainment-live-band-hourly",
+    "split": "held-out",
+    "description": "Live acoustic band quoted hourly with sound tech fee and deposit",
+    "rawMessage": "Velvet Strings Trio (CAD): Cocktail hour and dinner live music is $400/hr for 3 hours, plus a $200 flat sound setup fee. Optional 4th hour is $350/hr. 25% deposit by credit card.",
+    "calcContext": { "hours": 3 },
+    "expected": {
+      "category": "entertainment",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 1400,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "card"
+    },
+    "mockExtraction": {
+      "vendorName": "Velvet Strings Trio",
+      "category": "entertainment",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositPercent": 25,
+        "methodRule": "card",
+        "scheduleNotes": "25% deposit by credit card"
+      },
+      "lineItems": [
+        {
+          "label": "Live music (3 hours)",
+          "pricingType": "per_hour",
+          "amount": 400,
+          "hours": 3,
+          "sourceExcerpt": "live music is $400/hr for 3 hours"
+        },
+        {
+          "label": "Sound setup fee",
+          "pricingType": "flat",
+          "amount": 200,
+          "sourceExcerpt": "$200 flat sound setup fee"
+        },
+        {
+          "label": "4th hour extension",
+          "pricingType": "per_hour",
+          "amount": 350,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional 4th hour is $350/hr"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-entertainment-mc-conflict",
+    "split": "held-out",
+    "description": "MC quote with conflicting duration between WhatsApp and invoice",
+    "rawMessage": "Host Maya Events (CAD): Our WhatsApp chat confirmed $950 flat for 6 hours of Reception MC hosting, but the invoice lists 4 hours with overtime extra. Confirm whether 6 hours is covered for $950.",
+    "expected": {
+      "category": "entertainment",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 950,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Host Maya Events",
+      "category": "entertainment",
+      "events": ["Reception"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Reception MC hosting",
+          "pricingType": "flat",
+          "amount": 950,
+          "sourceExcerpt": "$950 flat for 6 hours of Reception MC hosting"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether 6 hours is covered for $950 vs. 4 hours on the invoice",
+          "reason": "conflict",
+          "sourceExcerpt": "Our WhatsApp chat confirmed $950 flat for 6 hours of Reception MC hosting, but the invoice lists 4 hours"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout-entertainment-photobooth-unknown-currency",
+    "split": "held-out",
+    "description": "Photobooth quote with bare $ currency and optional custom print template",
+    "rawMessage": "Flashbox Photobooths: 4-hour open-air booth for Reception is $650 flat, unlimited prints included. Optional custom monogram backdrop is $150.",
+    "expected": {
+      "category": "entertainment",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 650,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Flashbox Photobooths",
+      "category": "entertainment",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "4-hour open-air photobooth",
+          "pricingType": "flat",
+          "amount": 650,
+          "sourceExcerpt": "4-hour open-air booth for Reception is $650 flat"
+        },
+        {
+          "label": "Unlimited prints",
+          "pricingType": "included",
+          "amount": 0,
+          "sourceExcerpt": "unlimited prints included"
+        },
+        {
+          "label": "Custom monogram backdrop",
+          "pricingType": "flat",
+          "amount": 150,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional custom monogram backdrop is $150"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm currency (CAD or USD)",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "4-hour open-air booth for Reception is $650 flat"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout-decor-stage-linens-tax-included",
+    "split": "held-out",
+    "description": "Decor quote with taxes included, per-table centrepieces excluded as optional, and e-transfer deposit",
+    "rawMessage": "Petal & Arch Decor (CAD): Ceremony mandap + welcome sign package is $2,800 flat, taxes included. Optional dry ice machine for first dance is $300. $700 deposit by e-transfer.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 2800,
+      "unknownItemLabels": [],
+      "taxStatus": "included",
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "Petal & Arch Decor",
+      "category": "decor",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "included",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 700,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$700 deposit by e-transfer"
+      },
+      "lineItems": [
+        {
+          "label": "Ceremony mandap + welcome sign package",
+          "pricingType": "flat",
+          "amount": 2800,
+          "sourceExcerpt": "Ceremony mandap + welcome sign package is $2,800 flat, taxes included"
+        },
+        {
+          "label": "Dry ice machine",
+          "pricingType": "flat",
+          "amount": 300,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional dry ice machine for first dance is $300"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-decor-tbd-rigging-fee",
+    "split": "held-out",
+    "description": "Decor quote with flat package and TBD ceiling rigging fee",
+    "rawMessage": "Atelier Floral & Draping (CAD): Reception head table floral wall and ceiling draping is $3,900 flat. Venue ceiling rigging fee is TBD depending on hall truss access. 50% deposit due at signing.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 3900,
+      "unknownItemLabels": ["rigging"],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Atelier Floral & Draping",
+      "category": "decor",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositPercent": 50,
+        "methodRule": "unknown",
+        "scheduleNotes": "50% deposit due at signing"
+      },
+      "lineItems": [
+        {
+          "label": "Head table floral wall and ceiling draping",
+          "pricingType": "flat",
+          "amount": 3900,
+          "sourceExcerpt": "Reception head table floral wall and ceiling draping is $3,900 flat"
+        },
+        {
+          "label": "Venue ceiling rigging fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Venue ceiling rigging fee is TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm venue ceiling rigging fee",
+          "reason": "missing_price",
+          "sourceExcerpt": "Venue ceiling rigging fee is TBD"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout-decor-revision-floorwrap-discount",
+    "split": "held-out",
+    "description": "Decor revision dropping floor wrap price and keeping delivery included",
+    "rawMessage": "Updated quote from Crown Decor (CAD): we reduced the 24x24 dance floor wrap from $950 down to $700 flat. Delivery and removal are included.",
+    "expected": {
+      "category": "decor",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 700,
+      "unknownItemLabels": []
+    },
+    "mockExtraction": {
+      "vendorName": "Crown Decor",
+      "category": "decor",
+      "events": ["Reception"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "24x24 dance floor wrap",
+          "pricingType": "flat",
+          "amount": 700,
+          "sourceExcerpt": "reduced the 24x24 dance floor wrap from $950 down to $700 flat"
+        },
+        {
+          "label": "Delivery and removal",
+          "pricingType": "included",
+          "amount": 0,
+          "sourceExcerpt": "Delivery and removal are included"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-photo-multi-event-week-package",
+    "split": "held-out",
+    "description": "Full wedding week photography package with installment schedule",
+    "rawMessage": "Silverframe Stories (CAD): Full wedding week photography covering Sangeet, Wedding, and Reception is $6,000 flat (2 photographers). Payment schedule: $2,000 deposit now, $2,000 six months before, $2,000 after delivery by e-transfer.",
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 6000,
+      "unknownItemLabels": [],
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "Silverframe Stories",
+      "category": "photographer",
+      "events": ["Sangeet", "Wedding", "Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "teamSize": 2,
+        "includesMiniShoot": "unknown"
+      },
+      "paymentTerms": {
+        "depositAmount": 2000,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$2,000 deposit now, $2,000 six months before, $2,000 after delivery by e-transfer"
+      },
+      "lineItems": [
+        {
+          "label": "Full wedding week photography (Sangeet, Wedding, Reception)",
+          "pricingType": "flat",
+          "amount": 6000,
+          "sourceExcerpt": "Full wedding week photography covering Sangeet, Wedding, and Reception is $6,000 flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-photo-usd-hourly-overtime",
+    "split": "held-out",
+    "description": "USD hourly photography quote with optional second shooter and tax excluded",
+    "rawMessage": "Golden Hour Photography (USD): Ceremony photography is $275/hr for 4 hours (1 photographer). Optional second shooter is $400 flat. Prices plus sales tax.",
+    "calcContext": { "hours": 4 },
+    "expected": {
+      "category": "photographer",
+      "currency": "USD",
+      "quoteKind": "initial",
+      "knownSubtotal": 1100,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Golden Hour Photography",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "USD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "photographerDetails": {
+        "hoursIncluded": 4,
+        "teamSize": 1,
+        "includesMiniShoot": "unknown"
+      },
+      "lineItems": [
+        {
+          "label": "Ceremony photography (4 hours)",
+          "pricingType": "per_hour",
+          "amount": 275,
+          "hours": 4,
+          "sourceExcerpt": "Ceremony photography is $275/hr for 4 hours"
+        },
+        {
+          "label": "Second shooter",
+          "pricingType": "flat",
+          "amount": 400,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional second shooter is $400 flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-venue-hidden-cake-cutting-linen-fees",
+    "split": "held-out",
+    "description": "Venue quote with per-person dinner plus flat cake-cutting and landmark fee, optional upgraded linens",
+    "rawMessage": "Crestview Manor (CAD): Reception dinner is $70/person (120-person minimum). Mandatory cake-cutting fee is $200 and hall landmark fee is $350. Optional upgraded velvet tablecloths are $150 flat. Plus HST and 15% gratuity.",
+    "calcContext": { "guestCount": 140 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 10350,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Crestview Manor",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "excluded",
+      "venueDetails": {
+        "minGuests": 120
+      },
+      "lineItems": [
+        {
+          "label": "Reception dinner",
+          "pricingType": "per_person",
+          "amount": 70,
+          "minGuests": 120,
+          "sourceExcerpt": "Reception dinner is $70/person (120-person minimum)"
+        },
+        {
+          "label": "Mandatory cake-cutting fee",
+          "pricingType": "flat",
+          "amount": 200,
+          "sourceExcerpt": "Mandatory cake-cutting fee is $200"
+        },
+        {
+          "label": "Hall landmark fee",
+          "pricingType": "flat",
+          "amount": 350,
+          "sourceExcerpt": "hall landmark fee is $350"
+        },
+        {
+          "label": "Upgraded velvet tablecloths",
+          "pricingType": "flat",
+          "amount": 150,
+          "optionalAddon": true,
+          "sourceExcerpt": "Optional upgraded velvet tablecloths are $150 flat"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-venue-open-bar-ratio-plus-min",
+    "split": "held-out",
+    "description": "Venue quote with per-person dinner, open bar per-person, and ratio bartenders at 200 guests",
+    "rawMessage": "Grand Elm Banquet (CAD): Platinum dinner is $65/person plus $25/person open bar (100-guest minimum). Bartender service is $300 each (1 bartender per 100 guests). Prices plus HST.",
+    "calcContext": { "guestCount": 200 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 18600,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": "Grand Elm Banquet",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "gratuityStatus": "unknown",
+      "venueDetails": {
+        "minGuests": 100,
+        "packageName": "Platinum"
+      },
+      "lineItems": [
+        {
+          "label": "Platinum dinner",
+          "pricingType": "per_person",
+          "amount": 65,
+          "minGuests": 100,
+          "sourceExcerpt": "Platinum dinner is $65/person"
+        },
+        {
+          "label": "Open bar",
+          "pricingType": "per_person",
+          "amount": 25,
+          "minGuests": 100,
+          "sourceExcerpt": "$25/person open bar (100-guest minimum)"
+        },
+        {
+          "label": "Bartender service",
+          "pricingType": "per_guest_ratio",
+          "amount": 300,
+          "ratioGuests": 100,
+          "sourceExcerpt": "Bartender service is $300 each (1 bartender per 100 guests)"
+        }
+      ],
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "heldout-venue-revision-conflict-gratuity",
+    "split": "held-out",
+    "description": "Venue revision where email said gratuity included but updated contract adds 15% gratuity",
+    "rawMessage": "Kensington Hall (CAD): Updated quote keeps reception catering at $55/person for 160 guests and $300 AV. Note that your earlier email said gratuity was included, while the revised contract adds 15% gratuity — please confirm before signing.",
+    "calcContext": { "guestCount": 160 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "revision",
+      "knownSubtotal": 9100,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": "Kensington Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "revision",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "lineItems": [
+        {
+          "label": "Reception catering",
+          "pricingType": "per_person",
+          "amount": 55,
+          "sourceExcerpt": "reception catering at $55/person for 160 guests"
+        },
+        {
+          "label": "AV",
+          "pricingType": "flat",
+          "amount": 300,
+          "sourceExcerpt": "$300 AV"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm whether gratuity is included (earlier email) or 15% extra (revised contract)",
+          "reason": "conflict",
+          "sourceExcerpt": "your earlier email said gratuity was included, while the revised contract adds 15% gratuity"
+        }
+      ]
+    }
+  },
+  {
+    "id": "heldout-dj-multi-event-bundle-tbd-lighting",
+    "split": "held-out",
+    "description": "Multi-event DJ bundle for Sangeet and Reception with TBD uplighting add-on",
+    "rawMessage": "DJ Nova (CAD): Bundled Sangeet + Reception DJ package is $1,800 flat (includes controller, booth, 2 speakers, and 2 wireless mics). Room uplighting price is TBD once we see the hall layout. $300 deposit by e-transfer.",
+    "expected": {
+      "category": "dj",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 1800,
+      "unknownItemLabels": ["uplighting"],
+      "minOpenQuestions": 1,
+      "paymentMethodRule": "etransfer"
+    },
+    "mockExtraction": {
+      "vendorName": "DJ Nova",
+      "category": "dj",
+      "events": ["Sangeet", "Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "paymentTerms": {
+        "depositAmount": 300,
+        "methodRule": "etransfer",
+        "scheduleNotes": "$300 deposit by e-transfer"
+      },
+      "lineItems": [
+        {
+          "label": "Bundled Sangeet + Reception DJ package",
+          "pricingType": "flat",
+          "amount": 1800,
+          "sourceExcerpt": "Bundled Sangeet + Reception DJ package is $1,800 flat"
+        },
+        {
+          "label": "Room uplighting",
+          "pricingType": "unknown",
+          "amount": null,
+          "sourceExcerpt": "Room uplighting price is TBD"
+        }
+      ],
+      "openQuestions": [
+        {
+          "question": "Confirm room uplighting price after hall layout review",
+          "reason": "missing_price",
+          "sourceExcerpt": "Room uplighting price is TBD"
+        }
+      ]
+    }
   }
 ]

@@ -11,7 +11,15 @@ import type {
   VendorCategory,
 } from './types.ts';
 
-const VALID_CATEGORIES = new Set<VendorCategory>(['venue', 'photographer', 'dj', 'decor', 'other']);
+const VALID_CATEGORIES = new Set<VendorCategory>([
+  'venue',
+  'photographer',
+  'dj',
+  'decor',
+  'catering',
+  'entertainment',
+  'other',
+]);
 const VALID_QUOTE_KINDS = new Set<QuoteKind>(['initial', 'revision']);
 const VALID_CURRENCIES = new Set<CurrencyCode>(['CAD', 'USD', 'UNKNOWN']);
 const VALID_TAX_STATUS = new Set<TaxOrGratuityStatus>(['included', 'excluded', 'unknown']);
@@ -85,7 +93,9 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
     schemaErrors.push('vendorName must be a non-empty string');
   }
   if (!VALID_CATEGORIES.has(raw.category as VendorCategory)) {
-    schemaErrors.push(`category must be one of venue|photographer|dj|decor|other (got ${String(raw.category)})`);
+    schemaErrors.push(
+      `category must be one of venue|photographer|dj|decor|catering|entertainment|other (got ${String(raw.category)})`,
+    );
   }
   if (!Array.isArray(raw.events) || !raw.events.every((e) => typeof e === 'string')) {
     schemaErrors.push('events must be an array of strings');

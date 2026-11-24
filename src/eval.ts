@@ -7,6 +7,7 @@ import {
   extractQuote,
   type ProviderName,
 } from './extractor.ts';
+import { estimateExtractionCostUsd, TelemetryTracker } from './telemetry.ts';
 import type { EvalCase, ExtractedQuote, TokenUsage } from './types.ts';
 import { normalizeLineItemLabel, validateExtractedQuote } from './validator.ts';
 
@@ -255,6 +256,9 @@ async function main() {
   let usedModel = '';
   let resolvedModelVersion = '';
   const scores: CaseScore[] = [];
+  const telemetry = new TelemetryTracker();
+
+  console.log(`\nRunning Vowly eval (${splitArg}, ${cases.length} cases, provider=${effectiveProvider})...`);
 
   for (let i = 0; i < cases.length; i++) {
     const c = cases[i]!;
@@ -262,23 +266,69 @@ async function main() {
       await new Promise((r) => setTimeout(r, delayMs));
     }
 
+    process.stdout.write(`  [${i + 1}/${cases.length}] ${c.id}... `);
+
     try {
       const res = await extractQuote(c.rawMessage, {
         provider: providerArg,
         mockLookup: mockMap[c.id],
+        onRetry: (info) => {
+          const secs = Math.round(info.delayMs / 1000);
+          console.log(
+            `\n      retrying (${info.attempt}/${info.maxRetries} after ${info.reason}, waiting ${secs}s)...`,
+          );
+          process.stdout.write(`      resuming ${c.id}... `);
+        },
       });
       usedProvider = res.provider;
       usedModel = res.model;
       resolvedModelVersion = res.resolvedModelVersion ?? res.model;
-      scores.push(
-        gradeExtraction(c, res.rawResponse, res.latencyMs, res.retryCount, res.tokenUsage),
+
+      const score = gradeExtraction(
+        c,
+        res.rawResponse,
+        res.latencyMs,
+        res.retryCount,
+        res.tokenUsage,
       );
+      scores.push(score);
+
+      const extracted = res.rawResponse as Partial<ExtractedQuote> | null;
+      telemetry.recordExtraction({
+        provider: res.provider,
+        model: resolvedModelVersion,
+        success: score.schemaErrors.length === 0,
+        latencyMs: res.latencyMs,
+        retryCount: res.retryCount,
+        tokenUsage: res.tokenUsage,
+        unresolvedQuestions: Array.isArray(extracted?.openQuestions)
+          ? extracted.openQuestions.length
+          : 0,
+        errorKind: score.schemaErrors.length > 0 ? 'schema_error' : undefined,
+      });
+
+      const status = score.passed ? 'PASS' : 'FAIL';
+      const retryNote = score.retryCount > 0 ? `, ${score.retryCount} retries` : '';
+      console.log(`${status} (${score.latencyMs}ms${retryNote})`);
     } catch (err) {
-      scores.push(scoreExtractionError(c, err));
+      const score = scoreExtractionError(c, err);
+      scores.push(score);
+      telemetry.recordExtraction({
+        provider: usedProvider,
+        model: resolvedModelVersion || usedModel || 'unknown',
+        success: false,
+        latencyMs: score.latencyMs,
+        retryCount: score.retryCount,
+        unresolvedQuestions: 0,
+        errorKind: score.parseError ? 'parse_error' : 'api_error',
+      });
+      const tag = score.parseError ? 'PARSE_ERR' : 'API_ERR';
+      console.log(`${tag} (${score.latencyMs}ms)`);
     }
   }
 
   const summary = summarizeScores(scores);
+  const telSummary = telemetry.getSummary();
   const accuracyPct =
     summary.total > 0 ? ((summary.passedCount / summary.total) * 100).toFixed(1) : '0.0';
   const availPct =
@@ -287,6 +337,7 @@ async function main() {
     summary.completed > 0
       ? ((summary.schemaCompliant / summary.completed) * 100).toFixed(1)
       : '0.0';
+  const extractSuccessPct = (telSummary.extractionSuccessRate * 100).toFixed(1);
 
   console.log(`\nVowly Quote Extraction Eval`);
   console.log(
@@ -298,12 +349,18 @@ async function main() {
     `API availability: ${summary.completed}/${summary.total} (${availPct}%) | Schema valid: ${summary.schemaCompliant}/${summary.completed} (${schemaPct}%) | Parse errors: ${summary.parseErrors}`,
   );
   console.log(
+    `Extraction success rate: ${telSummary.extractionSuccesses}/${telSummary.extractionAttempts} (${extractSuccessPct}%) | Unresolved questions extracted: ${telSummary.unresolvedQuestions}`,
+  );
+  console.log(
     `Critical financial errors: ${summary.financialErrors} | Unsupported currency guesses: ${summary.currencyGuesses} | Release blockers: ${summary.blockerCount}`,
   );
   console.log(`Avg latency: ${summary.avgLatency}ms | Total retries: ${summary.totalRetries}`);
   if (summary.promptTokens > 0 || summary.outputTokens > 0) {
-    // Rough Flash-Lite paid estimate ($0.10 / 1M input, $0.40 / 1M output); free tier is $0.
-    const estPaidUsd = (summary.promptTokens * 0.1 + summary.outputTokens * 0.4) / 1_000_000;
+    const estPaidUsd = estimateExtractionCostUsd({
+      promptTokens: summary.promptTokens,
+      outputTokens: summary.outputTokens,
+      totalTokens: summary.promptTokens + summary.outputTokens,
+    });
     console.log(
       `Tokens: ${summary.promptTokens} in / ${summary.outputTokens} out | Est. paid cost: $${estPaidUsd.toFixed(5)} ($0 on Gemini free tier)`,
     );
@@ -311,7 +368,8 @@ async function main() {
   console.log('');
 
   for (const s of scores) {
-    const tag = s.apiError ? 'API_ERR' : s.parseError ? 'PARSE_ERR' : s.passed ? 'PASS' : 'FAIL';
+    if (s.passed) continue;
+    const tag = s.apiError ? 'API_ERR' : s.parseError ? 'PARSE_ERR' : 'FAIL';
     const retryNote = s.retryCount > 0 ? ` (${s.retryCount} retries)` : '';
     console.log(`[${tag}] (${s.split}) ${s.id} — ${s.latencyMs}ms${retryNote}`);
     if (s.apiError) {

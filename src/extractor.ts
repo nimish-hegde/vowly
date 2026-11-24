@@ -45,7 +45,7 @@ Follow these rules strictly:
 2. Always include the required arrays: "events", "lineItems", and "openQuestions" (use [] if none).
 3. Never invent a price or currency:
    - If the message only uses "$" without explicitly stating CAD, CA$, USD, or US$, set "currency" to "UNKNOWN". Never guess currency from city names, taxes like HST, or venue names.
-   - If a charge says TBD, "extra charge", or "pricing on request" with no number, include it in "lineItems" with "pricingType": "unknown" and "amount": null, and add a matching entry in "openQuestions".
+   - If a charge says TBD, "extra charge", or "pricing on request" with no number, include it in "lineItems" with "pricingType": "unknown" and "amount": null, and add a matching entry in "openQuestions" with "reason": "missing_price".
 4. Classify staffing ratios and conditional pricing accurately:
    - When a fee scales by guest count blocks (for example, "$495 each, up to 150 guests per bartender" or "$300 per bartender, 1 per 150 guests"), use "pricingType": "per_guest_ratio", set "amount" to the per-unit price, and set "ratioGuests" to the guest block size (e.g., 150). Do NOT use "flat".
    - When a per-person rate has a guest minimum (e.g., "150-person minimum"), set "minGuests" on the line item and in "venueDetails.minGuests".
@@ -55,9 +55,16 @@ Follow these rules strictly:
 6. Classify "quoteKind":
    - Use "revision" whenever the message updates an earlier quote, negotiates a changed price or package, or notes a conflict with a printed brochure or earlier offer.
    - Use "initial" for a standalone first quote with no reference to prior terms.
-7. Source evidence:
+7. Open questions — actionable only, never noisy:
+   - Add an entry in "openQuestions" when:
+     a) A required fee has no price ("reason": "missing_price").
+     b) Two sources or terms conflict ("reason": "conflict").
+     c) A payment or booking deadline is relative to an event date that is NOT stated in the message (e.g., "due 30 days before the event" with no event date given) ("reason": "missing_date").
+     d) Currency is "UNKNOWN" because only bare "$" appears without CAD/USD ("reason": "ambiguous_rule", asking to confirm currency).
+   - Do NOT invent unnecessary open questions for complete quotes that have explicit currency, explicit prices, no conflicts, and no unresolved relative deadlines.
+8. Source evidence:
    - Copy "sourceExcerpt" character-for-character from the raw message, including punctuation, for every line item and every open question.
-8. Do not calculate totals or subtotals; only extract the stated inputs.`;
+9. Do not calculate totals or subtotals; only extract the stated inputs.`;
 
 const GEMINI_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -74,7 +81,10 @@ const GEMINI_RESPONSE_SCHEMA = {
   ],
   properties: {
     vendorName: { type: 'STRING' },
-    category: { type: 'STRING', enum: ['venue', 'photographer', 'dj', 'decor', 'other'] },
+    category: {
+      type: 'STRING',
+      enum: ['venue', 'photographer', 'dj', 'decor', 'catering', 'entertainment', 'other'],
+    },
     events: { type: 'ARRAY', items: { type: 'STRING' } },
     quotedDate: { type: 'STRING' },
     quoteKind: { type: 'STRING', enum: ['initial', 'revision'] },
@@ -166,7 +176,10 @@ export const OLLAMA_RESPONSE_SCHEMA = {
   ],
   properties: {
     vendorName: { type: 'string' },
-    category: { type: 'string', enum: ['venue', 'photographer', 'dj', 'decor', 'other'] },
+    category: {
+      type: 'string',
+      enum: ['venue', 'photographer', 'dj', 'decor', 'catering', 'entertainment', 'other'],
+    },
     events: { type: 'array', items: { type: 'string' } },
     quotedDate: { type: 'string' },
     quoteKind: { type: 'string', enum: ['initial', 'revision'] },
@@ -270,10 +283,19 @@ function parseRetryAfterMs(headerValue: string | null): number | null {
   return null;
 }
 
+export interface RetryInfo {
+  attempt: number;
+  maxRetries: number;
+  statusCode?: number;
+  delayMs: number;
+  reason: string;
+}
+
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
   rawMessage: string,
+  onRetry?: (info: RetryInfo) => void,
 ): Promise<{ response: Response; retryCount: number }> {
   const start = performance.now();
   let retryCount = 0;
@@ -298,7 +320,14 @@ async function fetchWithRetry(
         });
       }
       retryCount++;
-      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      const delayMs = RETRY_DELAYS_MS[attempt]!;
+      onRetry?.({
+        attempt: retryCount,
+        maxRetries: RETRY_DELAYS_MS.length,
+        delayMs,
+        reason: err instanceof Error ? err.message : 'network error',
+      });
+      await new Promise((r) => setTimeout(r, delayMs));
       continue;
     }
 
@@ -322,6 +351,13 @@ async function fetchWithRetry(
     retryCount++;
     const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
     const delayMs = retryAfterMs ?? RETRY_DELAYS_MS[attempt]!;
+    onRetry?.({
+      attempt: retryCount,
+      maxRetries: RETRY_DELAYS_MS.length,
+      statusCode: response.status,
+      delayMs,
+      reason: `HTTP ${response.status}`,
+    });
     await new Promise((r) => setTimeout(r, delayMs));
   }
 
@@ -353,7 +389,11 @@ function normalizeProviderResponse(parsed: unknown): unknown {
 
 export async function extractQuote(
   rawMessage: string,
-  options: { provider?: ProviderName; mockLookup?: ExtractedQuote } = {},
+  options: {
+    provider?: ProviderName;
+    mockLookup?: ExtractedQuote;
+    onRetry?: (info: RetryInfo) => void;
+  } = {},
 ): Promise<ExtractResult> {
   const provider =
     options.provider ??
@@ -394,6 +434,7 @@ export async function extractQuote(
         body: JSON.stringify(buildOllamaRequestBody(model, rawMessage)),
       },
       rawMessage,
+      options.onRetry,
     );
 
     const data = (await response.json()) as { response?: string };
@@ -455,6 +496,7 @@ export async function extractQuote(
       }),
     },
     rawMessage,
+    options.onRetry,
   );
 
   const data = (await response.json()) as {
