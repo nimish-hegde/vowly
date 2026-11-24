@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "Fraunces", Georgia, serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-ivory: #FAF8F4;
+  --color-linen: #F3EFE8;
+  --color-taupe: #E5DED2;
+  --color-charcoal: #22201D;
+  --color-stone-warm: #6B655C;
+
+  --color-sage-600: #486755;
+  --color-sage-700: #395344;
+  --color-sage-soft: #DFEFE4;
+  --color-sage-border: #B6D7C0;
+
+  --color-lavender-soft: #EAE2F7;
+  --color-lavender-border: #CBBCE8;
+  --color-lavender-ink: #42306B;
+
+  --color-blush-soft: #F8E2E8;
+  --color-blush-border: #E9BECB;
+  --color-blush-ink: #6F2D41;
+
+  --color-peach-soft: #FCE5D7;
+  --color-peach-border: #ECC4AC;
+  --color-peach-ink: #733B20;
+
+  --color-blue-soft: #DCEBF8;
+  --color-blue-border: #B5D3EE;
+  --color-blue-ink: #214869;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-sans);
+    background-color: var(--color-ivory);
+    color: var(--color-charcoal);
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible {
+    outline: 2px solid #486755;
+    outline-offset: 2px;
+  }
+}
+
+.font-editorial {
+  font-family: var(--font-serif);
+}
+
+.font-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes amountFlash {
+  0% {
+    background-color: #DCEFE2;
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.amount-changed-flash {
+  animation: amountFlash 0.9s ease-out;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #D8D0C3;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #BFB5A5;
+}

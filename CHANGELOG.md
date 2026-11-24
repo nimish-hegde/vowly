@@ -4,6 +4,15 @@
 
 Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for planned work. Add completed user-facing improvements here with a link to the PR and any measured result.
 
+## November 24, 2026 — Interactive React frontend prototype (`v0.4`, mock mode)
+
+- Imported the revised React + TypeScript + Vite + Tailwind CSS v4 frontend prototype into [`frontend/`](frontend/README.md) while preserving the existing `v0.3` backend extraction pipeline (`src/`), 60-case eval datasets (`eval-data/`), and local Quote Review UI (`ui/`).
+- Kept the frontend strictly in offline mock mode via `SimulatedQuoteExtractor` (`frontend/src/services/quoteExtractor.ts`) with synthetic demo data (`Meera & Kabir — GTA 2027`), requiring no API keys or live backend calls.
+- Included interactive flows for onboarding, multi-event overview, event & guest-count planning, budget tracking, vendor directory & side-by-side venue comparison, quote import/review with source citations, price-conflict and unconfirmed-fee safeguards, booking confirmation, and payment milestones.
+- Trimmed unused AI Studio export artifacts (`.aistudio/`, `public/assets/aistudio/`, `metadata.json`, `.env.example`) and unused server/SDK template dependencies from `frontend/package.json`.
+- Documented frontend architecture, local setup, current mock-mode limitations, and planned `v0.5` backend integration in [README.md](README.md) and [frontend/README.md](frontend/README.md).
+- Verification: `frontend` `npm run lint` (`tsc --noEmit`) and `npm run build` (`vite build`) pass; root backend offline tests (`39/39` unit tests) and offline mock evals (`60/60`) pass.
+
 ## November 23, 2026 — Regression fix, 45-case eval dataset, Quote Review UI & telemetry (`v0.3`, `#2`)
 
 - Recorded the live Gemini Flash Lite regression rerun (**5/6 passed**, 0 critical financial errors, 0 unsupported currency guesses, 0 release blockers) in [the eval report](docs/EVAL_REPORT.md).
