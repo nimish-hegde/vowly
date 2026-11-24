@@ -1,4 +1,8 @@
-import { calculateQuoteTotal, type QuoteCalculation } from './calculator.ts';
+import {
+  calculateQuoteTotal,
+  normalizeConflictingOptions,
+  type QuoteCalculation,
+} from './calculator.ts';
 import type { TelemetryTracker } from './telemetry.ts';
 import type {
   ChargeRequirement,
@@ -150,8 +154,8 @@ export function resolvePriceConflict(
   if (!item) {
     throw new Error(`Line item index ${lineItemIndex} out of range.`);
   }
-  const options = item.conflictingOptions;
-  if (!options || options.length < 2) {
+  const options = normalizeConflictingOptions(item);
+  if (options.length < 2) {
     throw new Error(`Line item ${lineItemIndex} does not have a price conflict to resolve.`);
   }
   const chosen = options[optionIndex];

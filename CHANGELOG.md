@@ -23,7 +23,11 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
   - **P1 unpriced mandatory/conditional charges:** added `chargeType` (`mandatory` | `conditional` | `optional`) and general cross-category rules so unpriced mandatory and conditional charges stay non-optional, raise `missing_price` questions, and block approval.
   - **P2 provider reliability metrics:** separated API availability, schema validity, extraction accuracy (completed), end-to-end success, latency including retries, and latency excluding retries in `src/eval.ts`, and added `--show-raw`.
 - Preserved the 6-case `regression` and 25-case `held-out` baselines untouched, expanded `dev` to 17 cases, and added a fresh 12-case `held-out-v2` split (`60` mock cases total).
-- Unit tests: `33/33` passing offline. Mock evals: `60/60`. Live re-verification pending.
+- Recorded live verification of commit `65f1392` on `gemini-3.5-flash-lite` (**55/60 (91.7%)**, **6/6** regression, **25/25** original held-out, **60/60** API availability & schema validity, **0** critical financial errors, **~1.90s** avg latency, **`$0.01683`** est. paid cost) and fixed the remaining three gaps:
+  - Added deterministic conflict normalization (`normalizeConflictingOptions`) so single-alternative `conflictingOptions` + primary `amount` are detected, deduplicated, and block approval identically to full-list `conflictingOptions`; undetected price conflicts now count as release blockers.
+  - Tightened `venue` vs. `unknown` classification so dinner packages, per-person pricing, setup fees, or minimum guest counts alone require explicit physical-space evidence rather than defaulting to `venue`.
+  - Added strict CLI parsing (`--provider gemini|ollama|mock`) to `src/eval.ts` so unsupported flags fail loudly and explicitly requested live runs never silently fall back to `mock`.
+- Unit tests: `37/37` passing offline. Mock evals: `60/60`.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 

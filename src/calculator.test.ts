@@ -267,3 +267,86 @@ test('keeps unpriced conditional charges in unknownItems while excluding explici
   assert.deepEqual(result.unknownItems, ['Late-night lighting setup']);
   assert.deepEqual(result.optionalAddons, ['Ice sculpture']);
 });
+
+test('normalizes observed live Gemini conflict shape (primary amount + single alternative in conflictingOptions)', () => {
+  const cases: Array<{
+    name: string;
+    primary: number;
+    altLabel: string;
+    altAmount: number;
+    expectedDiff: number;
+  }> = [
+    { name: 'Photography', primary: 3200, altLabel: 'PDF contract', altAmount: 3600, expectedDiff: 400 },
+    { name: 'DJ', primary: 1900, altLabel: 'Invoice', altAmount: 2250, expectedDiff: 350 },
+    { name: 'Decor', primary: 4800, altLabel: 'Contract', altAmount: 5300, expectedDiff: 500 },
+  ];
+
+  for (const c of cases) {
+    const quote: ExtractedQuote = {
+      vendorName: `${c.name} Vendor`,
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: `${c.name} package`,
+          pricingType: 'flat',
+          amount: c.primary,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            {
+              sourceLabel: c.altLabel,
+              pricingType: 'flat',
+              amount: c.altAmount,
+              sourceExcerpt: `${c.altLabel} says $${c.altAmount}`,
+            },
+          ],
+          sourceExcerpt: `Agreed to $${c.primary}`,
+        },
+      ],
+      openQuestions: [],
+    };
+
+    const result = calculateQuoteTotal(quote);
+    assert.equal(result.knownSubtotal, c.primary, `${c.name} must not double-count`);
+    assert.equal(result.priceConflicts.length, 1, `${c.name} must detect price conflict`);
+    assert.equal(result.priceConflicts[0]?.discrepancy, c.expectedDiff);
+    assert.equal(result.priceConflicts[0]?.options.length, 2);
+    assert.equal(result.priceConflicts[0]?.options[0]?.sourceExcerpt, `Agreed to $${c.primary}`);
+    assert.equal(
+      result.priceConflicts[0]?.options[1]?.sourceExcerpt,
+      `${c.altLabel} says $${c.altAmount}`,
+    );
+  }
+});
+
+test('deduplicates equivalent candidates in conflictingOptions and avoids false conflicts', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Studio',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Package',
+        pricingType: 'flat',
+        amount: 3200,
+        conflictingOptions: [
+          { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: '$3,200' },
+          { sourceLabel: 'Duplicate DM', pricingType: 'flat', amount: 3200, sourceExcerpt: '$3,200' },
+        ],
+        sourceExcerpt: '$3,200',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote);
+  assert.equal(result.priceConflicts.length, 0);
+});

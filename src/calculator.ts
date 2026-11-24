@@ -1,4 +1,4 @@
-import type { CurrencyCode, ExtractedQuote, LineItem, PricingType } from './types.ts';
+import type { CurrencyCode, ExtractedQuote, LineItem, PriceOption, PricingType } from './types.ts';
 
 export interface CalcContext {
   guestCount?: number;
@@ -51,6 +51,56 @@ export interface VenueComparison {
 
 function isOptionalItem(item: LineItem): boolean {
   return item.optionalAddon === true || item.chargeType === 'optional';
+}
+
+function samePriceCandidate(
+  a: { pricingType: PricingType; amount: number },
+  b: { pricingType: PricingType; amount: number },
+): boolean {
+  return a.pricingType === b.pricingType && Math.abs(a.amount - b.amount) < 0.01;
+}
+
+/**
+ * Normalizes conflicting price candidates for a single line item so both
+ * extraction shapes work identically:
+ * 1) Primary price in `item.amount` + only alternative(s) in `item.conflictingOptions`
+ * 2) All candidate prices explicitly listed in `item.conflictingOptions`
+ *
+ * Deduplicates equivalent candidates and returns an empty list if fewer than
+ * two distinct price options remain.
+ */
+export function normalizeConflictingOptions(item: LineItem): PriceOption[] {
+  const rawOptions = item.conflictingOptions;
+  if (!rawOptions || rawOptions.length === 0) {
+    return [];
+  }
+
+  const deduped: PriceOption[] = [];
+  const hasPrimaryInOptions =
+    item.amount !== null &&
+    item.pricingType !== 'unknown' &&
+    rawOptions.some((opt) =>
+      samePriceCandidate(opt, { pricingType: item.pricingType, amount: item.amount! }),
+    );
+
+  // If the model placed the primary price only in item.amount and only the
+  // alternative(s) in conflictingOptions, synthesize the primary candidate first.
+  if (item.amount !== null && item.pricingType !== 'unknown' && !hasPrimaryInOptions) {
+    deduped.push({
+      sourceLabel: 'Primary quote',
+      pricingType: item.pricingType,
+      amount: item.amount,
+      sourceExcerpt: item.sourceExcerpt,
+    });
+  }
+
+  for (const opt of rawOptions) {
+    if (!deduped.some((existing) => samePriceCandidate(existing, opt))) {
+      deduped.push(opt);
+    }
+  }
+
+  return deduped.length >= 2 ? deduped : [];
 }
 
 function calculateLineItem(
@@ -133,8 +183,9 @@ export function calculateQuoteTotal(
       continue;
     }
 
-    if (item.conflictingOptions && item.conflictingOptions.length >= 2) {
-      const evaluated = item.conflictingOptions.map((opt) => {
+    const normalizedOptions = normalizeConflictingOptions(item);
+    if (normalizedOptions.length >= 2) {
+      const evaluated = normalizedOptions.map((opt) => {
         const optionRes = calculateLineItem(
           {
             ...item,

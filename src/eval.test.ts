@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { gradeExtraction, scoreExtractionError, summarizeScores } from './eval.ts';
+import {
+  gradeExtraction,
+  parseEvalArgs,
+  resolveEvalProvider,
+  scoreExtractionError,
+  summarizeScores,
+} from './eval.ts';
 import { ExtractionError } from './extractor.ts';
 import type { EvalCase } from './types.ts';
 
@@ -321,4 +327,88 @@ test('grades expectedPriceConflictDiscrepancy strictly without loosening subtota
     0,
   );
   assert.equal(properConflict.passed, true);
+
+  // Observed single-alternative shape also passes
+  const singleAltConflict = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(singleAltConflict.passed, true);
+
+  // Undetected unresolved conflict (no conflictingOptions) is a release blocker
+  const undetected = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(undetected.passed, false);
+  assert.ok(
+    undetected.releaseBlockers.some((b) => b.includes('Undetected unresolved price conflict')),
+  );
+});
+
+test('parseEvalArgs and resolveEvalProvider honor --provider, reject unknown flags, and never silently fall back to mock', () => {
+  const parsed = parseEvalArgs(['--split', 'dev', '--provider', 'gemini', '--show-raw']);
+  assert.deepEqual(parsed, { split: 'dev', provider: 'gemini', delayMs: undefined, showRaw: true });
+
+  const inline = parseEvalArgs(['--split=held-out-v2', '--provider=mock', '--delay-ms=250']);
+  assert.deepEqual(inline, { split: 'held-out-v2', provider: 'mock', delayMs: 250, showRaw: false });
+
+  assert.throws(() => parseEvalArgs(['--unknown-flag']), /Unsupported CLI argument/);
+  assert.throws(() => parseEvalArgs(['--provider', 'openai']), /Unsupported --provider/);
+  assert.throws(() => parseEvalArgs(['--split', 'nonexistent']), /Unsupported --split/);
+
+  // Explicit --provider gemini without GEMINI_API_KEY must throw, never fall back to mock
+  assert.throws(
+    () => resolveEvalProvider('gemini', {}),
+    /Refusing to fall back to mock/,
+  );
+  assert.equal(resolveEvalProvider('gemini', { GEMINI_API_KEY: 'test-key' }), 'gemini');
+  assert.equal(resolveEvalProvider(undefined, {}), 'mock');
 });

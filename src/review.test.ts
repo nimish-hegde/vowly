@@ -254,3 +254,55 @@ test('price conflict ($3,200 DM vs $3,600 contract) blocks approval and recalcul
   assert.deepEqual(budgetB.committedTotals, { CAD: 3600 });
   assert.equal(sessionB.resolvedPriceConflicts[0]?.chosenSourceLabel, 'PDF contract');
 });
+
+test('single-alternative live conflict shape blocks approval and resolves cleanly to either price', () => {
+  const liveShapeQuote: ExtractedQuote = {
+    vendorName: 'Northstar Studios',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Full-day wedding coverage',
+        pricingType: 'flat',
+        amount: 3200,
+        chargeType: 'mandatory',
+        conflictingOptions: [
+          {
+            sourceLabel: 'PDF contract',
+            pricingType: 'flat',
+            amount: 3600,
+            sourceExcerpt: 'the PDF contract sent today says $3,600',
+          },
+        ],
+        sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+      },
+    ],
+    openQuestions: [
+      {
+        question: 'Clarify $3,200 DM vs $3,600 PDF contract',
+        reason: 'conflict',
+        sourceExcerpt: 'the PDF contract sent today says $3,600',
+      },
+    ],
+  };
+
+  // Option 0 -> primary $3,200
+  let budgetPrimary = createBudgetState();
+  const s0 = createReviewSession('live-0', liveShapeQuote);
+  assert.throws(() => approveQuote(s0, budgetPrimary), /conflicting prices/i);
+  resolvePriceConflict(s0, 0, 0);
+  budgetPrimary = approveQuote(s0, budgetPrimary);
+  assert.deepEqual(budgetPrimary.committedTotals, { CAD: 3200 });
+
+  // Option 1 -> alternative $3,600
+  let budgetAlt = createBudgetState();
+  const s1 = createReviewSession('live-1', liveShapeQuote);
+  assert.throws(() => approveQuote(s1, budgetAlt), /400 difference/);
+  resolvePriceConflict(s1, 0, 1);
+  budgetAlt = approveQuote(s1, budgetAlt);
+  assert.deepEqual(budgetAlt.committedTotals, { CAD: 3600 });
+});

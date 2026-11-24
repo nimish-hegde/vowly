@@ -48,11 +48,11 @@ const SYSTEM_PROMPT = `You extract structured wedding vendor quote facts from ra
 Follow these rules strictly:
 1. Return valid JSON only. Omit optional fields when not stated. Never output "undefined".
 2. Always include the required arrays: "events", "lineItems", and "openQuestions" (use [] if none).
-3. Classify vendor "category" by the vendor's commercial role and overall offering:
-   - "venue": A vendor providing the physical event space (such as a banquet hall, ballroom, convention centre, event hall, estate, or hotel), even when pricing is per-person for bundled food, dinner menus, appetizers, open bar, staffing, parking, or extra surcharges. Food or menu words alone do NOT make a venue a caterer.
-   - "catering": An independent food-and-beverage vendor providing food, buffet, or food service without providing the event space (including independent caterers delivering or serving at a separate venue).
-   - "photographer", "dj", "decor", "entertainment", "other": Use when the vendor clearly provides that service.
-   - "unknown": Use ONLY when the message genuinely does not give enough context to determine the vendor's role (e.g., generic name with no event-space cues and no independent-catering cues), and add an "ambiguous_rule" open question asking the couple to confirm the vendor category.
+3. Classify vendor "category" by the vendor's commercial role and supporting evidence:
+   - "venue": ONLY when there is explicit evidence that the vendor provides the physical event space (such as a hall, ballroom, banquet facility, convention centre, estate, hotel, room name, room rental, room capacity, parking, or in-house space). When the vendor is a confirmed venue, bundled food, dinner menus, appetizers, open bar, staffing, or extra surcharges still stay "venue" — food words alone do NOT make a venue a caterer.
+   - "catering": ONLY when there is explicit evidence that the vendor is an independent food-and-beverage provider (such as "Catering"/"Caterers" in the vendor name, off-site catering, food delivery/chafing dishes, or catering at a separate named venue).
+   - "photographer", "dj", "decor", "entertainment", "other": Use when the message clearly states that service.
+   - "unknown": A dinner or reception package, per-person pricing, setup fee, or minimum guest count ALONE does NOT prove the vendor provides the physical event space or is an independent caterer. Whenever those cues appear without explicit venue-space evidence or independent-catering evidence (e.g., generic "Events" or "Hospitality" names), set "category" to "unknown" and add an "ambiguous_rule" open question asking the couple to confirm the vendor's role.
 4. Never invent a price or currency:
    - If the message only uses "$" without explicitly stating CAD, CA$, USD, or US$, set "currency" to "UNKNOWN". Never guess currency from city names, taxes like HST, or venue names.
 5. Extract EVERY distinct stated charge, surcharge, or additional cost:
