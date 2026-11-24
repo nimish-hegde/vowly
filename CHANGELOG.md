@@ -29,7 +29,9 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
   - Added strict CLI parsing (`--provider gemini|ollama|mock`) to `src/eval.ts` so unsupported flags fail loudly and explicitly requested live runs never silently fall back to `mock`.
 - Recorded live verification of commit `4501ef3` (**59/60 (98.3%)**, **6/6** regression, **25/25** original held-out, **12/12** `held-out-v2`, **100%** API availability & schema validity) and fixed the single remaining failure (`photo-hourly-missing-mini`):
   - Updated `src/calculator.ts` so conditional overtime / additional-hours `per_hour` charges alongside a flat base package only bill hours exceeding the included package duration (`max(0, requestedHours - includedHours)`), across photography, DJ, venue, and entertainment quotes.
-- Unit tests: `39/39` passing offline. Mock evals: `60/60`.
+- Recorded final live verification of commit `a391f49` on `gemini-3.5-flash-lite`: **59/60 (98.3%)** overall — **6/6** regression, **17/17** dev, **25/25** original held-out, **11/12** `held-out-v2`, **100%** API availability and schema validity, **0** critical financial errors, **0** unsupported currency guesses, **0** release blockers, **2,369 ms** average latency, and **`$0.01754`** estimated paid cost (`$0` on free tier).
+- Documented the single remaining miss (`heldout2-catering-unpriced-dish-surcharge`, where *"Goat biryani upgrade has an extra charge per person — rate on request"* sits on the boundary between optional upgrade and conditional surcharge) as a known limitation in [the eval report](docs/EVAL_REPORT.md) while preserving the evaluation case as-is.
+- Unit tests: `39/39` passing offline. Mock evals: `60/60`. All `v0.3` release criteria met.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 

@@ -197,21 +197,52 @@ Re-running all four splits live after conflict normalization, the tighter `unkno
   - 7 hours: `$3,100` (`2` overtime hours × `$300`)
   - Works identically across photography, DJ, venue, and entertainment packages without changing standalone pure-hourly rates.
 
-### Offline validation after the overtime fix
+## 10. Final live verification — commit `a391f49` (`gemini-3.5-flash-lite`)
 
-- **Unit tests (`npm test`):** **39/39 passed** (including the observed `photo-hourly-missing-mini` raw response at 4/5/6/7/unset hours and equivalent DJ, venue, and entertainment overtime scenarios).
-- **Offline mock eval (`npm run eval`):** **60/60 passed (100.0%)**, 0 critical financial errors, 0 currency guesses, 0 release blockers.
+Running all 60 cases live on commit `a391f49` met every `v0.3` release criterion with **zero critical financial errors, zero currency guesses, and zero release blockers**:
 
-### PowerShell commands for final `dev` + full live confirmation
+| Metric | First 45-case baseline | After `65f1392` (60 cases) | After `4501ef3` (60 cases) | Final `a391f49` (60 cases) |
+|---|---:|---:|---:|---:|
+| End-to-end success | 36/45 (80.0%) | 55/60 (91.7%) | 59/60 (98.3%) | **59/60 (98.3%)** |
+| Regression split | 4/6 (66.7%) | 6/6 (100.0%) | 6/6 (100.0%) | **6/6 (100.0%)** |
+| Dev split | 12/14 (85.7%) | 15/17 (88.2%) | 16/17 (94.1%) | **17/17 (100.0%)** |
+| Original held-out split | 20/25 (80.0%) | 25/25 (100.0%) | 25/25 (100.0%) | **25/25 (100.0%)** |
+| Fresh `held-out-v2` split | — | 9/12 (75.0%) | 12/12 (100.0%) | **11/12 (91.7%)** |
+| API availability | 44/45 (97.8%) | 60/60 (100.0%) | 60/60 (100.0%) | **60/60 (100.0%)** |
+| Schema validity | 44/44 (100.0%) | 60/60 (100.0%) | 60/60 (100.0%) | **60/60 (100.0%)** |
+| Critical financial errors | 1 | 0 | 1 (overtime calc bug) | **0** |
+| Unsupported currency guesses | 0 | 0 | 0 | **0** |
+| Release blockers | 1+ | 3 (undetected conflicts) | 1 | **0** |
+| Average latency | — | ~1,900 ms | — | **2,369 ms** |
+| Est. paid cost (`$0` free tier) | — | `$0.01683` | — | **`$0.01754`** |
+
+### Known limitation (preserved as-is)
+
+- **`heldout2-catering-unpriced-dish-surcharge` (11/12 on `held-out-v2`):** The message says *"Goat biryani upgrade has an extra charge per person — rate on request."* On the final run, the model classified this as an optional add-on rather than a conditional unpriced surcharge, excluding it from `unknownItems`. Because `"upgrade"` can genuinely read as optional to a human too, this borderline phrasing can flip between `optional` and `conditional` across runs. The test case and result are preserved without weakening the assertion; in the Quote Review UI, optional items remain visible with an `Optional` checkbox so couples can still spot and toggle them.
+
+### Final status against `v0.3` release criteria
+
+| Release criterion | Target | Final measured result (`a391f49`) | Status |
+|---|---|---|---|
+| Unit tests (`npm test`) | 100% pass | **39/39 passing** | **Met** |
+| Offline mock eval (`npm run eval`) | 100% pass | **60/60 passing** | **Met** |
+| Live regression pass rate | 100% (6/6) | **6/6 (100.0%)** | **Met** |
+| Critical financial errors (live) | 0 | **0** | **Met** |
+| Unsupported currency guesses (live) | 0 | **0** | **Met** |
+| Release blockers (live) | 0 | **0** | **Met** |
+| Schema validity (live) | ≥99% | **60/60 (100.0%)** | **Met** |
+| Average extraction latency (live) | <5,000 ms | **2,369 ms** | **Met** |
+
+### Reproducing the verification locally
 
 ```powershell
-git pull
 $env:GEMINI_API_KEY="your-free-key"
 $env:GEMINI_MODEL="gemini-3.5-flash-lite"
 
 npm test
-node src/eval.ts --provider gemini --split dev --show-raw
 node src/eval.ts --provider gemini --split regression --show-raw
+node src/eval.ts --provider gemini --split dev --show-raw
 node src/eval.ts --provider gemini --split held-out --show-raw
 node src/eval.ts --provider gemini --split held-out-v2 --show-raw
+npm run ui
 ```
