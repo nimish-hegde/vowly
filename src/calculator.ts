@@ -1,4 +1,4 @@
-import type { CurrencyCode, ExtractedQuote, LineItem } from './types.ts';
+import type { CurrencyCode, ExtractedQuote, LineItem, PriceOption, PricingType } from './types.ts';
 
 export interface CalcContext {
   guestCount?: number;
@@ -11,12 +11,30 @@ export interface LineItemTotal {
   note?: string;
 }
 
+export interface PriceConflictOption {
+  sourceLabel: string;
+  pricingType: PricingType;
+  unitAmount: number;
+  calculatedTotal: number | null;
+  sourceExcerpt: string;
+}
+
+export interface PriceConflict {
+  lineItemIndex: number;
+  label: string;
+  options: PriceConflictOption[];
+  minTotal: number | null;
+  maxTotal: number | null;
+  discrepancy: number | null;
+}
+
 export interface QuoteCalculation {
   currency: CurrencyCode;
   knownSubtotal: number;
   itemTotals: LineItemTotal[];
   unknownItems: string[];
   optionalAddons: string[];
+  priceConflicts: PriceConflict[];
   capacityExceeded: boolean;
   capacityWarning?: string;
   minGuestsApplied: boolean;
@@ -31,12 +49,160 @@ export interface VenueComparison {
   breakEvenNote?: string;
 }
 
+function isOptionalItem(item: LineItem): boolean {
+  return item.optionalAddon === true || item.chargeType === 'optional';
+}
+
+function samePriceCandidate(
+  a: { pricingType: PricingType; amount: number },
+  b: { pricingType: PricingType; amount: number },
+): boolean {
+  return a.pricingType === b.pricingType && Math.abs(a.amount - b.amount) < 0.01;
+}
+
+/**
+ * Normalizes conflicting price candidates for a single line item so both
+ * extraction shapes work identically:
+ * 1) Primary price in `item.amount` + only alternative(s) in `item.conflictingOptions`
+ * 2) All candidate prices explicitly listed in `item.conflictingOptions`
+ *
+ * Deduplicates equivalent candidates and returns an empty list if fewer than
+ * two distinct price options remain.
+ */
+export function normalizeConflictingOptions(item: LineItem): PriceOption[] {
+  const rawOptions = item.conflictingOptions;
+  if (!rawOptions || rawOptions.length === 0) {
+    return [];
+  }
+
+  const deduped: PriceOption[] = [];
+  const hasPrimaryInOptions =
+    item.amount !== null &&
+    item.pricingType !== 'unknown' &&
+    rawOptions.some((opt) =>
+      samePriceCandidate(opt, { pricingType: item.pricingType, amount: item.amount! }),
+    );
+
+  // If the model placed the primary price only in item.amount and only the
+  // alternative(s) in conflictingOptions, synthesize the primary candidate first.
+  if (item.amount !== null && item.pricingType !== 'unknown' && !hasPrimaryInOptions) {
+    deduped.push({
+      sourceLabel: 'Primary quote',
+      pricingType: item.pricingType,
+      amount: item.amount,
+      sourceExcerpt: item.sourceExcerpt,
+    });
+  }
+
+  for (const opt of rawOptions) {
+    if (!deduped.some((existing) => samePriceCandidate(existing, opt))) {
+      deduped.push(opt);
+    }
+  }
+
+  return deduped.length >= 2 ? deduped : [];
+}
+
+const WORD_TO_HOURS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+const OVERTIME_PATTERN =
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
+
+function parseHoursFromText(text: string): number | undefined {
+  const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
+  if (numMatch) {
+    const val = Number(numMatch[1]);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  const wordMatch = text.match(
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:-|\s)?(?:hours?|hrs?)\b/i,
+  );
+  if (wordMatch) {
+    return WORD_TO_HOURS[wordMatch[1]!.toLowerCase()];
+  }
+  return undefined;
+}
+
+/**
+ * Finds the base package duration (in hours) covered by sibling flat/included
+ * line items or photographerDetails so conditional overtime rates only bill
+ * hours exceeding the included duration.
+ */
+function findIncludedPackageHours(quote: ExtractedQuote, excludeIndex: number): number | undefined {
+  let hasSiblingFlat = false;
+  for (let i = 0; i < quote.lineItems.length; i++) {
+    if (i === excludeIndex) continue;
+    const sibling = quote.lineItems[i]!;
+    if (isOptionalItem(sibling)) continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      hasSiblingFlat = true;
+      if (sibling.hours !== undefined && sibling.hours > 0) {
+        return sibling.hours;
+      }
+    }
+  }
+
+  if (hasSiblingFlat && quote.photographerDetails?.hoursIncluded && quote.photographerDetails.hoursIncluded > 0) {
+    return quote.photographerDetails.hoursIncluded;
+  }
+
+  for (let i = 0; i < quote.lineItems.length; i++) {
+    if (i === excludeIndex) continue;
+    const sibling = quote.lineItems[i]!;
+    if (isOptionalItem(sibling)) continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      const fromLabel = parseHoursFromText(sibling.label);
+      if (fromLabel !== undefined) return fromLabel;
+      const fromExcerpt = parseHoursFromText(sibling.sourceExcerpt);
+      if (fromExcerpt !== undefined) return fromExcerpt;
+    }
+  }
+
+  return undefined;
+}
+
+function isConditionalOvertimeItem(
+  item: LineItem,
+  quote: ExtractedQuote,
+  includedPackageHours: number | undefined,
+): boolean {
+  if (item.pricingType !== 'per_hour' || includedPackageHours === undefined) {
+    return false;
+  }
+  if (item.hours !== undefined && item.hours > 0) {
+    return false;
+  }
+  const matchesExtraHourRate =
+    item.amount !== null &&
+    quote.photographerDetails?.extraHourRate !== undefined &&
+    Math.abs(item.amount - quote.photographerDetails.extraHourRate) < 0.01;
+  return (
+    matchesExtraHourRate ||
+    OVERTIME_PATTERN.test(item.label) ||
+    OVERTIME_PATTERN.test(item.sourceExcerpt)
+  );
+}
+
 function calculateLineItem(
   item: LineItem,
   quote: ExtractedQuote,
   ctx: CalcContext,
+  itemIndex = -1,
 ): { total: number | null; note?: string; minApplied?: boolean } {
-  if (item.optionalAddon) {
+  if (isOptionalItem(item)) {
     return { total: null, note: 'Optional add-on (excluded from base subtotal)' };
   }
 
@@ -81,6 +247,19 @@ function calculateLineItem(
     }
 
     case 'per_hour': {
+      const includedPackageHours = findIncludedPackageHours(quote, itemIndex);
+      if (isConditionalOvertimeItem(item, quote, includedPackageHours)) {
+        const requestedHours = ctx.hours ?? includedPackageHours!;
+        const overtimeHours = Math.max(0, requestedHours - includedPackageHours!);
+        return {
+          total: roundMoney(item.amount * overtimeHours),
+          note:
+            overtimeHours > 0
+              ? `${overtimeHours} overtime hr${overtimeHours === 1 ? '' : 's'} × ${item.amount}/hr (above ${includedPackageHours} included hrs)`
+              : `0 overtime hrs (${includedPackageHours} hrs included in base package)`,
+        };
+      }
+
       const requestedHours = ctx.hours ?? item.hours ?? quote.photographerDetails?.hoursIncluded;
       if (requestedHours === undefined) {
         return { total: null, note: 'Hours required' };
@@ -102,14 +281,58 @@ export function calculateQuoteTotal(
   const itemTotals: LineItemTotal[] = [];
   const unknownItems: string[] = [];
   const optionalAddons: string[] = [];
+  const priceConflicts: PriceConflict[] = [];
 
-  for (const item of quote.lineItems) {
-    if (item.optionalAddon) {
+  for (let idx = 0; idx < quote.lineItems.length; idx++) {
+    const item = quote.lineItems[idx]!;
+    if (isOptionalItem(item)) {
       optionalAddons.push(item.label);
       continue;
     }
 
-    const res = calculateLineItem(item, quote, ctx);
+    const normalizedOptions = normalizeConflictingOptions(item);
+    if (normalizedOptions.length >= 2) {
+      const evaluated = normalizedOptions.map((opt) => {
+        const optionRes = calculateLineItem(
+          {
+            ...item,
+            pricingType: opt.pricingType,
+            amount: opt.amount,
+            optionalAddon: false,
+            chargeType: item.chargeType === 'optional' ? 'mandatory' : item.chargeType,
+          },
+          quote,
+          ctx,
+          idx,
+        );
+        return {
+          sourceLabel: opt.sourceLabel,
+          pricingType: opt.pricingType,
+          unitAmount: opt.amount,
+          calculatedTotal: optionRes.total,
+          sourceExcerpt: opt.sourceExcerpt,
+        };
+      });
+
+      const numericTotals = evaluated
+        .map((o) => o.calculatedTotal)
+        .filter((v): v is number => v !== null);
+      const minTotal = numericTotals.length > 0 ? Math.min(...numericTotals) : null;
+      const maxTotal = numericTotals.length > 0 ? Math.max(...numericTotals) : null;
+      const discrepancy =
+        minTotal !== null && maxTotal !== null ? roundMoney(maxTotal - minTotal) : null;
+
+      priceConflicts.push({
+        lineItemIndex: idx,
+        label: item.label,
+        options: evaluated,
+        minTotal,
+        maxTotal,
+        discrepancy,
+      });
+    }
+
+    const res = calculateLineItem(item, quote, ctx, idx);
     if (res.minApplied) {
       minGuestsApplied = true;
     }
@@ -133,6 +356,7 @@ export function calculateQuoteTotal(
     itemTotals,
     unknownItems,
     optionalAddons,
+    priceConflicts,
     capacityExceeded,
     capacityWarning: capacityExceeded
       ? `Guest count (${ctx.guestCount}) exceeds room capacity (${maxCap}).`

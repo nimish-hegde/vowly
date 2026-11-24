@@ -1,4 +1,12 @@
-export type VendorCategory = 'venue' | 'photographer' | 'dj' | 'decor' | 'other';
+export type VendorCategory =
+  | 'venue'
+  | 'photographer'
+  | 'dj'
+  | 'decor'
+  | 'catering'
+  | 'entertainment'
+  | 'other'
+  | 'unknown';
 
 export type QuoteKind = 'initial' | 'revision';
 
@@ -12,6 +20,8 @@ export type PricingType =
   | 'included'
   | 'unknown';
 
+export type ChargeRequirement = 'mandatory' | 'conditional' | 'optional';
+
 export type TaxOrGratuityStatus = 'included' | 'excluded' | 'unknown';
 
 export type PaymentMethodRule = 'cash_only' | 'etransfer' | 'card' | 'any' | 'unknown';
@@ -22,7 +32,16 @@ export type OpenQuestionReason =
   | 'ambiguous_rule'
   | 'missing_date';
 
-export type EvalSplit = 'dev' | 'regression' | 'held-out';
+export type EvalSplit = 'dev' | 'regression' | 'held-out' | 'held-out-v2';
+
+export interface PriceOption {
+  /** Short label distinguishing this price source (e.g., "Instagram DM", "PDF contract"). */
+  sourceLabel: string;
+  pricingType: PricingType;
+  amount: number;
+  /** Exact substring from the raw vendor message supporting this candidate price. */
+  sourceExcerpt: string;
+}
 
 export interface LineItem {
   label: string;
@@ -35,8 +54,15 @@ export interface LineItem {
   ratioGuests?: number;
   /** Default hours included if this is a per_hour item. */
   hours?: number;
+  /** Distinguishes mandatory, conditional, and explicitly optional charges. */
+  chargeType?: ChargeRequirement;
   /** True only when the message explicitly says the item is an optional upgrade or add-on. */
   optionalAddon?: boolean;
+  /**
+   * Present when two or more conflicting prices refer to the same service.
+   * Preserves every candidate price and its verbatim source without double-counting.
+   */
+  conflictingOptions?: PriceOption[];
   /** Exact substring from the raw vendor message supporting this item. */
   sourceExcerpt: string;
 }
@@ -110,5 +136,7 @@ export interface EvalCase {
     minOpenQuestions?: number;
     taxStatus?: TaxOrGratuityStatus;
     paymentMethodRule?: PaymentMethodRule;
+    /** Expected numeric discrepancy when the case contains conflicting prices for one service. */
+    expectedPriceConflictDiscrepancy?: number;
   };
 }

@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vowly — Quote Review</title>
+    <style>
+      :root {
+        --bg: #faf7f2;
+        --card: #ffffff;
+        --ink: #1f2421;
+        --muted: #5f6661;
+        --border: #e5ded3;
+        --accent: #2f5d50;
+        --accent-soft: #eaf2ef;
+        --warn: #b45309;
+        --warn-soft: #fef3c7;
+        --danger: #991b1b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+        line-height: 1.5;
+      }
+      header {
+        background: var(--card);
+        border-bottom: 1px solid var(--border);
+        padding: 16px 24px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .brand { font-weight: 700; font-size: 20px; letter-spacing: -0.02em; }
+      .budget-pill {
+        background: var(--accent-soft);
+        color: var(--accent);
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      main {
+        max-width: 1120px;
+        margin: 24px auto;
+        padding: 0 20px 48px;
+        display: grid;
+        gap: 20px;
+      }
+      .grid-2 {
+        display: grid;
+        grid-template-columns: 1fr 1.2fr;
+        gap: 20px;
+      }
+      @media (max-width: 860px) {
+        .grid-2 { grid-template-columns: 1fr; }
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+      }
+      h2 { margin: 0 0 12px; font-size: 16px; }
+      label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+      select, input, textarea {
+        width: 100%;
+        padding: 9px 11px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        font: inherit;
+        background: #fff;
+      }
+      textarea { min-height: 140px; resize: vertical; }
+      .row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+      .row > * { flex: 1; min-width: 140px; }
+      button {
+        padding: 9px 16px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn-primary { background: var(--accent); color: #fff; }
+      .btn-secondary { background: #fff; border-color: var(--border); color: var(--ink); }
+      .btn-warn { background: var(--warn-soft); color: var(--warn); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .item {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 10px;
+      }
+      .excerpt {
+        font-size: 12px;
+        color: var(--muted);
+        background: var(--bg);
+        padding: 6px 8px;
+        border-radius: 6px;
+        margin-top: 8px;
+      }
+      .badge {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+      .badge.ok { background: var(--accent-soft); color: var(--accent); }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+      }
+      .metric {
+        background: var(--bg);
+        border-radius: 8px;
+        padding: 10px 12px;
+      }
+      .metric .k { font-size: 12px; color: var(--muted); }
+      .metric .v { font-size: 17px; font-weight: 700; margin-top: 2px; }
+      .status-banner {
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 13px;
+        margin-bottom: 12px;
+        background: var(--warn-soft);
+        color: var(--warn);
+      }
+      .status-banner.approved { background: var(--accent-soft); color: var(--accent); }
+      .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand">Vowly · Quote Review</div>
+      <div class="budget-pill" id="budgetPill">Committed wedding budget: none yet</div>
+    </header>
+
+    <main>
+      <div class="grid-2">
+        <section class="card">
+          <h2>1. Paste vendor quote</h2>
+          <div style="margin-bottom: 12px">
+            <label for="sampleSelect">Or load a sample quote</label>
+            <select id="sampleSelect">
+              <option value="">— Choose a sample quote —</option>
+            </select>
+          </div>
+          <div class="row" style="margin-bottom: 12px">
+            <div>
+              <label for="guestCount">Guest count</label>
+              <input id="guestCount" type="number" value="160" min="1" />
+            </div>
+            <div>
+              <button class="btn-primary" id="extractBtn" style="width: 100%">Extract quote</button>
+            </div>
+          </div>
+          <label for="rawMessage">Raw message</label>
+          <textarea id="rawMessage" placeholder="Paste an email, WhatsApp reply, or Instagram DM..."></textarea>
+          <div id="extractError" class="error"></div>
+        </section>
+
+        <section class="card">
+          <h2>2. Review, correct &amp; approve</h2>
+          <div id="reviewArea" style="color: var(--muted); font-size: 14px">
+            Extract a quote on the left to review line items, resolve open questions, and decide whether to apply it to your wedding budget.
+          </div>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>Session instrumentation</h2>
+        <div class="metrics" id="telemetryGrid"></div>
+      </section>
+    </main>
+
+    <script>
+      let state = { samples: [], session: null, budget: null, telemetry: null };
+
+      async function api(path, body) {
+        const res = await fetch(path, {
+          method: body ? 'POST' : 'GET',
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Request failed');
+        return data;
+      }
+
+      function renderBudgetAndTelemetry() {
+        const b = state.budget;
+        if (b) {
+          document.getElementById('budgetPill').textContent =
+            `Committed wedding budget: ${formatTotals(b.committedTotals)} (${b.approvedQuotes.length} approved)`;
+        }
+        const t = state.telemetry;
+        if (!t) return;
+        const fields = Object.entries(t.correctionsByField)
+          .map(([k, v]) => `${k}: ${v}`)
+          .join(', ') || 'none';
+        document.getElementById('telemetryGrid').innerHTML = `
+          <div class="metric"><div class="k">Extraction success</div><div class="v">${Math.round(t.extractionSuccessRate * 100)}% (${t.extractionSuccesses}/${t.extractionAttempts})</div></div>
+          <div class="metric"><div class="k">Avg latency</div><div class="v">${t.avgLatencyMs} ms</div></div>
+          <div class="metric"><div class="k">Tokens (in / out)</div><div class="v">${t.promptTokens} / ${t.outputTokens}</div></div>
+          <div class="metric"><div class="k">Est. paid cost</div><div class="v">$${t.estimatedCostUsd.toFixed(5)}</div></div>
+          <div class="metric"><div class="k">Corrections by field</div><div class="v" style="font-size:13px">${fields}</div></div>
+          <div class="metric"><div class="k">Unresolved questions</div><div class="v">${t.unresolvedQuestions}</div></div>
+          <div class="metric"><div class="k">Quote approval rate</div><div class="v">${Math.round(t.quoteApprovalRate * 100)}% (${t.quotesApproved}/${t.quotesReviewed})</div></div>
+        `;
+      }
+
+      function renderReview() {
+        const s = state.session;
+        const el = document.getElementById('reviewArea');
+        if (!s) return;
+
+        const locked = s.status !== 'pending_review';
+        const resolvedIdx = new Set(s.resolvedQuestions.map((r) => r.index));
+        const bannerText =
+          s.status === 'approved'
+            ? 'Approved — added to your committed wedding budget.'
+            : s.status === 'dismissed'
+              ? 'Dismissed — wedding budget unchanged.'
+              : 'Pending review — edits here will NOT change your wedding budget until you click Approve.';
+
+        const itemsHtml = s.draftQuote.lineItems
+          .map((item, idx) => `
+            <div class="item">
+              <div class="row">
+                <div style="flex:2">
+                  <label>Line item</label>
+                  <input data-idx="${idx}" data-field="label" value="${escapeHtml(item.label)}" ${locked ? 'disabled' : ''} />
+                </div>
+                <div>
+                  <label>Pricing</label>
+                  <select data-idx="${idx}" data-field="pricingType" ${locked ? 'disabled' : ''}>
+                    ${['flat', 'per_person', 'per_hour', 'per_guest_ratio', 'included', 'unknown']
+                      .map((p) => `<option value="${p}" ${item.pricingType === p ? 'selected' : ''}>${p}</option>`)
+                      .join('')}
+                  </select>
+                </div>
+                <div>
+                  <label>Amount</label>
+                  <input type="number" step="0.01" data-idx="${idx}" data-field="amount" value="${item.amount ?? ''}" placeholder="TBD" ${locked ? 'disabled' : ''} />
+                </div>
+                <div style="flex:0 0 auto; display:flex; align-items:flex-end; padding-bottom:6px">
+                  <label style="display:flex; align-items:center; gap:6px; margin:0; white-space:nowrap">
+                    <input type="checkbox" style="width:auto" data-idx="${idx}" data-field="optionalAddon" ${item.optionalAddon ? 'checked' : ''} ${locked ? 'disabled' : ''} />
+                    Optional
+                  </label>
+                </div>
+              </div>
+              ${excerptHtml(item.sourceExcerpt)}
+            </div>
+          `)
+          .join('');
+
+        const questionsHtml = s.draftQuote.openQuestions.length
+          ? s.draftQuote.openQuestions
+              .map((q, idx) => {
+                const done = resolvedIdx.has(idx);
+                return `
+                  <div class="item">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+                      <strong>${escapeHtml(q.question)}</strong>
+                      <span class="badge ${done ? 'ok' : ''}">${done ? 'Resolved' : q.reason}</span>
+                    </div>
+                    ${excerptHtml(q.sourceExcerpt)}
+                    ${
+                      done || locked
+                        ? ''
+                        : `<div class="row" style="margin-top:8px">
+                             <input id="qNote-${idx}" placeholder="Add answer or note..." />
+                             <button class="btn-secondary" style="flex:0" onclick="resolveQ(${idx})">Mark resolved</button>
+                           </div>`
+                    }
+                  </div>
+                `;
+              })
+              .join('')
+          : '<p style="font-size:13px; color:var(--muted)">No open questions.</p>';
+
+        const sourceWarningHtml =
+          s.sourceWarnings && s.sourceWarnings.length
+            ? `<div class="item">
+                 <strong class="error">Some evidence could not be found in the original message.</strong>
+                 <ul class="error">${s.sourceWarnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul>
+                 ${
+                   s.sourceWarningsAcknowledged
+                     ? '<span class="badge ok">Checked by you</span>'
+                     : locked
+                       ? ''
+                       : '<button class="btn-secondary" onclick="ackSource()">I checked these against the original message</button>'
+                 }
+               </div>`
+            : '';
+
+        const conflictHtml =
+          s.calculation.priceConflicts && s.calculation.priceConflicts.length
+            ? s.calculation.priceConflicts
+                .map(
+                  (c) => `
+                    <div class="item">
+                      <strong class="error">Price conflict on "${escapeHtml(c.label)}"${c.discrepancy !== null ? ` — ${s.calculation.currency} ${c.discrepancy.toLocaleString()} difference` : ''}</strong>
+                      <div style="font-size:13px; color:var(--muted); margin-top:4px">
+                        Pick which price applies before approving this quote into your budget (both will never be added together).
+                      </div>
+                      ${c.options
+                        .map(
+                          (opt, optIdx) => `
+                            <div style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border)">
+                              <div style="display:flex; justify-content:space-between; align-items:center; gap:8px">
+                                <span><strong>${escapeHtml(opt.sourceLabel)}</strong>: ${s.calculation.currency} ${(opt.calculatedTotal ?? opt.unitAmount).toLocaleString()}</span>
+                                ${
+                                  locked
+                                    ? ''
+                                    : `<button class="btn-secondary" style="flex:0; white-space:nowrap" onclick="resolveConflict(${c.lineItemIndex}, ${optIdx})">Use ${escapeHtml(opt.sourceLabel)}</button>`
+                                }
+                              </div>
+                              ${excerptHtml(opt.sourceExcerpt)}
+                            </div>
+                          `,
+                        )
+                        .join('')}
+                    </div>
+                  `,
+                )
+                .join('')
+            : '';
+
+        const unresolvedCostHtml =
+          s.calculation.unknownItems && s.calculation.unknownItems.length
+            ? `<div class="item">
+                 <strong class="error">Mandatory costs still TBD: ${escapeHtml(s.calculation.unknownItems.join(', '))}</strong>
+                 <div style="font-size:13px; color:var(--muted); margin-top:4px">
+                   Enter a price, mark the item as included, or check Optional before approving this quote into your budget.
+                 </div>
+               </div>`
+            : '';
+
+        el.innerHTML = `
+          <div class="status-banner ${s.status === 'approved' ? 'approved' : ''}">${bannerText}</div>
+          ${sourceWarningHtml}
+          ${conflictHtml}
+          ${unresolvedCostHtml}
+          <div id="approveError" class="error"></div>
+          <div class="row" style="margin-bottom: 14px">
+            <div>
+              <strong>${escapeHtml(s.draftQuote.vendorName)}</strong>
+              <div style="font-size:13px; color:var(--muted)">${s.draftQuote.category} · ${s.draftQuote.quoteKind}</div>
+            </div>
+            <div>
+              <label>Currency</label>
+              <select id="currencySelect" ${locked ? 'disabled' : ''}>
+                ${['CAD', 'USD', 'UNKNOWN']
+                  .map((c) => `<option value="${c}" ${s.draftQuote.currency === c ? 'selected' : ''}>${c}</option>`)
+                  .join('')}
+              </select>
+            </div>
+            <div>
+              <label>Known quoted subtotal</label>
+              <div style="font-size:20px; font-weight:700">${s.calculation.currency} ${s.calculation.knownSubtotal.toLocaleString()}</div>
+            </div>
+          </div>
+          ${itemsHtml}
+          <h2 style="margin-top:16px">Open questions</h2>
+          ${questionsHtml}
+          <div class="row" style="margin-top:16px">
+            <button class="btn-primary" onclick="approve()" ${locked ? 'disabled' : ''}>Approve quote &amp; update budget</button>
+            <button class="btn-secondary" onclick="dismiss()" ${locked ? 'disabled' : ''}>Dismiss</button>
+          </div>
+        `;
+
+        if (!locked) {
+          document.getElementById('currencySelect').addEventListener('change', async (e) => {
+            const data = await api('/api/review/correct', {
+              sessionId: s.id,
+              currency: e.target.value,
+            });
+            state.session = data.session;
+            state.telemetry = data.telemetry;
+            renderReview();
+            renderBudgetAndTelemetry();
+          });
+
+          el.querySelectorAll('input[data-idx], select[data-idx]').forEach((input) => {
+            input.addEventListener('change', async (e) => {
+              const idx = Number(e.target.dataset.idx);
+              const field = e.target.dataset.field;
+              let value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+              if (field === 'amount') value = value === '' ? null : Number(value);
+              const data = await api('/api/review/correct', {
+                sessionId: s.id,
+                lineItemIndex: idx,
+                patch: { [field]: value },
+              });
+              state.session = data.session;
+              state.telemetry = data.telemetry;
+              renderReview();
+              renderBudgetAndTelemetry();
+            });
+          });
+        }
+      }
+
+      window.resolveQ = async (idx) => {
+        const note = document.getElementById(`qNote-${idx}`)?.value || '';
+        const data = await api('/api/review/resolve-question', {
+          sessionId: state.session.id,
+          questionIndex: idx,
+          resolutionNote: note,
+        });
+        state.session = data.session;
+        state.telemetry = data.telemetry;
+        renderReview();
+        renderBudgetAndTelemetry();
+      };
+
+      window.resolveConflict = async (lineItemIndex, optionIndex) => {
+        const data = await api('/api/review/resolve-conflict', {
+          sessionId: state.session.id,
+          lineItemIndex,
+          optionIndex,
+        });
+        state.session = data.session;
+        state.telemetry = data.telemetry;
+        renderReview();
+        renderBudgetAndTelemetry();
+      };
+
+      window.ackSource = async () => {
+        const data = await api('/api/review/acknowledge-source', { sessionId: state.session.id });
+        state.session = data.session;
+        renderReview();
+      };
+
+      window.approve = async () => {
+        let data;
+        try {
+          data = await api('/api/review/approve', { sessionId: state.session.id });
+        } catch (err) {
+          document.getElementById('approveError').textContent = err.message;
+          return;
+        }
+        state.session = data.session;
+        state.budget = data.budget;
+        state.telemetry = data.telemetry;
+        renderReview();
+        renderBudgetAndTelemetry();
+      };
+
+      window.dismiss = async () => {
+        const data = await api('/api/review/dismiss', { sessionId: state.session.id });
+        state.session = data.session;
+        state.budget = data.budget;
+        state.telemetry = data.telemetry;
+        renderReview();
+        renderBudgetAndTelemetry();
+      };
+
+      // Totals stay separate per currency. We never add CAD and USD together.
+      function formatTotals(totals) {
+        const parts = Object.entries(totals || {}).map(
+          ([cur, amt]) => `${cur} ${Number(amt).toLocaleString()}`,
+        );
+        return parts.length ? parts.join(' + ') : 'none yet';
+      }
+
+      function normalizeText(str) {
+        return String(str ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+      }
+
+      function excerptHtml(excerpt) {
+        const raw = normalizeText(state.rawMessage);
+        const found = !raw || raw.includes(normalizeText(excerpt));
+        return found
+          ? `<div class="excerpt">Source: "${escapeHtml(excerpt)}"</div>`
+          : `<div class="excerpt error">Not found in the original message: "${escapeHtml(excerpt)}"</div>`;
+      }
+
+      function escapeHtml(str) {
+        return String(str ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      async function init() {
+        const data = await api('/api/state');
+        state.samples = data.samples;
+        state.budget = data.budget;
+        state.telemetry = data.telemetry;
+        const select = document.getElementById('sampleSelect');
+        data.samples.forEach((s) => {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = `${s.id} — ${s.description}`;
+          select.appendChild(opt);
+        });
+        select.addEventListener('change', () => {
+          const picked = state.samples.find((s) => s.id === select.value);
+          if (picked) {
+            document.getElementById('rawMessage').value = picked.rawMessage;
+            document.getElementById('guestCount').value = picked.guestCount;
+          }
+        });
+        document.getElementById('extractBtn').addEventListener('click', async () => {
+          const errEl = document.getElementById('extractError');
+          errEl.textContent = '';
+          try {
+            const res = await api('/api/extract', {
+              rawMessage: document.getElementById('rawMessage').value,
+              sampleId: select.value || undefined,
+              guestCount: Number(document.getElementById('guestCount').value) || 160,
+            });
+            state.session = res.session;
+            state.rawMessage = document.getElementById('rawMessage').value;
+            state.budget = res.budget;
+            state.telemetry = res.telemetry;
+            renderReview();
+            renderBudgetAndTelemetry();
+          } catch (err) {
+            errEl.textContent = err.message;
+          }
+        });
+        renderBudgetAndTelemetry();
+      }
+
+      init();
+    </script>
+  </body>
+</html>

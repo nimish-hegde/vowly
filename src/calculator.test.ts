@@ -175,3 +175,358 @@ test('calculates hourly photographer quotes cleanly', () => {
   const result = calculateQuoteTotal(photoQuote, { hours: 6 });
   assert.equal(result.knownSubtotal, 1800);
 });
+
+test('conflicting prices for one service compute discrepancy without double-counting', () => {
+  const conflictQuote: ExtractedQuote = {
+    vendorName: 'Northstar Studios',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Full-day wedding coverage',
+        pricingType: 'flat',
+        amount: 3200,
+        chargeType: 'mandatory',
+        conflictingOptions: [
+          {
+            sourceLabel: 'Instagram DM',
+            pricingType: 'flat',
+            amount: 3200,
+            sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+          },
+          {
+            sourceLabel: 'PDF contract',
+            pricingType: 'flat',
+            amount: 3600,
+            sourceExcerpt: 'the PDF contract sent today says $3,600',
+          },
+        ],
+        sourceExcerpt: 'In Instagram DM you agreed to $3,200 flat for full-day wedding coverage',
+      },
+    ],
+    openQuestions: [
+      {
+        question: 'Confirm whether $3,200 DM rate or $3,600 PDF contract applies ($400 difference)',
+        reason: 'conflict',
+        sourceExcerpt: 'the PDF contract sent today says $3,600',
+      },
+    ],
+  };
+
+  const result = calculateQuoteTotal(conflictQuote);
+  assert.equal(result.knownSubtotal, 3200);
+  assert.equal(result.priceConflicts.length, 1);
+  assert.equal(result.priceConflicts[0]?.discrepancy, 400);
+  assert.equal(result.priceConflicts[0]?.minTotal, 3200);
+  assert.equal(result.priceConflicts[0]?.maxTotal, 3600);
+});
+
+test('keeps unpriced conditional charges in unknownItems while excluding explicit optional add-ons', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Willowbrook Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Dinner package',
+        pricingType: 'per_person',
+        amount: 60,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Dinner package is $60/person',
+      },
+      {
+        label: 'Late-night lighting setup',
+        pricingType: 'unknown',
+        amount: null,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'lighting setup costs extra depending on layout',
+      },
+      {
+        label: 'Ice sculpture',
+        pricingType: 'flat',
+        amount: 450,
+        chargeType: 'optional',
+        optionalAddon: true,
+        sourceExcerpt: 'Optional ice sculpture is $450',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote, { guestCount: 150 });
+  assert.equal(result.knownSubtotal, 9000);
+  assert.deepEqual(result.unknownItems, ['Late-night lighting setup']);
+  assert.deepEqual(result.optionalAddons, ['Ice sculpture']);
+});
+
+test('normalizes observed live Gemini conflict shape (primary amount + single alternative in conflictingOptions)', () => {
+  const cases: Array<{
+    name: string;
+    primary: number;
+    altLabel: string;
+    altAmount: number;
+    expectedDiff: number;
+  }> = [
+    { name: 'Photography', primary: 3200, altLabel: 'PDF contract', altAmount: 3600, expectedDiff: 400 },
+    { name: 'DJ', primary: 1900, altLabel: 'Invoice', altAmount: 2250, expectedDiff: 350 },
+    { name: 'Decor', primary: 4800, altLabel: 'Contract', altAmount: 5300, expectedDiff: 500 },
+  ];
+
+  for (const c of cases) {
+    const quote: ExtractedQuote = {
+      vendorName: `${c.name} Vendor`,
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: `${c.name} package`,
+          pricingType: 'flat',
+          amount: c.primary,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            {
+              sourceLabel: c.altLabel,
+              pricingType: 'flat',
+              amount: c.altAmount,
+              sourceExcerpt: `${c.altLabel} says $${c.altAmount}`,
+            },
+          ],
+          sourceExcerpt: `Agreed to $${c.primary}`,
+        },
+      ],
+      openQuestions: [],
+    };
+
+    const result = calculateQuoteTotal(quote);
+    assert.equal(result.knownSubtotal, c.primary, `${c.name} must not double-count`);
+    assert.equal(result.priceConflicts.length, 1, `${c.name} must detect price conflict`);
+    assert.equal(result.priceConflicts[0]?.discrepancy, c.expectedDiff);
+    assert.equal(result.priceConflicts[0]?.options.length, 2);
+    assert.equal(result.priceConflicts[0]?.options[0]?.sourceExcerpt, `Agreed to $${c.primary}`);
+    assert.equal(
+      result.priceConflicts[0]?.options[1]?.sourceExcerpt,
+      `${c.altLabel} says $${c.altAmount}`,
+    );
+  }
+});
+
+test('deduplicates equivalent candidates in conflictingOptions and avoids false conflicts', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Studio',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'revision',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Package',
+        pricingType: 'flat',
+        amount: 3200,
+        conflictingOptions: [
+          { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: '$3,200' },
+          { sourceLabel: 'Duplicate DM', pricingType: 'flat', amount: 3200, sourceExcerpt: '$3,200' },
+        ],
+        sourceExcerpt: '$3,200',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote);
+  assert.equal(result.priceConflicts.length, 0);
+});
+
+test('conditional overtime bills only hours exceeding included package duration (photo-hourly-missing-mini)', () => {
+  const observedPhotoResponse: ExtractedQuote = {
+    vendorName: 'Wedding Photographer',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    photographerDetails: {
+      hoursIncluded: 5,
+      extraHourRate: 300,
+      teamSize: 2,
+      includesMiniShoot: 'unknown',
+    },
+    paymentTerms: {
+      depositPercent: 30,
+      methodRule: 'etransfer',
+      scheduleNotes: '30% deposit by e-transfer to hold the date',
+    },
+    lineItems: [
+      {
+        label: '5-hour wedding photography package (2 photographers)',
+        pricingType: 'flat',
+        amount: 2500,
+        chargeType: 'mandatory',
+        optionalAddon: false,
+        sourceExcerpt: 'we charge $2,500 CAD for five hours with two photographers',
+      },
+      {
+        label: 'Additional hours',
+        pricingType: 'per_hour',
+        amount: 300,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Additional hours are $300/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 4 }).knownSubtotal, 2500);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 5 }).knownSubtotal, 2500);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 6 }).knownSubtotal, 2800);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 7 }).knownSubtotal, 3100);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse).knownSubtotal, 2500);
+});
+
+test('conditional overtime works across DJ, venue, and entertainment categories', () => {
+  const djQuote: ExtractedQuote = {
+    vendorName: 'Pulse DJs',
+    category: 'dj',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Reception DJ package (4 hours)',
+        pricingType: 'flat',
+        amount: 1600,
+        hours: 4,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Reception DJ package (4 hours) is $1,600 CAD',
+      },
+      {
+        label: 'Overtime',
+        pricingType: 'per_hour',
+        amount: 200,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Overtime is $200/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 4 }).knownSubtotal, 1600);
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 5 }).knownSubtotal, 1800);
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 6 }).knownSubtotal, 2000);
+
+  const venueQuote: ExtractedQuote = {
+    vendorName: 'Cedar Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: '6-hour ballroom rental',
+        pricingType: 'flat',
+        amount: 8000,
+        chargeType: 'mandatory',
+        sourceExcerpt: '6-hour ballroom rental is $8,000 CAD',
+      },
+      {
+        label: 'Extra hour extension',
+        pricingType: 'per_hour',
+        amount: 500,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Extra hour extension is $500/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(venueQuote, { hours: 6 }).knownSubtotal, 8000);
+  assert.equal(calculateQuoteTotal(venueQuote, { hours: 7 }).knownSubtotal, 8500);
+
+  const entertainmentQuote: ExtractedQuote = {
+    vendorName: 'Flashbox Booths',
+    category: 'entertainment',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'included',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Photobooth package',
+        pricingType: 'flat',
+        amount: 650,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Photobooth package is $650 CAD for three hours',
+      },
+      {
+        label: 'Additional hours',
+        pricingType: 'per_hour',
+        amount: 150,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Additional hours are $150/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 3 }).knownSubtotal, 650);
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 4 }).knownSubtotal, 800);
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 5 }).knownSubtotal, 950);
+});
+
+test('non-overtime conditional hourly charges (e.g., security above 100 guests) bill full hours', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Harbour Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: '5-hour room rental',
+        pricingType: 'flat',
+        amount: 1000,
+        hours: 5,
+        chargeType: 'mandatory',
+        sourceExcerpt: '5-hour room rental is $1,000 CAD',
+      },
+      {
+        label: 'Event security',
+        pricingType: 'per_hour',
+        amount: 100,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Security at $100/hour required above 100 guests',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote, { guestCount: 160, hours: 5 });
+  assert.equal(result.knownSubtotal, 1500);
+});

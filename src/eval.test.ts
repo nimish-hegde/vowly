@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { gradeExtraction, scoreExtractionError, summarizeScores } from './eval.ts';
+import {
+  gradeExtraction,
+  parseEvalArgs,
+  resolveEvalProvider,
+  scoreExtractionError,
+  summarizeScores,
+} from './eval.ts';
 import { ExtractionError } from './extractor.ts';
 import type { EvalCase } from './types.ts';
 
@@ -188,4 +194,221 @@ test('classifies parse_error separately from api_error in summary metrics', () =
   assert.equal(summary.completed, 1);
   assert.equal(summary.schemaCompliant, 0);
   assert.equal(summary.financialErrors, 0);
+});
+
+test('keeps API availability, schema validity, extraction accuracy, end-to-end success, and no-retry latency distinct', () => {
+  const passScore = gradeExtraction(
+    {
+      ...baseCase,
+      expected: { ...baseCase.expected, currency: 'CAD', unknownItemLabels: [], minOpenQuestions: 0 },
+      rawMessage: 'Summit Hall (CAD): $55/person (180-person minimum). AV is $300.',
+    },
+    {
+      vendorName: 'Summit Hall',
+      category: 'venue',
+      events: ['Reception'],
+      quoteKind: 'initial',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Catering',
+          pricingType: 'per_person',
+          amount: 55,
+          minGuests: 180,
+          sourceExcerpt: '$55/person (180-person minimum)',
+        },
+        {
+          label: 'AV',
+          pricingType: 'flat',
+          amount: 300,
+          sourceExcerpt: 'AV is $300',
+        },
+      ],
+      openQuestions: [],
+    },
+    6200,
+    1,
+    undefined,
+    1100,
+  );
+  const apiOutage = scoreExtractionError(
+    baseCase,
+    new ExtractionError({
+      message: 'HTTP 503: Unavailable',
+      kind: 'api_error',
+      rawMessage: baseCase.rawMessage,
+      statusCode: 503,
+      retryCount: 3,
+      latencyMs: 36000,
+      latencyWithoutRetriesMs: 900,
+    }),
+  );
+
+  const summary = summarizeScores([passScore, apiOutage]);
+  assert.equal(summary.apiAvailabilityRate, 0.5); // 1/2 API responses
+  assert.equal(summary.schemaValidityRate, 1); // 1/1 completed responses valid
+  assert.equal(summary.extractionAccuracyRate, 1); // 1/1 completed responses accurate
+  assert.equal(summary.endToEndSuccessRate, 0.5); // 1/2 overall
+  assert.equal(summary.avgLatency, 21100); // (6200 + 36000) / 2 incl. retries
+  assert.equal(summary.avgLatencyWithoutRetries, 1100); // completed response excl. retries
+});
+
+test('grades expectedPriceConflictDiscrepancy strictly without loosening subtotal check', () => {
+  const conflictEvalCase: EvalCase = {
+    id: 'conflict-check',
+    split: 'dev',
+    description: 'Conflicting DM vs contract',
+    rawMessage: 'Studio (CAD): DM agreed to $3,200 flat, PDF contract says $3,600.',
+    expected: {
+      category: 'photographer',
+      currency: 'CAD',
+      quoteKind: 'revision',
+      knownSubtotal: 3200,
+      unknownItemLabels: [],
+      minOpenQuestions: 1,
+      expectedPriceConflictDiscrepancy: 400,
+    },
+  };
+
+  const doubleCounted = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        { label: 'DM rate', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+        { label: 'Contract rate', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+      openQuestions: [
+        { question: 'Which price applies?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(doubleCounted.passed, false);
+  assert.equal(doubleCounted.criticalFinancialError, true);
+
+  const properConflict = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(properConflict.passed, true);
+
+  // Observed single-alternative shape also passes
+  const singleAltConflict = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(singleAltConflict.passed, true);
+
+  // Undetected unresolved conflict (no conflictingOptions) is a release blocker
+  const undetected = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(undetected.passed, false);
+  assert.ok(
+    undetected.releaseBlockers.some((b) => b.includes('Undetected unresolved price conflict')),
+  );
+});
+
+test('parseEvalArgs and resolveEvalProvider honor --provider, reject unknown flags, and never silently fall back to mock', () => {
+  const parsed = parseEvalArgs(['--split', 'dev', '--provider', 'gemini', '--show-raw']);
+  assert.deepEqual(parsed, { split: 'dev', provider: 'gemini', delayMs: undefined, showRaw: true });
+
+  const inline = parseEvalArgs(['--split=held-out-v2', '--provider=mock', '--delay-ms=250']);
+  assert.deepEqual(inline, { split: 'held-out-v2', provider: 'mock', delayMs: 250, showRaw: false });
+
+  assert.throws(() => parseEvalArgs(['--unknown-flag']), /Unsupported CLI argument/);
+  assert.throws(() => parseEvalArgs(['--provider', 'openai']), /Unsupported --provider/);
+  assert.throws(() => parseEvalArgs(['--split', 'nonexistent']), /Unsupported --split/);
+
+  // Explicit --provider gemini without GEMINI_API_KEY must throw, never fall back to mock
+  assert.throws(
+    () => resolveEvalProvider('gemini', {}),
+    /Refusing to fall back to mock/,
+  );
+  assert.equal(resolveEvalProvider('gemini', { GEMINI_API_KEY: 'test-key' }), 'gemini');
+  assert.equal(resolveEvalProvider(undefined, {}), 'mock');
 });

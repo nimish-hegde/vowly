@@ -1,4 +1,5 @@
 import type {
+  ChargeRequirement,
   CurrencyCode,
   ExtractedQuote,
   LineItem,
@@ -11,7 +12,17 @@ import type {
   VendorCategory,
 } from './types.ts';
 
-const VALID_CATEGORIES = new Set<VendorCategory>(['venue', 'photographer', 'dj', 'decor', 'other']);
+const VALID_CATEGORIES = new Set<VendorCategory>([
+  'venue',
+  'photographer',
+  'dj',
+  'decor',
+  'catering',
+  'entertainment',
+  'other',
+  'unknown',
+]);
+const VALID_CHARGE_TYPES = new Set<ChargeRequirement>(['mandatory', 'conditional', 'optional']);
 const VALID_QUOTE_KINDS = new Set<QuoteKind>(['initial', 'revision']);
 const VALID_CURRENCIES = new Set<CurrencyCode>(['CAD', 'USD', 'UNKNOWN']);
 const VALID_TAX_STATUS = new Set<TaxOrGratuityStatus>(['included', 'excluded', 'unknown']);
@@ -85,7 +96,9 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
     schemaErrors.push('vendorName must be a non-empty string');
   }
   if (!VALID_CATEGORIES.has(raw.category as VendorCategory)) {
-    schemaErrors.push(`category must be one of venue|photographer|dj|decor|other (got ${String(raw.category)})`);
+    schemaErrors.push(
+      `category must be one of venue|photographer|dj|decor|catering|entertainment|other|unknown (got ${String(raw.category)})`,
+    );
   }
   if (!Array.isArray(raw.events) || !raw.events.every((e) => typeof e === 'string')) {
     schemaErrors.push('events must be an array of strings');
@@ -137,8 +150,51 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
       checkOptionalNumber(entry, 'minGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'ratioGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'hours', path, schemaErrors);
+      if (entry.chargeType !== undefined) {
+        if (!VALID_CHARGE_TYPES.has(entry.chargeType as ChargeRequirement)) {
+          schemaErrors.push(
+            `${path}.chargeType must be mandatory|conditional|optional (got ${String(entry.chargeType)})`,
+          );
+        } else if (
+          (entry.chargeType === 'mandatory' || entry.chargeType === 'conditional') &&
+          entry.optionalAddon === true
+        ) {
+          schemaErrors.push(
+            `${path}.optionalAddon cannot be true when chargeType is "${entry.chargeType}"`,
+          );
+        }
+      }
       if (entry.optionalAddon !== undefined && typeof entry.optionalAddon !== 'boolean') {
         schemaErrors.push(`${path}.optionalAddon must be a boolean`);
+      }
+      if (entry.conflictingOptions !== undefined) {
+        if (!Array.isArray(entry.conflictingOptions)) {
+          schemaErrors.push(`${path}.conflictingOptions must be an array`);
+        } else {
+          entry.conflictingOptions.forEach((opt, optIdx) => {
+            const optPath = `${path}.conflictingOptions[${optIdx}]`;
+            if (!isObject(opt)) {
+              schemaErrors.push(`${optPath} must be an object`);
+              return;
+            }
+            if (typeof opt.sourceLabel !== 'string' || opt.sourceLabel.trim() === '') {
+              schemaErrors.push(`${optPath}.sourceLabel must be a non-empty string`);
+            }
+            if (!VALID_PRICING_TYPES.has(opt.pricingType as PricingType)) {
+              schemaErrors.push(`${optPath}.pricingType is invalid (got ${String(opt.pricingType)})`);
+            }
+            if (!isFiniteNumber(opt.amount)) {
+              schemaErrors.push(`${optPath}.amount must be a finite number`);
+            }
+            if (typeof opt.sourceExcerpt !== 'string' || opt.sourceExcerpt.trim() === '') {
+              schemaErrors.push(`${optPath}.sourceExcerpt must be a non-empty string`);
+            } else if (rawNorm && !rawNorm.includes(normalizeText(opt.sourceExcerpt))) {
+              sourceErrors.push(
+                `Unsupported conflicting price "${String(opt.sourceLabel)}" on "${String(entry.label)}" — sourceExcerpt not found verbatim in raw message`,
+              );
+            }
+          });
+        }
       }
       if (typeof entry.sourceExcerpt !== 'string' || entry.sourceExcerpt.trim() === '') {
         schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
