@@ -496,3 +496,37 @@ test('conditional overtime works across DJ, venue, and entertainment categories'
   assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 4 }).knownSubtotal, 800);
   assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 5 }).knownSubtotal, 950);
 });
+
+test('non-overtime conditional hourly charges (e.g., security above 100 guests) bill full hours', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Harbour Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: '5-hour room rental',
+        pricingType: 'flat',
+        amount: 1000,
+        hours: 5,
+        chargeType: 'mandatory',
+        sourceExcerpt: '5-hour room rental is $1,000 CAD',
+      },
+      {
+        label: 'Event security',
+        pricingType: 'per_hour',
+        amount: 100,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Security at $100/hour required above 100 guests',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const result = calculateQuoteTotal(quote, { guestCount: 160, hours: 5 });
+  assert.equal(result.knownSubtotal, 1500);
+});

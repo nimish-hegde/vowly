@@ -224,7 +224,7 @@ Running all 60 cases live on commit `a391f49` met every `v0.3` release criterion
 
 | Release criterion | Target | Final measured result (`a391f49`) | Status |
 |---|---|---|---|
-| Unit tests (`npm test`) | 100% pass | **39/39 passing** | **Met** |
+| Unit tests (`npm test`) | 100% pass | **40/40 passing** | **Met** |
 | Offline mock eval (`npm run eval`) | 100% pass | **60/60 passing** | **Met** |
 | Live regression pass rate | 100% (6/6) | **6/6 (100.0%)** | **Met** |
 | Critical financial errors (live) | 0 | **0** | **Met** |

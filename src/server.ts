@@ -94,11 +94,12 @@ const server = createServer(async (req, res) => {
         | ProviderName
         | undefined;
 
+      const sessionId = `quote-${nextId++}`;
       const outcome = await handleExtractRequest(
         {
           rawMessage,
           guestCount,
-          sessionId: `quote-${nextId}`,
+          sessionId,
           options: {
             provider: provider ?? (process.env.GEMINI_API_KEY ? 'gemini' : 'mock'),
             mockLookup: sampleMatch?.mockExtraction,
@@ -107,7 +108,6 @@ const server = createServer(async (req, res) => {
         telemetry,
       );
       if (outcome.session) {
-        nextId++;
         sessions.set(outcome.session.id, outcome.session);
       }
       sendJson(res, outcome.status, {

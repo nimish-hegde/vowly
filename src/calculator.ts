@@ -119,7 +119,7 @@ const WORD_TO_HOURS: Record<string, number> = {
 };
 
 const OVERTIME_PATTERN =
-  /\b(additional|extra|overtime|extension|extended)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\bovertime\b/i;
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
 
 function parseHoursFromText(text: string): number | undefined {
   const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
@@ -176,6 +176,7 @@ function findIncludedPackageHours(quote: ExtractedQuote, excludeIndex: number): 
 
 function isConditionalOvertimeItem(
   item: LineItem,
+  quote: ExtractedQuote,
   includedPackageHours: number | undefined,
 ): boolean {
   if (item.pricingType !== 'per_hour' || includedPackageHours === undefined) {
@@ -184,8 +185,12 @@ function isConditionalOvertimeItem(
   if (item.hours !== undefined && item.hours > 0) {
     return false;
   }
+  const matchesExtraHourRate =
+    item.amount !== null &&
+    quote.photographerDetails?.extraHourRate !== undefined &&
+    Math.abs(item.amount - quote.photographerDetails.extraHourRate) < 0.01;
   return (
-    item.chargeType === 'conditional' ||
+    matchesExtraHourRate ||
     OVERTIME_PATTERN.test(item.label) ||
     OVERTIME_PATTERN.test(item.sourceExcerpt)
   );
@@ -243,7 +248,7 @@ function calculateLineItem(
 
     case 'per_hour': {
       const includedPackageHours = findIncludedPackageHours(quote, itemIndex);
-      if (isConditionalOvertimeItem(item, includedPackageHours)) {
+      if (isConditionalOvertimeItem(item, quote, includedPackageHours)) {
         const requestedHours = ctx.hours ?? includedPackageHours!;
         const overtimeHours = Math.max(0, requestedHours - includedPackageHours!);
         return {
