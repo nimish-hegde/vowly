@@ -470,6 +470,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
+  const hasCompetingSelectedVendor = (
+    vendors: Vendor[],
+    candidate: Pick<Vendor, 'category' | 'eventIds'>,
+    excludeVendorId?: string
+  ): boolean =>
+    vendors.some((v) => {
+      if (excludeVendorId && v.id === excludeVendorId) return false;
+      if (v.status !== 'Booked' && !v.isPreferred) return false;
+      const sameCategory = v.category === candidate.category;
+      const overlapsEvent =
+        v.eventIds.some((eid) => candidate.eventIds.includes(eid)) ||
+        (v.eventIds.length === 0 && candidate.eventIds.length === 0);
+      return sameCategory && overlapsEvent;
+    });
+
   const saveDraftQuote = (
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
@@ -478,8 +493,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const cleanDraft: Quote = { ...draftQuote, approvalState: 'draft' };
     const targetId = vendorId ?? `ven-${Date.now()}`;
     const vendorName =
+      newVendorPayload?.name?.trim() ||
       (vendorId && activeWorkspace.vendors.find((v) => v.id === vendorId)?.name) ||
-      newVendorPayload?.name ||
       'Vendor';
 
     mutateActive(
@@ -491,6 +506,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             v.id === vendorId
               ? {
                   ...v,
+                  ...(newVendorPayload
+                    ? {
+                        name: newVendorPayload.name.trim() || v.name,
+                        category: newVendorPayload.category,
+                        eventIds: newVendorPayload.eventIds,
+                        location: newVendorPayload.location,
+                        isDemoVenue: newVendorPayload.isDemoVenue ?? v.isDemoVenue,
+                      }
+                    : {}),
                   status: v.status === 'Booked' ? 'Booked' : 'Revision pending',
                   draftQuote: cleanDraft,
                 }
@@ -512,6 +536,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             }),
             id: targetId,
             status: 'Revision pending',
+            isPreferred: false,
             quotes: [],
             draftQuote: cleanDraft,
           };
@@ -558,8 +583,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const cleanQuote: Quote = { ...approvedQuote, approvalState: 'approved' };
     const targetId = vendorId ?? `ven-${Date.now()}`;
     const vendorName =
+      newVendorPayload?.name?.trim() ||
       (vendorId && activeWorkspace.vendors.find((v) => v.id === vendorId)?.name) ||
-      newVendorPayload?.name ||
       'Vendor';
 
     mutateActive(
@@ -570,8 +595,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           nextVendors = ws.vendors.map((v) => {
             if (v.id !== vendorId) return v;
             const otherQuotes = v.quotes.filter((q) => q.id !== cleanQuote.id);
+            const updatedCategory = newVendorPayload ? newVendorPayload.category : v.category;
+            const updatedEventIds = newVendorPayload ? newVendorPayload.eventIds : v.eventIds;
+            const hasComp = hasCompetingSelectedVendor(
+              ws.vendors,
+              { category: updatedCategory, eventIds: updatedEventIds },
+              v.id
+            );
             return {
               ...v,
+              ...(newVendorPayload
+                ? {
+                    name: newVendorPayload.name.trim() || v.name,
+                    category: updatedCategory,
+                    eventIds: updatedEventIds,
+                    location: newVendorPayload.location,
+                    isDemoVenue: newVendorPayload.isDemoVenue ?? v.isDemoVenue,
+                  }
+                : {}),
+              isPreferred: v.status === 'Booked' ? v.isPreferred : v.isPreferred && !hasComp,
               status: v.status === 'Booked' ? 'Booked' : 'Quoted',
               quotes: [...otherQuotes, cleanQuote],
               activeQuoteId: cleanQuote.id,
@@ -579,21 +621,24 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
             };
           });
         } else {
+          const basePayload = newVendorPayload ?? {
+            name: vendorName,
+            category: 'other' as const,
+            eventIds: ws.events[0] ? [ws.events[0].id] : [],
+            location: cleanQuote.locationContext ?? ws.location,
+            contactName: '',
+            contactEmail: '',
+            contactPhone: '',
+            status: 'Quoted' as const,
+            isPreferred: true,
+            notes: '',
+          };
+          const hasComp = hasCompetingSelectedVendor(ws.vendors, basePayload);
           const created: Vendor = {
-            ...(newVendorPayload ?? {
-              name: vendorName,
-              category: 'other',
-              eventIds: ws.events[0] ? [ws.events[0].id] : [],
-              location: cleanQuote.locationContext ?? ws.location,
-              contactName: '',
-              contactEmail: '',
-              contactPhone: '',
-              status: 'Quoted',
-              isPreferred: true,
-              notes: '',
-            }),
+            ...basePayload,
             id: targetId,
             status: 'Quoted',
+            isPreferred: hasComp ? false : basePayload.isPreferred,
             quotes: [cleanQuote],
             activeQuoteId: cleanQuote.id,
             draftQuote: undefined,

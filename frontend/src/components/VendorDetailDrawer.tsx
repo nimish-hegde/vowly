@@ -430,16 +430,35 @@ export function VendorDetailDrawer({
                   <select
                     id="drawer-status"
                     value={vendor.status}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const nextStatus = e.target.value as VendorStatus;
+                      if (nextStatus === 'Booked') {
+                        if (vendor.status !== 'Booked' && !hasUnresolvedBlockers) {
+                          onOpenBooking(vendor.id);
+                        }
+                        return;
+                      }
                       updateVendor(vendor.id, {
-                        status: e.target.value as VendorStatus,
-                      })
-                    }
+                        status: nextStatus,
+                      });
+                    }}
                     className="rounded-lg border border-[#E5DED2] bg-[#FAF8F4] px-2.5 py-1.5 text-xs font-medium text-[#22201D]"
                   >
                     {STATUS_OPTIONS.map((st) => (
-                      <option key={st} value={st}>
-                        {st}
+                      <option
+                        key={st}
+                        value={st}
+                        disabled={
+                          st === 'Booked' &&
+                          vendor.status !== 'Booked' &&
+                          hasUnresolvedBlockers
+                        }
+                      >
+                        {st === 'Booked' && vendor.status !== 'Booked'
+                          ? hasUnresolvedBlockers
+                            ? 'Booked (resolve blockers first)'
+                            : 'Booked (confirm booking...)'
+                          : st}
                       </option>
                     ))}
                   </select>
