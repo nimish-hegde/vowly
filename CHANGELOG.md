@@ -27,7 +27,9 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
   - Added deterministic conflict normalization (`normalizeConflictingOptions`) so single-alternative `conflictingOptions` + primary `amount` are detected, deduplicated, and block approval identically to full-list `conflictingOptions`; undetected price conflicts now count as release blockers.
   - Tightened `venue` vs. `unknown` classification so dinner packages, per-person pricing, setup fees, or minimum guest counts alone require explicit physical-space evidence rather than defaulting to `venue`.
   - Added strict CLI parsing (`--provider gemini|ollama|mock`) to `src/eval.ts` so unsupported flags fail loudly and explicitly requested live runs never silently fall back to `mock`.
-- Unit tests: `37/37` passing offline. Mock evals: `60/60`.
+- Recorded live verification of commit `4501ef3` (**59/60 (98.3%)**, **6/6** regression, **25/25** original held-out, **12/12** `held-out-v2`, **100%** API availability & schema validity) and fixed the single remaining failure (`photo-hourly-missing-mini`):
+  - Updated `src/calculator.ts` so conditional overtime / additional-hours `per_hour` charges alongside a flat base package only bill hours exceeding the included package duration (`max(0, requestedHours - includedHours)`), across photography, DJ, venue, and entertainment quotes.
+- Unit tests: `39/39` passing offline. Mock evals: `60/60`.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 

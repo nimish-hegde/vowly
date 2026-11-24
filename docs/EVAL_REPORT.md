@@ -172,25 +172,37 @@ Re-running all four splits live after the P0–P2 fixes jumped overall accuracy 
    - **Root cause:** `src/eval.ts` only read `EXTRACTOR_PROVIDER` from the environment and ignored unknown CLI flags, so `--provider gemini` was silently ignored and could fall back to `mock` if `GEMINI_API_KEY` was unset.
    - **Fix:** Added strict [`parseEvalArgs`](../src/eval.ts) and [`resolveEvalProvider`](../src/eval.ts) to support `--provider gemini|ollama|mock`, reject unknown flags, and refuse to fall back to `mock` when a live provider is explicitly requested.
 
-### Offline validation after these fixes
+## 9. Fifth live run — 60-case verification of commit `4501ef3` (`gemini-3.5-flash-lite`)
 
-- **Unit tests (`npm test`):** **37/37 passed** (including all three observed single-alternative live conflict shapes, deduplication, review approval blocking + resolution to either price, undetected conflict release blocker, and strict `--provider` CLI tests).
-- **Offline mock eval (`npm run eval`):** **60/60 passed (100.0%)**, 0 critical financial errors, 0 currency guesses, 0 release blockers (`dev` 17/17, `regression` 6/6, `held-out` 25/25, `held-out-v2` 12/12).
+Re-running all four splits live after conflict normalization, the tighter `unknown` category rule, and `--provider gemini` enforcement cleared **every single held-out and regression case** with 100% availability and schema validity:
 
-### Status against `v0.3` release criteria
+| Metric | Baseline (45 cases) | After `65f1392` (60 cases) | After `4501ef3` (60 cases) |
+|---|---:|---:|---:|
+| End-to-end success | 36/45 (80.0%) | 55/60 (91.7%) | **59/60 (98.3%)** |
+| API availability | 44/45 (97.8%) | 60/60 (100.0%) | **60/60 (100.0%)** |
+| Schema validity | 44/44 (100.0%) | 60/60 (100.0%) | **60/60 (100.0%)** |
+| Regression split | 4/6 (66.7%) | 6/6 (100.0%) | **6/6 (100.0%)** |
+| Dev split | 12/14 (85.7%) | 15/17 (88.2%) | **16/17 (94.1%)** |
+| Original held-out split | 20/25 (80.0%) | 25/25 (100.0%) | **25/25 (100.0%)** |
+| Fresh `held-out-v2` split | — | 9/12 (75.0%) | **12/12 (100.0%)** |
+| Critical financial errors | 1 | 0 | **1** (`photo-hourly-missing-mini` — calculator bug below) |
+| Unsupported currency guesses | 0 | 0 | **0** |
 
-| Metric | Release bar | Live (`65f1392`) | Post-fix status |
-|---|---|---|---|
-| Unit tests (`npm test`) | 100% pass | 33/33 | **37/37 passing offline** |
-| Regression pass rate (live) | 100% (6/6) | **6/6 (100.0%)** | **Met** (re-verify after prompt tweak) |
-| Original held-out accuracy (live) | Preserved baseline | **25/25 (100.0%)** | **Met** (re-verify after prompt tweak) |
-| Critical financial errors (live) | 0 | **0** | **Met** |
-| Unsupported currency guesses (live) | 0 | **0** | **Met** |
-| Schema validity (live) | ≥99% | **60/60 (100.0%)** | **Met** |
-| Average extraction latency (live) | <5s | **~1.90s** | **Met** |
-| Conflict detection & ambiguous category (live) | 0 undetected conflicts | 3 undetected conflicts, 2 ambiguous categories | **Re-verify live on `dev` + `held-out-v2`** |
+### Root cause & fix for the single remaining failure (`photo-hourly-missing-mini`)
 
-### PowerShell commands for final live verification
+- **What happened:** Gemini extracted the quote accurately — a `$2,500` flat package covering 5 hours plus a `conditional` `$300/hr` additional-hours rate. The deterministic calculator in `src/calculator.ts` multiplied `$300 × 5` on top of the `$2,500` flat package, producing `$4,000` instead of `$2,500` at 5 hours.
+- **Fix (`src/calculator.ts`):** When a non-optional `per_hour` line item is conditional or labeled as overtime/additional hours alongside a flat/included base package with a known duration (from sibling `.hours`, `photographerDetails.hoursIncluded`, or duration text like `"5-hour"` / `"five hours"`), the calculator now bills only `Math.max(0, requestedHours - includedPackageHours) × hourlyRate`.
+  - 5 hours: `$2,500` (`0` overtime hours)
+  - 6 hours: `$2,800` (`1` overtime hour × `$300`)
+  - 7 hours: `$3,100` (`2` overtime hours × `$300`)
+  - Works identically across photography, DJ, venue, and entertainment packages without changing standalone pure-hourly rates.
+
+### Offline validation after the overtime fix
+
+- **Unit tests (`npm test`):** **39/39 passed** (including the observed `photo-hourly-missing-mini` raw response at 4/5/6/7/unset hours and equivalent DJ, venue, and entertainment overtime scenarios).
+- **Offline mock eval (`npm run eval`):** **60/60 passed (100.0%)**, 0 critical financial errors, 0 currency guesses, 0 release blockers.
+
+### PowerShell commands for final `dev` + full live confirmation
 
 ```powershell
 git pull
@@ -198,8 +210,8 @@ $env:GEMINI_API_KEY="your-free-key"
 $env:GEMINI_MODEL="gemini-3.5-flash-lite"
 
 npm test
-node src/eval.ts --provider gemini --split regression --show-raw
 node src/eval.ts --provider gemini --split dev --show-raw
+node src/eval.ts --provider gemini --split regression --show-raw
 node src/eval.ts --provider gemini --split held-out --show-raw
 node src/eval.ts --provider gemini --split held-out-v2 --show-raw
 ```

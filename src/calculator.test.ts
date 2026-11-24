@@ -350,3 +350,149 @@ test('deduplicates equivalent candidates in conflictingOptions and avoids false 
   const result = calculateQuoteTotal(quote);
   assert.equal(result.priceConflicts.length, 0);
 });
+
+test('conditional overtime bills only hours exceeding included package duration (photo-hourly-missing-mini)', () => {
+  const observedPhotoResponse: ExtractedQuote = {
+    vendorName: 'Wedding Photographer',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    photographerDetails: {
+      hoursIncluded: 5,
+      extraHourRate: 300,
+      teamSize: 2,
+      includesMiniShoot: 'unknown',
+    },
+    paymentTerms: {
+      depositPercent: 30,
+      methodRule: 'etransfer',
+      scheduleNotes: '30% deposit by e-transfer to hold the date',
+    },
+    lineItems: [
+      {
+        label: '5-hour wedding photography package (2 photographers)',
+        pricingType: 'flat',
+        amount: 2500,
+        chargeType: 'mandatory',
+        optionalAddon: false,
+        sourceExcerpt: 'we charge $2,500 CAD for five hours with two photographers',
+      },
+      {
+        label: 'Additional hours',
+        pricingType: 'per_hour',
+        amount: 300,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Additional hours are $300/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 4 }).knownSubtotal, 2500);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 5 }).knownSubtotal, 2500);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 6 }).knownSubtotal, 2800);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse, { hours: 7 }).knownSubtotal, 3100);
+  assert.equal(calculateQuoteTotal(observedPhotoResponse).knownSubtotal, 2500);
+});
+
+test('conditional overtime works across DJ, venue, and entertainment categories', () => {
+  const djQuote: ExtractedQuote = {
+    vendorName: 'Pulse DJs',
+    category: 'dj',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Reception DJ package (4 hours)',
+        pricingType: 'flat',
+        amount: 1600,
+        hours: 4,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Reception DJ package (4 hours) is $1,600 CAD',
+      },
+      {
+        label: 'Overtime',
+        pricingType: 'per_hour',
+        amount: 200,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Overtime is $200/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 4 }).knownSubtotal, 1600);
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 5 }).knownSubtotal, 1800);
+  assert.equal(calculateQuoteTotal(djQuote, { hours: 6 }).knownSubtotal, 2000);
+
+  const venueQuote: ExtractedQuote = {
+    vendorName: 'Cedar Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: '6-hour ballroom rental',
+        pricingType: 'flat',
+        amount: 8000,
+        chargeType: 'mandatory',
+        sourceExcerpt: '6-hour ballroom rental is $8,000 CAD',
+      },
+      {
+        label: 'Extra hour extension',
+        pricingType: 'per_hour',
+        amount: 500,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Extra hour extension is $500/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(venueQuote, { hours: 6 }).knownSubtotal, 8000);
+  assert.equal(calculateQuoteTotal(venueQuote, { hours: 7 }).knownSubtotal, 8500);
+
+  const entertainmentQuote: ExtractedQuote = {
+    vendorName: 'Flashbox Booths',
+    category: 'entertainment',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'included',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Photobooth package',
+        pricingType: 'flat',
+        amount: 650,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Photobooth package is $650 CAD for three hours',
+      },
+      {
+        label: 'Additional hours',
+        pricingType: 'per_hour',
+        amount: 150,
+        chargeType: 'conditional',
+        optionalAddon: false,
+        sourceExcerpt: 'Additional hours are $150/hr',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 3 }).knownSubtotal, 650);
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 4 }).knownSubtotal, 800);
+  assert.equal(calculateQuoteTotal(entertainmentQuote, { hours: 5 }).knownSubtotal, 950);
+});
