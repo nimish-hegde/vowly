@@ -19,6 +19,7 @@ import {
   formatShortCad,
   formatSignedCad,
   getVendorActiveQuote,
+  getVendorBookingEligibility,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { VendorStatus } from '../types/vowly';
@@ -146,10 +147,11 @@ export function VendorDetailDrawer({
             : null
       : null;
 
-  const hasUnresolvedBlockers =
-    Boolean(vendor.draftQuote) ||
-    (calc?.unresolvedMandatoryFeesCount ?? 0) > 0 ||
-    (calc?.unresolvedConflictsCount ?? 0) > 0;
+  const bookingEligibility = getVendorBookingEligibility(
+    vendor,
+    activeWorkspace.events
+  );
+  const hasUnresolvedBlockers = !bookingEligibility.canBook;
 
   const handleDrawerGuestInput = (raw: string) => {
     if (!/^\d*$/.test(raw)) return;

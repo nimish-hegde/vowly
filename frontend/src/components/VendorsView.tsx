@@ -15,6 +15,7 @@ import {
   formatCurrency,
   formatShortCad,
   getVendorActiveQuote,
+  getVendorBookingEligibility,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { VendorCategory, VendorStatus } from '../types/vowly';
@@ -443,15 +444,31 @@ export function VendorsView({
                         </div>
 
                         <div className="flex items-center gap-3">
-                          {vendor.status !== 'Booked' && activeQuote && (
-                            <button
-                              type="button"
-                              onClick={() => onOpenBooking(vendor.id)}
-                              className="font-medium text-[#234733] hover:underline cursor-pointer"
-                            >
-                              Book
-                            </button>
-                          )}
+                          {vendor.status !== 'Booked' && activeQuote && (() => {
+                            const eligibility = getVendorBookingEligibility(
+                              vendor,
+                              activeWorkspace.events
+                            );
+                            return (
+                              <button
+                                type="button"
+                                disabled={!eligibility.canBook}
+                                title={
+                                  eligibility.canBook
+                                    ? 'Confirm booking'
+                                    : eligibility.blockingReasons.join(' ')
+                                }
+                                onClick={() => onOpenBooking(vendor.id)}
+                                className={
+                                  eligibility.canBook
+                                    ? 'font-medium text-[#234733] hover:underline cursor-pointer'
+                                    : 'font-medium text-[#9A9388] cursor-not-allowed'
+                                }
+                              >
+                                {eligibility.canBook ? 'Book' : 'Resolve blockers'}
+                              </button>
+                            );
+                          })()}
                           <button
                             type="button"
                             onClick={() => onOpenVendor(vendor.id)}

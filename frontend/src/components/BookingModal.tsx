@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { Check, X } from 'lucide-react';
+import { AlertTriangle, Check, X } from 'lucide-react';
 import {
+  buildBookingMilestones,
   calculateQuoteFinancials,
+  DEFAULT_DEPOSIT_ALREADY_PAID,
   formatCurrency,
   getVendorActiveQuote,
+  getVendorBookingEligibility,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { DemoDataNote } from './DemoLabel';
@@ -17,6 +20,9 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
   const { activeWorkspace, confirmBooking } = useWorkspace();
   const vendor = activeWorkspace.vendors.find((v) => v.id === vendorId);
   const activeQuote = vendor ? getVendorActiveQuote(vendor) : undefined;
+  const eligibility = vendor
+    ? getVendorBookingEligibility(vendor, activeWorkspace.events)
+    : null;
   const calc =
     vendor && activeQuote
       ? calculateQuoteFinancials(
@@ -28,7 +34,9 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
 
   const [contractTotal, setContractTotal] = useState<string>('');
   const [depositAmount, setDepositAmount] = useState<string>('');
-  const [depositAlreadyPaid, setDepositAlreadyPaid] = useState<boolean>(true);
+  const [depositAlreadyPaid, setDepositAlreadyPaid] = useState<boolean>(
+    DEFAULT_DEPOSIT_ALREADY_PAID
+  );
   const [depositDate, setDepositDate] = useState<string>(
     new Date().toISOString().slice(0, 10)
   );
@@ -52,7 +60,7 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
 
     setContractTotal(defaultTotal > 0 ? String(Math.round(defaultTotal * 100) / 100) : '');
     setDepositAmount(defaultDeposit > 0 ? String(defaultDeposit) : '');
-    setDepositAlreadyPaid(true);
+    setDepositAlreadyPaid(DEFAULT_DEPOSIT_ALREADY_PAID);
     setDepositDate('2026-11-24');
     setDepositPayer(activeWorkspace.coupleNames || 'Unassigned');
     setBalancePayer('Unassigned');
@@ -72,42 +80,27 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
 
   if (!vendor) return null;
 
+  const canBook = eligibility?.canBook ?? false;
   const totalNum = parseFloat(contractTotal) || 0;
   const depositNum = Math.min(totalNum, Math.max(0, parseFloat(depositAmount) || 0));
   const remainingNum = Math.max(0, Math.round((totalNum - depositNum) * 100) / 100);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (totalNum <= 0) return;
+    if (!canBook || totalNum <= 0) return;
 
-    const milestones = [];
-    if (depositNum > 0) {
-      milestones.push({
-        label: 'Booking Deposit',
-        amount: depositNum,
-        dueDate: depositDate || null,
-        status: depositAlreadyPaid ? ('Paid' as const) : ('Upcoming' as const),
-        paidDate: depositAlreadyPaid ? depositDate : undefined,
-        payer: depositPayer,
-        paidBy: depositAlreadyPaid
-          ? depositPayer === 'Unassigned'
-            ? activeWorkspace.coupleNames
-            : depositPayer
-          : undefined,
-        reminderEnabled: !depositAlreadyPaid && Boolean(depositDate),
-      });
-    }
-    if (remainingNum > 0) {
-      milestones.push({
-        label: 'Final Balance',
-        amount: remainingNum,
-        dueDate: balanceHasKnownDate ? balanceDueDate || null : null,
-        relativeDueLabel: balanceHasKnownDate ? undefined : balanceRelativeLabel,
-        status: balanceHasKnownDate ? ('Upcoming' as const) : ('Date TBD' as const),
-        payer: balancePayer,
-        reminderEnabled: balanceHasKnownDate && Boolean(balanceDueDate),
-      });
-    }
+    const milestones = buildBookingMilestones({
+      contractTotal: totalNum,
+      depositAmount: depositNum,
+      depositAlreadyPaid,
+      depositDate,
+      depositPayer,
+      coupleNames: activeWorkspace.coupleNames,
+      balanceHasKnownDate,
+      balanceDueDate,
+      balanceRelativeLabel,
+      balancePayer,
+    });
 
     confirmBooking({
       vendorId: vendor.id,
@@ -159,6 +152,20 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {!canBook && eligibility && eligibility.blockingReasons.length > 0 && (
+            <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/60 p-3.5 space-y-1">
+              <div className="flex items-center gap-2 text-xs font-semibold text-[#92400E]">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                Booking blocked until unresolved items are cleared
+              </div>
+              <ul className="list-disc pl-5 text-xs text-[#92400E] space-y-0.5">
+                {eligibility.blockingReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-[#22201D] mb-1">
@@ -310,10 +317,15 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
             </button>
             <button
               type="submit"
-              className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold rounded-xl bg-[#486755] text-white hover:bg-[#395344] cursor-pointer"
+              disabled={!canBook || totalNum <= 0}
+              className={`inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold rounded-xl ${
+                !canBook || totalNum <= 0
+                  ? 'bg-[#E5DED2] text-[#7A7368] cursor-not-allowed'
+                  : 'bg-[#486755] text-white hover:bg-[#395344] cursor-pointer'
+              }`}
             >
               <Check className="w-3.5 h-3.5" />
-              Confirm Booking & Activate Schedule
+              {canBook ? 'Confirm Booking & Activate Schedule' : 'Resolve Blockers First'}
             </button>
           </div>
         </form>

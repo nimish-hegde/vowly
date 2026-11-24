@@ -1,6 +1,7 @@
-import {
+import type {
   BudgetRow,
   PastelTone,
+  PaymentMilestone,
   Quote,
   QuoteLineItem,
   TaxHandling,
@@ -414,6 +415,122 @@ export function getVendorActiveQuote(vendor: Vendor): Quote | undefined {
     if (found) return found;
   }
   return vendor.quotes[vendor.quotes.length - 1];
+}
+
+export interface BookingEligibilityResult {
+  canBook: boolean;
+  blockingReasons: string[];
+}
+
+/**
+ * Centralized booking eligibility validation enforced across every booking UI
+ * entry point and inside confirmBooking.
+ */
+export function getVendorBookingEligibility(
+  vendor: Vendor,
+  events: WeddingEvent[]
+): BookingEligibilityResult {
+  const blockingReasons: string[] = [];
+  const activeQuote = getVendorActiveQuote(vendor);
+
+  if (!activeQuote || activeQuote.approvalState !== 'approved') {
+    blockingReasons.push('An approved quote is required before booking.');
+  }
+
+  if (vendor.draftQuote) {
+    blockingReasons.push(
+      'Resolve or approve the pending draft quote before confirming a booking.'
+    );
+  }
+
+  if (activeQuote) {
+    const calc = calculateQuoteFinancials(activeQuote, events, vendor.eventIds);
+    if (calc.isCurrencyUnknown) {
+      blockingReasons.push('Confirm quote currency (CAD or USD) before booking.');
+    }
+    if (calc.unresolvedMandatoryFeesCount > 0) {
+      blockingReasons.push(
+        `Resolve ${calc.unresolvedMandatoryFeesCount} unconfirmed mandatory ${
+          calc.unresolvedMandatoryFeesCount === 1 ? 'fee' : 'fees'
+        } before booking.`
+      );
+    }
+    if (calc.unresolvedConflictsCount > 0) {
+      blockingReasons.push(
+        `Resolve ${calc.unresolvedConflictsCount} conflicting price ${
+          calc.unresolvedConflictsCount === 1 ? 'figure' : 'figures'
+        } before booking.`
+      );
+    }
+  }
+
+  return {
+    canBook: blockingReasons.length === 0,
+    blockingReasons,
+  };
+}
+
+export const DEFAULT_DEPOSIT_ALREADY_PAID = false;
+
+export interface BuildBookingMilestonesInput {
+  contractTotal: number;
+  depositAmount: number;
+  depositAlreadyPaid?: boolean;
+  depositDate: string;
+  depositPayer: string;
+  coupleNames: string;
+  balanceHasKnownDate: boolean;
+  balanceDueDate: string;
+  balanceRelativeLabel: string;
+  balancePayer: string;
+}
+
+export function buildBookingMilestones(
+  input: BuildBookingMilestonesInput
+): Array<
+  Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
+> {
+  const totalNum = Math.max(0, input.contractTotal);
+  const depositNum = Math.min(totalNum, Math.max(0, input.depositAmount));
+  const remainingNum = Math.max(0, Math.round((totalNum - depositNum) * 100) / 100);
+  const depositPaid = input.depositAlreadyPaid ?? DEFAULT_DEPOSIT_ALREADY_PAID;
+
+  const milestones: Array<
+    Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
+  > = [];
+
+  if (depositNum > 0) {
+    milestones.push({
+      label: 'Booking Deposit',
+      amount: depositNum,
+      dueDate: input.depositDate || null,
+      status: depositPaid ? 'Paid' : 'Upcoming',
+      paidDate: depositPaid ? input.depositDate : undefined,
+      payer: input.depositPayer,
+      paidBy: depositPaid
+        ? input.depositPayer === 'Unassigned'
+          ? input.coupleNames
+          : input.depositPayer
+        : undefined,
+      reminderEnabled: !depositPaid && Boolean(input.depositDate),
+    });
+  }
+
+  if (remainingNum > 0) {
+    milestones.push({
+      label: 'Final Balance',
+      amount: remainingNum,
+      dueDate: input.balanceHasKnownDate ? input.balanceDueDate || null : null,
+      relativeDueLabel: input.balanceHasKnownDate
+        ? undefined
+        : input.balanceRelativeLabel,
+      status: input.balanceHasKnownDate ? 'Upcoming' : 'Date TBD',
+      payer: input.balancePayer,
+      reminderEnabled: input.balanceHasKnownDate && Boolean(input.balanceDueDate),
+    });
+  }
+
+  return milestones;
 }
 
 /**

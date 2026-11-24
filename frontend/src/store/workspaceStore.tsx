@@ -5,6 +5,11 @@ import {
   WorkspaceFinancialSummary,
 } from '../engine/financialCalculator';
 import {
+  applyApproveQuote,
+  applyConfirmBooking,
+  applySaveDraftQuote,
+} from './workspaceTransitions';
+import {
   ActivityItem,
   FollowUpTask,
   ManualExpense,
@@ -470,101 +475,22 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  const hasCompetingSelectedVendor = (
-    vendors: Vendor[],
-    candidate: Pick<Vendor, 'category' | 'eventIds'>,
-    excludeVendorId?: string
-  ): boolean =>
-    vendors.some((v) => {
-      if (excludeVendorId && v.id === excludeVendorId) return false;
-      if (v.status !== 'Booked' && !v.isPreferred) return false;
-      const sameCategory = v.category === candidate.category;
-      const overlapsEvent =
-        v.eventIds.some((eid) => candidate.eventIds.includes(eid)) ||
-        (v.eventIds.length === 0 && candidate.eventIds.length === 0);
-      return sameCategory && overlapsEvent;
-    });
-
   const saveDraftQuote = (
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
     draftQuote: Quote
   ): string => {
-    const cleanDraft: Quote = { ...draftQuote, approvalState: 'draft' };
     const targetId = vendorId ?? `ven-${Date.now()}`;
+    const existingVendor = vendorId
+      ? activeWorkspace.vendors.find((v) => v.id === vendorId)
+      : undefined;
     const vendorName =
-      newVendorPayload?.name?.trim() ||
-      (vendorId && activeWorkspace.vendors.find((v) => v.id === vendorId)?.name) ||
-      'Vendor';
+      existingVendor?.name || newVendorPayload?.name?.trim() || 'Vendor';
 
     mutateActive(
-      (ws) => {
-        const exists = vendorId ? ws.vendors.some((v) => v.id === vendorId) : false;
-        let nextVendors: Vendor[];
-        if (exists && vendorId) {
-          nextVendors = ws.vendors.map((v) =>
-            v.id === vendorId
-              ? {
-                  ...v,
-                  ...(newVendorPayload
-                    ? {
-                        name: newVendorPayload.name.trim() || v.name,
-                        category: newVendorPayload.category,
-                        eventIds: newVendorPayload.eventIds,
-                        location: newVendorPayload.location,
-                        isDemoVenue: newVendorPayload.isDemoVenue ?? v.isDemoVenue,
-                      }
-                    : {}),
-                  status: v.status === 'Booked' ? 'Booked' : 'Revision pending',
-                  draftQuote: cleanDraft,
-                }
-              : v
-          );
-        } else {
-          const created: Vendor = {
-            ...(newVendorPayload ?? {
-              name: vendorName,
-              category: 'other',
-              eventIds: ws.events[0] ? [ws.events[0].id] : [],
-              location: cleanDraft.locationContext ?? ws.location,
-              contactName: '',
-              contactEmail: '',
-              contactPhone: '',
-              status: 'Revision pending',
-              isPreferred: false,
-              notes: '',
-            }),
-            id: targetId,
-            status: 'Revision pending',
-            isPreferred: false,
-            quotes: [],
-            draftQuote: cleanDraft,
-          };
-          nextVendors = [created, ...ws.vendors];
-        }
-
-        const taskId = `task-draft-${targetId}`;
-        const existingTask = ws.tasks.some((t) => t.id === taskId);
-        const draftTask: FollowUpTask = {
-          id: taskId,
-          title: `Resolve draft quote for ${vendorName}`,
-          description: 'Unresolved fees, conflicts, or currency pending.',
-          vendorId: targetId,
-          assigneePartnerId: ws.partners[0]?.id ?? 'p-meera',
-          priority: 'high',
-          kind: 'draft_quote',
-          status: 'Open',
-          dueLabel: 'Draft pending approval',
-        };
-
-        return {
-          ...ws,
-          vendors: nextVendors,
-          tasks: existingTask
-            ? ws.tasks.map((t) => (t.id === taskId ? draftTask : t))
-            : [draftTask, ...ws.tasks],
-        };
-      },
+      (ws) =>
+        applySaveDraftQuote(ws, vendorId, newVendorPayload, draftQuote, targetId)
+          .workspace,
       {
         summary: `Saved draft quote for ${vendorName}.`,
         category: 'quote',
@@ -582,86 +508,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   ): string => {
     const cleanQuote: Quote = { ...approvedQuote, approvalState: 'approved' };
     const targetId = vendorId ?? `ven-${Date.now()}`;
+    const existingVendor = vendorId
+      ? activeWorkspace.vendors.find((v) => v.id === vendorId)
+      : undefined;
     const vendorName =
       newVendorPayload?.name?.trim() ||
-      (vendorId && activeWorkspace.vendors.find((v) => v.id === vendorId)?.name) ||
+      existingVendor?.draftVendorMetadata?.name?.trim() ||
+      existingVendor?.name ||
       'Vendor';
 
     mutateActive(
-      (ws) => {
-        const exists = vendorId ? ws.vendors.some((v) => v.id === vendorId) : false;
-        let nextVendors: Vendor[];
-        if (exists && vendorId) {
-          nextVendors = ws.vendors.map((v) => {
-            if (v.id !== vendorId) return v;
-            const otherQuotes = v.quotes.filter((q) => q.id !== cleanQuote.id);
-            const updatedCategory = newVendorPayload ? newVendorPayload.category : v.category;
-            const updatedEventIds = newVendorPayload ? newVendorPayload.eventIds : v.eventIds;
-            const hasComp = hasCompetingSelectedVendor(
-              ws.vendors,
-              { category: updatedCategory, eventIds: updatedEventIds },
-              v.id
-            );
-            return {
-              ...v,
-              ...(newVendorPayload
-                ? {
-                    name: newVendorPayload.name.trim() || v.name,
-                    category: updatedCategory,
-                    eventIds: updatedEventIds,
-                    location: newVendorPayload.location,
-                    isDemoVenue: newVendorPayload.isDemoVenue ?? v.isDemoVenue,
-                  }
-                : {}),
-              isPreferred: v.status === 'Booked' ? v.isPreferred : v.isPreferred && !hasComp,
-              status: v.status === 'Booked' ? 'Booked' : 'Quoted',
-              quotes: [...otherQuotes, cleanQuote],
-              activeQuoteId: cleanQuote.id,
-              draftQuote: undefined,
-            };
-          });
-        } else {
-          const basePayload = newVendorPayload ?? {
-            name: vendorName,
-            category: 'other' as const,
-            eventIds: ws.events[0] ? [ws.events[0].id] : [],
-            location: cleanQuote.locationContext ?? ws.location,
-            contactName: '',
-            contactEmail: '',
-            contactPhone: '',
-            status: 'Quoted' as const,
-            isPreferred: true,
-            notes: '',
-          };
-          const hasComp = hasCompetingSelectedVendor(ws.vendors, basePayload);
-          const created: Vendor = {
-            ...basePayload,
-            id: targetId,
-            status: 'Quoted',
-            isPreferred: hasComp ? false : basePayload.isPreferred,
-            quotes: [cleanQuote],
-            activeQuoteId: cleanQuote.id,
-            draftQuote: undefined,
-          };
-          nextVendors = [created, ...ws.vendors];
-        }
-
-        const nextTasks = ws.tasks.map((t) =>
-          t.vendorId === targetId &&
-          (t.kind === 'draft_quote' || t.kind === 'missing_quote' || t.kind === 'unresolved_fee')
-            ? { ...t, status: 'Done' as const }
-            : t
-        );
-
-        return {
-          ...ws,
-          vendors: nextVendors,
-          tasks: nextTasks,
-        };
-      },
+      (ws) =>
+        applyApproveQuote(ws, vendorId, newVendorPayload, cleanQuote, targetId)
+          .workspace,
       {
         summary: `Approved quote "${cleanQuote.title}" for ${vendorName}.`,
-        category: cleanQuote.revisions && cleanQuote.revisions.length > 0 ? 'revision' : 'quote',
+        category:
+          cleanQuote.revisions && cleanQuote.revisions.length > 0
+            ? 'revision'
+            : 'quote',
       }
     );
 
@@ -674,66 +539,38 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     contractTotal,
     milestones,
   }) => {
-    const vendor = activeWorkspace.vendors.find((v) => v.id === vendorId);
-    if (!vendor) return;
-
-    const today = new Date().toISOString().slice(0, 10);
-    const linkedEvents = vendor.eventIds
-      .map((id) => activeWorkspace.events.find((e) => e.id === id))
-      .filter(Boolean) as WeddingEvent[];
-    const eventId = linkedEvents.length === 1 ? linkedEvents[0].id : undefined;
-    const eventLabel =
-      linkedEvents.length === 0
-        ? 'Whole wedding'
-        : linkedEvents.length === 1
-          ? linkedEvents[0].name
-          : `Shared (${linkedEvents.length} events)`;
-
-    const createdMilestones: PaymentMilestone[] = milestones.map((m, idx) => ({
-      ...m,
-      id: `pay-${vendorId}-${Date.now()}-${idx}`,
+    const result = applyConfirmBooking(activeWorkspace, {
       vendorId,
-      vendorName: vendor.name,
-      isDemoVenue: vendor.isDemoVenue,
-      eventId,
-      eventLabel,
-      payer: m.payer ?? 'Unassigned',
-    }));
+      contractTotal,
+      milestones,
+    });
+    if (!result.booked) {
+      pushToast(
+        result.blockingReasons[0] ?? 'Cannot confirm booking until blockers are resolved.',
+        'amber'
+      );
+      return;
+    }
 
+    const vendorName = result.vendorName ?? 'Vendor';
     mutateActive(
-      (ws) => ({
-        ...ws,
-        vendors: ws.vendors.map((v) => {
-          if (v.id === vendorId) {
-            return {
-              ...v,
-              status: 'Booked',
-              isPreferred: true,
-              bookedContractTotal: contractTotal,
-              bookedDate: today,
-            };
-          }
-          const sameCategory = v.category === vendor.category;
-          const overlaps = v.eventIds.some((eid) => vendor.eventIds.includes(eid));
-          if (sameCategory && overlaps && v.status !== 'Booked') {
-            return { ...v, isPreferred: false };
-          }
-          return v;
-        }),
-        payments: [
-          ...ws.payments.filter((p) => p.vendorId !== vendorId),
-          ...createdMilestones,
-        ],
-      }),
+      (ws) => {
+        const checked = applyConfirmBooking(ws, {
+          vendorId,
+          contractTotal,
+          milestones,
+        });
+        return checked.booked ? checked.workspace : ws;
+      },
       {
-        summary: `Confirmed booking with ${vendor.name} (CAD $${Math.round(
+        summary: `Confirmed booking with ${vendorName} (CAD $${Math.round(
           contractTotal
         ).toLocaleString()}).`,
         category: 'booking',
       }
     );
 
-    pushToast(`Booking confirmed for ${vendor.name}`);
+    pushToast(`Booking confirmed for ${vendorName}`);
   };
 
   const upsertManualExpense = (expense: ManualExpense) => {

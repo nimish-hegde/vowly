@@ -187,6 +187,14 @@ export interface Quote {
   revisions?: QuoteRevisionRecord[];
 }
 
+export interface DraftVendorMetadata {
+  name: string;
+  category: VendorCategory;
+  eventIds: string[];
+  location: string;
+  isDemoVenue?: boolean;
+}
+
 export interface Vendor {
   id: string;
   name: string;
@@ -203,6 +211,7 @@ export interface Vendor {
   quotes: Quote[];
   activeQuoteId?: string;
   draftQuote?: Quote; // saved draft with unresolved ambiguities
+  draftVendorMetadata?: DraftVendorMetadata; // staged metadata edits held until draft approval
   bookedContractTotal?: number; // locked agreed total on explicit booking confirmation
   bookedDate?: string;
 }

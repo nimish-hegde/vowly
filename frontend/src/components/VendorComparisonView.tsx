@@ -11,6 +11,7 @@ import {
   calculateVendorComparison,
   formatCurrency,
   formatShortCad,
+  getVendorBookingEligibility,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { DemoDataNote, StatusText } from './DemoLabel';
@@ -439,15 +440,33 @@ export function VendorComparisonView({
                           <Check className="w-3.5 h-3.5" />
                           Booked
                         </span>
-                      ) : vendor.isPreferred ? (
-                        <button
-                          type="button"
-                          onClick={() => onOpenBooking(vendor.id)}
-                          className="w-full py-2 px-3 rounded-xl bg-[#486755] text-white font-semibold hover:bg-[#395344] cursor-pointer"
-                        >
-                          Confirm booking
-                        </button>
-                      ) : (
+                      ) : vendor.isPreferred ? (() => {
+                        const eligibility = getVendorBookingEligibility(
+                          vendor,
+                          activeWorkspace.events
+                        );
+                        return (
+                          <button
+                            type="button"
+                            disabled={!eligibility.canBook}
+                            title={
+                              eligibility.canBook
+                                ? 'Confirm booking'
+                                : eligibility.blockingReasons.join(' ')
+                            }
+                            onClick={() => onOpenBooking(vendor.id)}
+                            className={`w-full py-2 px-3 rounded-xl font-semibold ${
+                              eligibility.canBook
+                                ? 'bg-[#486755] text-white hover:bg-[#395344] cursor-pointer'
+                                : 'bg-[#E5DED2] text-[#7A7368] cursor-not-allowed'
+                            }`}
+                          >
+                            {eligibility.canBook
+                              ? 'Confirm booking'
+                              : 'Resolve blockers'}
+                          </button>
+                        );
+                      })() : (
                         <button
                           type="button"
                           disabled={calc.capacityExceeded}

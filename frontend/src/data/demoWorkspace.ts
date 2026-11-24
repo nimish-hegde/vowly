@@ -1,4 +1,4 @@
-import { WeddingWorkspace } from '../types/vowly';
+import type { WeddingWorkspace } from '../types/vowly';
 
 export function createDemoWorkspace(): WeddingWorkspace {
   return {

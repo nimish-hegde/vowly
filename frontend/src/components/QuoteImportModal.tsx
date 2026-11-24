@@ -99,12 +99,13 @@ export function QuoteImportModal({
         (v) => v.id === resumeDraftForVendorId
       );
       if (existingVendor?.draftQuote) {
+        const staged = existingVendor.draftVendorMetadata;
         setLinkedVendorId(existingVendor.id);
-        setVendorName(existingVendor.name);
-        setVendorCategory(existingVendor.category);
-        setVendorLocation(existingVendor.location);
-        setIsDemoVenue(Boolean(existingVendor.isDemoVenue));
-        setSelectedEventIds(existingVendor.eventIds);
+        setVendorName(staged?.name ?? existingVendor.name);
+        setVendorCategory(staged?.category ?? existingVendor.category);
+        setVendorLocation(staged?.location ?? existingVendor.location);
+        setIsDemoVenue(Boolean(staged?.isDemoVenue ?? existingVendor.isDemoVenue));
+        setSelectedEventIds(staged?.eventIds ?? existingVendor.eventIds);
         setDraftQuote(structuredClone(existingVendor.draftQuote));
         setStep('review');
         setMobilePane('extracted');
