@@ -167,6 +167,11 @@ export function getApprovalBlockers(session: QuoteReviewSession): string[] {
   if (session.draftQuote.currency === 'UNKNOWN') {
     blockers.push('Confirm the quote currency before adding it to the budget.');
   }
+  if (session.calculation.unknownItems.length > 0) {
+    blockers.push(
+      `Resolve mandatory TBD costs (${session.calculation.unknownItems.join(', ')}) before adding this quote to the budget.`,
+    );
+  }
   if (session.sourceWarnings.length > 0 && !session.sourceWarningsAcknowledged) {
     blockers.push(
       'Some source excerpts were not found in the original message. Check them before approving.',

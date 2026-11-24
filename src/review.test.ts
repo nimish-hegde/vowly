@@ -59,22 +59,35 @@ const sampleQuote: ExtractedQuote = {
   ],
 };
 
+const resolvedSampleQuote: ExtractedQuote = {
+  ...sampleQuote,
+  currency: 'CAD',
+  lineItems: sampleQuote.lineItems.slice(0, 2),
+};
+
 test('pending edits and resolved questions do not change budget until explicit approval', () => {
   const telemetry = new TelemetryTracker();
   let budget = createBudgetState();
   const session = createReviewSession('q-1', sampleQuote, { guestCount: 180 });
 
-  // Before approval, budget stays 0
+  // Before approval, budget stays empty
   assert.deepEqual(budget.committedTotals, {});
   assert.equal(session.calculation.knownSubtotal, 10500);
   assert.equal(getUnresolvedQuestionCount(session), 2);
 
-  // User corrects AV fee from 600 to 300 and confirms currency as CAD
+  // User corrects AV fee from 600 to 300, confirms currency as CAD, and prices the TBD bartender fee
   correctLineItem(session, 1, { amount: 300 });
   correctCurrency(session, 'CAD');
   resolveOpenQuestion(session, 0, 'Confirmed CAD over email');
 
-  assert.equal(session.calculation.knownSubtotal, 10200);
+  // Still blocked because mandatory Bartender fee is TBD
+  assert.throws(() => approveQuote(session, budget, telemetry), /mandatory TBD costs/i);
+  assert.equal(session.status, 'pending_review');
+  assert.deepEqual(budget.committedTotals, {});
+
+  // Once the bartender fee is priced, approval succeeds
+  correctLineItem(session, 2, { pricingType: 'flat', amount: 500 });
+  assert.equal(session.calculation.knownSubtotal, 10700);
   assert.equal(session.draftQuote.currency, 'CAD');
   assert.equal(getUnresolvedQuestionCount(session), 1);
   assert.deepEqual(budget.committedTotals, {}); // Still empty before approval!
@@ -82,11 +95,11 @@ test('pending edits and resolved questions do not change budget until explicit a
   // Approve quote -> now budget updates
   budget = approveQuote(session, budget, telemetry);
   assert.equal(session.status, 'approved');
-  assert.deepEqual(budget.committedTotals, { CAD: 10200 });
+  assert.deepEqual(budget.committedTotals, { CAD: 10700 });
   assert.equal(budget.approvedQuotes.length, 1);
 
   const summary = telemetry.getSummary();
-  assert.deepEqual(summary.correctionsByField, { amount: 1, currency: 1 });
+  assert.deepEqual(summary.correctionsByField, { amount: 2, currency: 1, pricingType: 1 });
   assert.equal(summary.unresolvedQuestions, 1);
   assert.equal(summary.quotesApproved, 1);
   assert.equal(summary.quoteApprovalRate, 1);
@@ -110,8 +123,8 @@ test('dismissing a quote leaves wedding budget untouched and records telemetry',
 
 test('approved quotes in different currencies keep separate totals', () => {
   let budget = createBudgetState();
-  const cad = createReviewSession('q-cad', { ...sampleQuote, currency: 'CAD' }, { guestCount: 180 });
-  const usd = createReviewSession('q-usd', { ...sampleQuote, currency: 'USD' }, { guestCount: 180 });
+  const cad = createReviewSession('q-cad', { ...resolvedSampleQuote, currency: 'CAD' }, { guestCount: 180 });
+  const usd = createReviewSession('q-usd', { ...resolvedSampleQuote, currency: 'USD' }, { guestCount: 180 });
   budget = approveQuote(cad, budget);
   budget = approveQuote(usd, budget);
   assert.deepEqual(budget.committedTotals, { CAD: 10500, USD: 10500 });
@@ -119,7 +132,11 @@ test('approved quotes in different currencies keep separate totals', () => {
 
 test('a quote with UNKNOWN currency cannot be approved into the budget', () => {
   const budget = createBudgetState();
-  const session = createReviewSession('q-unknown', sampleQuote, { guestCount: 180 });
+  const session = createReviewSession(
+    'q-unknown',
+    { ...resolvedSampleQuote, currency: 'UNKNOWN' },
+    { guestCount: 180 },
+  );
   assert.equal(getApprovalBlockers(session).length, 1);
   assert.throws(() => approveQuote(session, budget), /currency/);
   assert.equal(session.status, 'pending_review');
@@ -133,7 +150,7 @@ test('unsupported source excerpts block approval until the couple checks them', 
   const budget = createBudgetState();
   const session = createReviewSession(
     'q-src',
-    { ...sampleQuote, currency: 'CAD' },
+    resolvedSampleQuote,
     { guestCount: 180, sourceWarnings: ['lineItems[1].sourceExcerpt not found in raw message'] },
   );
   assert.throws(() => approveQuote(session, budget), /source excerpts/);
@@ -141,4 +158,24 @@ test('unsupported source excerpts block approval until the couple checks them', 
   const updated = approveQuote(session, budget);
   assert.equal(session.status, 'approved');
   assert.equal(updated.approvedQuotes.length, 1);
+});
+
+test('mandatory TBD costs block approval until priced or marked optional', () => {
+  const budget = createBudgetState();
+  const session = createReviewSession(
+    'q-tbd',
+    { ...sampleQuote, currency: 'CAD' },
+    { guestCount: 180 },
+  );
+  assert.deepEqual(session.calculation.unknownItems, ['Bartender fee']);
+  assert.equal(getApprovalBlockers(session).length, 1);
+  assert.throws(() => approveQuote(session, budget), /Bartender fee/);
+  assert.equal(session.status, 'pending_review');
+
+  // Marking the TBD fee as optional removes it from mandatory unknown items
+  correctLineItem(session, 2, { optionalAddon: true });
+  assert.deepEqual(session.calculation.unknownItems, []);
+  const updated = approveQuote(session, budget);
+  assert.equal(session.status, 'approved');
+  assert.deepEqual(updated.committedTotals, { CAD: 10500 });
 });

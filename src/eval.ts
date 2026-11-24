@@ -8,7 +8,7 @@ import {
   type ProviderName,
 } from './extractor.ts';
 import { estimateExtractionCostUsd, TelemetryTracker } from './telemetry.ts';
-import type { EvalCase, ExtractedQuote, TokenUsage } from './types.ts';
+import type { EvalCase, ExtractedQuote, TokenUsage, VendorCategory } from './types.ts';
 import { normalizeLineItemLabel, validateExtractedQuote } from './validator.ts';
 
 type CaseWithMock = EvalCase & { mockExtraction?: ExtractedQuote };
@@ -16,6 +16,7 @@ type CaseWithMock = EvalCase & { mockExtraction?: ExtractedQuote };
 export interface CaseScore {
   id: string;
   split: string;
+  category: VendorCategory;
   passed: boolean;
   apiError?: string;
   parseError?: string;
@@ -67,6 +68,7 @@ export function gradeExtraction(
     return {
       id: testCase.id,
       split: testCase.split,
+      category: testCase.expected.category,
       passed: false,
       schemaErrors,
       releaseBlockers,
@@ -153,6 +155,7 @@ export function gradeExtraction(
   return {
     id: testCase.id,
     split: testCase.split,
+    category: testCase.expected.category,
     passed,
     schemaErrors,
     releaseBlockers,
@@ -173,6 +176,7 @@ export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScor
     return {
       id: testCase.id,
       split: testCase.split,
+      category: testCase.expected.category,
       passed: false,
       parseError: message,
       schemaErrors: [`Parse error: ${message}`],
@@ -188,6 +192,7 @@ export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScor
   return {
     id: testCase.id,
     split: testCase.split,
+    category: testCase.expected.category,
     passed: false,
     apiError: message,
     schemaErrors: [],
@@ -218,6 +223,11 @@ export function summarizeScores(scores: CaseScore[]) {
   );
   const promptTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.promptTokens ?? 0), 0);
   const outputTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.outputTokens ?? 0), 0);
+  const estPaidCostUsd = estimateExtractionCostUsd({
+    promptTokens,
+    outputTokens,
+    totalTokens: promptTokens + outputTokens,
+  });
 
   return {
     total,
@@ -233,7 +243,26 @@ export function summarizeScores(scores: CaseScore[]) {
     avgLatency,
     promptTokens,
     outputTokens,
+    estPaidCostUsd,
   };
+}
+
+export function summarizeByGroup(
+  scores: CaseScore[],
+  keyFn: (score: CaseScore) => string,
+): Record<string, ReturnType<typeof summarizeScores>> {
+  const grouped = new Map<string, CaseScore[]>();
+  for (const score of scores) {
+    const key = keyFn(score);
+    const list = grouped.get(key) ?? [];
+    list.push(score);
+    grouped.set(key, list);
+  }
+  const result: Record<string, ReturnType<typeof summarizeScores>> = {};
+  for (const [key, list] of grouped.entries()) {
+    result[key] = summarizeScores(list);
+  }
+  return result;
 }
 
 async function main() {
@@ -356,15 +385,33 @@ async function main() {
   );
   console.log(`Avg latency: ${summary.avgLatency}ms | Total retries: ${summary.totalRetries}`);
   if (summary.promptTokens > 0 || summary.outputTokens > 0) {
-    const estPaidUsd = estimateExtractionCostUsd({
-      promptTokens: summary.promptTokens,
-      outputTokens: summary.outputTokens,
-      totalTokens: summary.promptTokens + summary.outputTokens,
-    });
     console.log(
-      `Tokens: ${summary.promptTokens} in / ${summary.outputTokens} out | Est. paid cost: $${estPaidUsd.toFixed(5)} ($0 on Gemini free tier)`,
+      `Tokens: ${summary.promptTokens} in / ${summary.outputTokens} out | Est. paid cost: $${summary.estPaidCostUsd.toFixed(5)} ($0 on Gemini free tier)`,
     );
   }
+
+  const printBreakdown = (
+    heading: string,
+    groups: Record<string, ReturnType<typeof summarizeScores>>,
+  ) => {
+    console.log(`\n${heading}`);
+    for (const [label, g] of Object.entries(groups)) {
+      const pct = g.total > 0 ? ((g.passedCount / g.total) * 100).toFixed(1) : '0.0';
+      const sPct = g.completed > 0 ? ((g.schemaCompliant / g.completed) * 100).toFixed(1) : '0.0';
+      const costStr =
+        g.promptTokens > 0 || g.outputTokens > 0 ? ` | cost $${g.estPaidCostUsd.toFixed(5)}` : '';
+      console.log(
+        `  ${label.padEnd(14)} ${g.passedCount}/${g.total} (${pct}%) | schema ${g.schemaCompliant}/${g.completed} (${sPct}%) | finErr ${g.financialErrors} | blockers ${g.blockerCount} | avg ${g.avgLatency}ms | retries ${g.totalRetries}${costStr}`,
+      );
+    }
+  };
+
+  const bySplit = summarizeByGroup(scores, (s) => s.split);
+  if (Object.keys(bySplit).length > 1) {
+    printBreakdown('By split:', bySplit);
+  }
+  const byCategory = summarizeByGroup(scores, (s) => s.category);
+  printBreakdown('By vendor category:', byCategory);
   console.log('');
 
   for (const s of scores) {

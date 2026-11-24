@@ -101,21 +101,39 @@ To close out the remaining regression failure and prepare for `v0.4`:
 3. **Expanded dataset (45 cases total):** Kept the 6 regression cases untouched, added 10 new `dev` cases (14 total), and added 15 new `held-out` cases (25 total) across venues, photography, decor, catering, and entertainment.
 4. **Quote Review UI & instrumentation (`src/review.ts`, `src/server.ts`, `ui/index.html`, `src/telemetry.ts`):** Added a local Quote Review screen (`npm run ui`) where couples can review extracted line items beside source text, fix mistakes, resolve open questions, and approve a quote before it changes their wedding budget—backed by telemetry tracking extraction success rate, latency, tokens, estimated cost, field corrections, unresolved questions, and approval rate.
 
+### Offline validation on PR #11
+
+All offline checks pass after the review UI fixes (multi-currency budgets, unsupported source evidence checks, failure telemetry, and blocking approval when mandatory costs are still TBD):
+
+- **Unit tests (`npm test`):** **26/26 passed** (calculator, validator, eval grader, extractor, telemetry, review workflow, and extract handler).
+- **Offline mock eval (`npm run eval`):** **45/45 passed (100.0%)**, 0 critical financial errors, 0 unsupported currency guesses, 0 release blockers, 100% schema validity.
+  - **By split:** `dev` 14/14, `regression` 6/6, `held-out` 25/25.
+  - **By vendor category:** `venue` 19/19, `photographer` 7/7, `decor` 6/6, `catering` 5/5, `entertainment` 5/5, `dj` 3/3.
+- **Quote review workflow (HTTP E2E against `src/server.ts`):**
+  - `UNKNOWN` currency returns HTTP `409` on approve until the couple selects a currency.
+  - Mandatory TBD line items (`calculation.unknownItems`) return HTTP `409` on approve until priced, marked included, or marked optional.
+  - Unsupported `sourceExcerpt` warnings return HTTP `409` on approve until explicitly acknowledged.
+  - Approved quotes in `CAD` and `USD` stay in separate `committedTotals` buckets (`{ USD: 10500, CAD: 12800 }`).
+  - Failed extractions (HTTP `502`) are recorded in `/api/state` telemetry (`extractionAttempts` and `extractionSuccessRate`).
+
 ### Status against `v0.3` release criteria
 
-Live verification of the new open-question rule and the expanded 25-case held-out split is still pending on your Gemini key:
+Live Gemini runs cannot execute in this cloud sandbox because `GEMINI_API_KEY` is only configured on your local machine. **Running the live Gemini splits below is the only remaining release blocker for `v0.3`.**
 
 | Metric | Release bar | Latest measured status |
 |---|---|---|
-| Unit tests (`npm test`) | 100% pass | 25/25 passing offline |
-| Offline mock eval (`npm run eval`) | 100% pass | 45/45 passing offline |
-| Regression pass rate (live) | 100% (6/6) | 5/6 before open-question fix — rerun pending |
-| Critical financial errors (live) | 0 | 0 on latest live regression run |
-| Unsupported currency guesses (live) | 0 | 0 on latest live regression run |
-| Schema validity (live) | ≥99% | 100% on latest live regression run |
-| Average extraction latency (live) | <5s | Rerun pending on expanded splits |
+| Unit tests (`npm test`) | 100% pass | **26/26 passing offline** |
+| Offline mock eval (`npm run eval`) | 100% pass | **45/45 passing offline** |
+| Regression pass rate (live) | 100% (6/6) | 5/6 before open-question fix — **live rerun required** |
+| Dev & held-out accuracy (live) | Measured across 14 dev + 25 held-out | **Live run required** |
+| Critical financial errors (live) | 0 | 0 on latest live regression run — **re-verify on all splits** |
+| Unsupported currency guesses (live) | 0 | 0 on latest live regression run — **re-verify on all splits** |
+| Schema validity (live) | ≥99% | 100% on latest live regression run — **re-verify on all splits** |
+| Average extraction latency (live) | <5s | **Live run required on expanded splits** |
 
 ### How to run the live verification and Quote Review UI
+
+`src/eval.ts` now prints accuracy, schema validity, financial errors, blockers, latency, retries, and estimated cost broken down by both split and vendor category:
 
 ```powershell
 $env:GEMINI_API_KEY="your-free-key"

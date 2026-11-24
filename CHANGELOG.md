@@ -16,7 +16,9 @@ Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for pla
   - The budget no longer adds different currencies together. Approved totals are kept per currency (for example `CAD 8,000 + USD 1,000`), and a quote marked `UNKNOWN` currency can't be approved until the couple sets the currency.
   - If an extracted excerpt can't be found in the original message, the review screen now shows that excerpt in red and blocks approval until the couple confirms they checked it.
   - Failed extraction requests (API errors, bad JSON) now count in the UI's success rate, latency and retry numbers. Before, only successful calls were counted, so the success rate looked better than it was.
-- Unit tests: `25/25` passing offline. Mock evals: `45/45`.
+  - Quotes with unresolved mandatory TBD costs can no longer be approved into the committed budget until each TBD item is priced, marked included, or marked as an optional add-on.
+- Added per-split and per-vendor-category summary breakdowns to `src/eval.ts`.
+- Unit tests: `26/26` passing offline. Mock evals: `45/45`.
 
 ## November 23, 2026 — Live Gemini eval baseline and extraction reliability (`v0.3`, `#2`)
 
