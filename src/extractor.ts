@@ -151,6 +151,108 @@ const GEMINI_RESPONSE_SCHEMA = {
   },
 } as const;
 
+export const OLLAMA_RESPONSE_SCHEMA = {
+  type: 'object',
+  required: [
+    'vendorName',
+    'category',
+    'events',
+    'quoteKind',
+    'currency',
+    'taxStatus',
+    'gratuityStatus',
+    'lineItems',
+    'openQuestions',
+  ],
+  properties: {
+    vendorName: { type: 'string' },
+    category: { type: 'string', enum: ['venue', 'photographer', 'dj', 'decor', 'other'] },
+    events: { type: 'array', items: { type: 'string' } },
+    quotedDate: { type: 'string' },
+    quoteKind: { type: 'string', enum: ['initial', 'revision'] },
+    currency: { type: 'string', enum: ['CAD', 'USD', 'UNKNOWN'] },
+    taxStatus: { type: 'string', enum: ['included', 'excluded', 'unknown'] },
+    gratuityStatus: { type: 'string', enum: ['included', 'excluded', 'unknown'] },
+    lineItems: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['label', 'pricingType', 'amount', 'sourceExcerpt'],
+        properties: {
+          label: { type: 'string' },
+          pricingType: {
+            type: 'string',
+            enum: ['flat', 'per_person', 'per_hour', 'per_guest_ratio', 'included', 'unknown'],
+          },
+          amount: { type: ['number', 'null'] },
+          minGuests: { type: 'number' },
+          ratioGuests: { type: 'number' },
+          hours: { type: 'number' },
+          optionalAddon: { type: 'boolean' },
+          sourceExcerpt: { type: 'string' },
+        },
+      },
+    },
+    venueDetails: {
+      type: 'object',
+      properties: {
+        roomName: { type: 'string' },
+        maxCapacity: { type: 'number' },
+        minGuests: { type: 'number' },
+        packageName: { type: 'string' },
+        dayOfWeek: { type: 'string' },
+      },
+    },
+    photographerDetails: {
+      type: 'object',
+      properties: {
+        hoursIncluded: { type: 'number' },
+        extraHourRate: { type: 'number' },
+        teamSize: { type: 'number' },
+        includesMiniShoot: { type: 'string', enum: ['yes', 'no', 'unknown'] },
+      },
+    },
+    paymentTerms: {
+      type: 'object',
+      required: ['methodRule'],
+      properties: {
+        depositAmount: { type: 'number' },
+        depositPercent: { type: 'number' },
+        methodRule: {
+          type: 'string',
+          enum: ['cash_only', 'etransfer', 'card', 'any', 'unknown'],
+        },
+        scheduleNotes: { type: 'string' },
+      },
+    },
+    openQuestions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['question', 'reason', 'sourceExcerpt'],
+        properties: {
+          question: { type: 'string' },
+          reason: {
+            type: 'string',
+            enum: ['missing_price', 'conflict', 'ambiguous_rule', 'missing_date'],
+          },
+          sourceExcerpt: { type: 'string' },
+        },
+      },
+    },
+  },
+} as const;
+
+export function buildOllamaRequestBody(model: string, rawMessage: string) {
+  return {
+    model,
+    system: `${SYSTEM_PROMPT}\n\nReturn a JSON object conforming exactly to this JSON Schema:\n${JSON.stringify(OLLAMA_RESPONSE_SCHEMA)}`,
+    prompt: `Extract quote facts from this vendor message:\n\n${rawMessage}`,
+    format: OLLAMA_RESPONSE_SCHEMA,
+    stream: false,
+  };
+}
+
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
 const RETRY_DELAYS_MS = [5_000, 10_000, 20_000];
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -289,13 +391,7 @@ export async function extractQuote(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model,
-          system: SYSTEM_PROMPT,
-          prompt: `Extract quote facts from this vendor message:\n\n${rawMessage}`,
-          format: 'json',
-          stream: false,
-        }),
+        body: JSON.stringify(buildOllamaRequestBody(model, rawMessage)),
       },
       rawMessage,
     );

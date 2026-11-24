@@ -12,11 +12,12 @@ import { normalizeLineItemLabel, validateExtractedQuote } from './validator.ts';
 
 type CaseWithMock = EvalCase & { mockExtraction?: ExtractedQuote };
 
-interface CaseScore {
+export interface CaseScore {
   id: string;
   split: string;
   passed: boolean;
   apiError?: string;
+  parseError?: string;
   schemaErrors: string[];
   releaseBlockers: string[];
   criticalFinancialError: boolean;
@@ -68,7 +69,7 @@ export function gradeExtraction(
       passed: false,
       schemaErrors,
       releaseBlockers,
-      criticalFinancialError: true,
+      criticalFinancialError: false,
       unsupportedCurrencyAssumption: false,
       failures: ['Skipped financial grading because response failed schema validation'],
       latencyMs,
@@ -163,6 +164,77 @@ export function gradeExtraction(
   };
 }
 
+export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScore {
+  const isKnown = err instanceof ExtractionError;
+  const message = err instanceof Error ? err.message : String(err);
+
+  if (isKnown && err.kind === 'parse_error') {
+    return {
+      id: testCase.id,
+      split: testCase.split,
+      passed: false,
+      parseError: message,
+      schemaErrors: [`Parse error: ${message}`],
+      releaseBlockers: [],
+      criticalFinancialError: false,
+      unsupportedCurrencyAssumption: false,
+      failures: [],
+      latencyMs: err.latencyMs,
+      retryCount: err.retryCount,
+    };
+  }
+
+  return {
+    id: testCase.id,
+    split: testCase.split,
+    passed: false,
+    apiError: message,
+    schemaErrors: [],
+    releaseBlockers: [],
+    criticalFinancialError: false,
+    unsupportedCurrencyAssumption: false,
+    failures: [],
+    latencyMs: isKnown ? err.latencyMs : 0,
+    retryCount: isKnown ? err.retryCount : 0,
+  };
+}
+
+export function summarizeScores(scores: CaseScore[]) {
+  const total = scores.length;
+  const apiErrors = scores.filter((s) => s.apiError !== undefined).length;
+  const parseErrors = scores.filter((s) => s.parseError !== undefined).length;
+  const completed = total - apiErrors;
+  const schemaCompliant = scores.filter(
+    (s) => s.apiError === undefined && s.parseError === undefined && s.schemaErrors.length === 0,
+  ).length;
+  const passedCount = scores.filter((s) => s.passed).length;
+  const financialErrors = scores.filter((s) => s.criticalFinancialError).length;
+  const currencyGuesses = scores.filter((s) => s.unsupportedCurrencyAssumption).length;
+  const blockerCount = scores.reduce((sum, s) => sum + s.releaseBlockers.length, 0);
+  const totalRetries = scores.reduce((sum, s) => sum + s.retryCount, 0);
+  const avgLatency = Math.round(
+    scores.reduce((sum, s) => sum + s.latencyMs, 0) / Math.max(total, 1),
+  );
+  const promptTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.promptTokens ?? 0), 0);
+  const outputTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.outputTokens ?? 0), 0);
+
+  return {
+    total,
+    apiErrors,
+    parseErrors,
+    completed,
+    schemaCompliant,
+    passedCount,
+    financialErrors,
+    currencyGuesses,
+    blockerCount,
+    totalRetries,
+    avgLatency,
+    promptTokens,
+    outputTokens,
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const splitIdx = args.indexOf('--split');
@@ -202,83 +274,64 @@ async function main() {
         gradeExtraction(c, res.rawResponse, res.latencyMs, res.retryCount, res.tokenUsage),
       );
     } catch (err) {
-      const isKnown = err instanceof ExtractionError;
-      scores.push({
-        id: c.id,
-        split: c.split,
-        passed: false,
-        apiError: err instanceof Error ? err.message : String(err),
-        schemaErrors: [],
-        releaseBlockers: [],
-        criticalFinancialError: false,
-        unsupportedCurrencyAssumption: false,
-        failures: [],
-        latencyMs: isKnown ? err.latencyMs : 0,
-        retryCount: isKnown ? err.retryCount : 0,
-      });
+      scores.push(scoreExtractionError(c, err));
     }
   }
 
-  const total = scores.length;
-  const apiErrors = scores.filter((s) => s.apiError !== undefined).length;
-  const completed = total - apiErrors;
-  const schemaCompliant = scores.filter((s) => !s.apiError && s.schemaErrors.length === 0).length;
-  const passedCount = scores.filter((s) => s.passed).length;
-  const financialErrors = scores.filter((s) => s.criticalFinancialError).length;
-  const currencyGuesses = scores.filter((s) => s.unsupportedCurrencyAssumption).length;
-  const blockerCount = scores.reduce((sum, s) => sum + s.releaseBlockers.length, 0);
-  const totalRetries = scores.reduce((sum, s) => sum + s.retryCount, 0);
-  const avgLatency = Math.round(
-    scores.reduce((sum, s) => sum + s.latencyMs, 0) / Math.max(total, 1),
-  );
-  const promptTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.promptTokens ?? 0), 0);
-  const outputTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.outputTokens ?? 0), 0);
-
-  const accuracyPct = total > 0 ? ((passedCount / total) * 100).toFixed(1) : '0.0';
-  const availPct = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';
-  const schemaPct = completed > 0 ? ((schemaCompliant / completed) * 100).toFixed(1) : '0.0';
+  const summary = summarizeScores(scores);
+  const accuracyPct =
+    summary.total > 0 ? ((summary.passedCount / summary.total) * 100).toFixed(1) : '0.0';
+  const availPct =
+    summary.total > 0 ? ((summary.completed / summary.total) * 100).toFixed(1) : '0.0';
+  const schemaPct =
+    summary.completed > 0
+      ? ((summary.schemaCompliant / summary.completed) * 100).toFixed(1)
+      : '0.0';
 
   console.log(`\nVowly Quote Extraction Eval`);
   console.log(
     `Provider: ${usedProvider} | Configured model: ${usedModel || 'n/a'} | Resolved: ${resolvedModelVersion || 'n/a'}`,
   );
-  console.log(`Split: ${splitArg} (${total} cases)`);
-  console.log(`Passed: ${passedCount}/${total} (${accuracyPct}%)`);
+  console.log(`Split: ${splitArg} (${summary.total} cases)`);
+  console.log(`Passed: ${summary.passedCount}/${summary.total} (${accuracyPct}%)`);
   console.log(
-    `API availability: ${completed}/${total} (${availPct}%) | Schema valid: ${schemaCompliant}/${completed} (${schemaPct}%)`,
+    `API availability: ${summary.completed}/${summary.total} (${availPct}%) | Schema valid: ${summary.schemaCompliant}/${summary.completed} (${schemaPct}%) | Parse errors: ${summary.parseErrors}`,
   );
   console.log(
-    `Critical financial errors: ${financialErrors} | Unsupported currency guesses: ${currencyGuesses} | Release blockers: ${blockerCount}`,
+    `Critical financial errors: ${summary.financialErrors} | Unsupported currency guesses: ${summary.currencyGuesses} | Release blockers: ${summary.blockerCount}`,
   );
-  console.log(`Avg latency: ${avgLatency}ms | Total retries: ${totalRetries}`);
-  if (promptTokens > 0 || outputTokens > 0) {
+  console.log(`Avg latency: ${summary.avgLatency}ms | Total retries: ${summary.totalRetries}`);
+  if (summary.promptTokens > 0 || summary.outputTokens > 0) {
     // Rough Flash-Lite paid estimate ($0.10 / 1M input, $0.40 / 1M output); free tier is $0.
-    const estPaidUsd = (promptTokens * 0.1 + outputTokens * 0.4) / 1_000_000;
+    const estPaidUsd = (summary.promptTokens * 0.1 + summary.outputTokens * 0.4) / 1_000_000;
     console.log(
-      `Tokens: ${promptTokens} in / ${outputTokens} out | Est. paid cost: $${estPaidUsd.toFixed(5)} ($0 on Gemini free tier)`,
+      `Tokens: ${summary.promptTokens} in / ${summary.outputTokens} out | Est. paid cost: $${estPaidUsd.toFixed(5)} ($0 on Gemini free tier)`,
     );
   }
   console.log('');
 
   for (const s of scores) {
-    const tag = s.apiError ? 'API_ERR' : s.passed ? 'PASS' : 'FAIL';
+    const tag = s.apiError ? 'API_ERR' : s.parseError ? 'PARSE_ERR' : s.passed ? 'PASS' : 'FAIL';
     const retryNote = s.retryCount > 0 ? ` (${s.retryCount} retries)` : '';
     console.log(`[${tag}] (${s.split}) ${s.id} — ${s.latencyMs}ms${retryNote}`);
     if (s.apiError) {
-      console.log(`   API ERROR: ${s.apiError}`);
+      console.log(`   API ERROR:   ${s.apiError}`);
+    }
+    if (s.parseError) {
+      console.log(`   PARSE ERROR: ${s.parseError}`);
     }
     for (const se of s.schemaErrors) {
-      console.log(`   SCHEMA:    ${se}`);
+      console.log(`   SCHEMA:      ${se}`);
     }
     for (const b of s.releaseBlockers) {
-      console.log(`   BLOCKER:   ${b}`);
+      console.log(`   BLOCKER:     ${b}`);
     }
     for (const f of s.failures) {
-      console.log(`   FAIL:      ${f}`);
+      console.log(`   FAIL:        ${f}`);
     }
   }
 
-  if (passedCount < total) {
+  if (summary.passedCount < summary.total) {
     process.exitCode = 1;
   }
 }
