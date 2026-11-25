@@ -17,7 +17,15 @@ export type PricingType =
   | 'per_person'
   | 'per_hour'
   | 'per_guest_ratio'
+  | 'percentage'
   | 'included'
+  | 'unknown';
+
+export type PercentageBasis =
+  | 'specific_line_items'
+  | 'food_subtotal'
+  | 'entire_subtotal'
+  | 'custom_amount'
   | 'unknown';
 
 export type ChargeRequirement = 'mandatory' | 'conditional' | 'optional';
@@ -46,14 +54,32 @@ export interface PriceOption {
 export interface LineItem {
   label: string;
   pricingType: PricingType;
-  /** Numeric price in the quote's currency, or null when included or unknown/TBD. */
+  /** Numeric price in the quote's currency, percentage value for 'percentage', or null when included or unknown/TBD. */
   amount: number | null;
   /** Minimum guest count that applies to this item (e.g., 150-person minimum). */
   minGuests?: number;
-  /** Ratio denominator for per_guest_ratio items (e.g., 150 for "1 bartender per 150 guests"). */
+  /** Ratio denominator for per_guest_ratio items (e.g., 75 for "1 bartender per 75 guests"). */
   ratioGuests?: number;
-  /** Default hours included if this is a per_hour item. */
+  /** Plain-language unit label for ratio items (e.g., "bartender", "server", "table"). */
+  unitLabel?: string;
+  /** Default hours included if this is a per_hour item or duration-bound package. */
   hours?: number;
+  /** Percentage rate (e.g., 10 for 10%) when pricingType is "percentage". */
+  percentageRate?: number;
+  /** Structured basis for percentage-based charges. */
+  percentageBasis?: PercentageBasis;
+  /** Target line item labels when percentageBasis is "specific_line_items". */
+  percentageTargetLabels?: string[];
+  /** User-confirmed custom taxable/applicable amount when percentageBasis is "custom_amount". */
+  customBasisAmount?: number;
+  /** Original/standard price when the vendor explicitly offered a negotiated discount (not a conflict). */
+  originalAmount?: number;
+  /** True when the charge is billed by or routed through a third-party supplier (e.g., preferred AV). */
+  isThirdParty?: boolean;
+  /** Optional third-party provider name or description. */
+  thirdPartyProvider?: string;
+  /** True when this line item is part of the food/catering subtotal for food-only gratuity bases. */
+  isFoodItem?: boolean;
   /** Distinguishes mandatory, conditional, and explicitly optional charges. */
   chargeType?: ChargeRequirement;
   /** True only when the message explicitly says the item is an optional upgrade or add-on. */
@@ -63,8 +89,34 @@ export interface LineItem {
    * Preserves every candidate price and its verbatim source without double-counting.
    */
   conflictingOptions?: PriceOption[];
-  /** Exact substring from the raw vendor message supporting this item. */
+  /** Exact substring or visible document snippet supporting this item. */
   sourceExcerpt: string;
+  /** Optional document page or visual section reference for PDF/image extractions. */
+  pageReference?: string;
+}
+
+export interface PackageInclusion {
+  category?: string;
+  name: string;
+  quantity?: number;
+  unit?: string;
+  sourceExcerpt?: string;
+}
+
+export interface VendorContact {
+  name?: string;
+  email?: string;
+  phone?: string;
+}
+
+export interface PaymentMilestoneRule {
+  label: string;
+  amount?: number;
+  percent?: number;
+  dueDate?: string;
+  relativeDaysBeforeEvent?: number;
+  relativeDeadlineText?: string;
+  sourceExcerpt?: string;
 }
 
 export interface VenueDetails {
@@ -87,24 +139,41 @@ export interface PaymentTerms {
   depositPercent?: number;
   methodRule: PaymentMethodRule;
   scheduleNotes?: string;
+  milestones?: PaymentMilestoneRule[];
 }
 
 export interface OpenQuestion {
   question: string;
   reason: OpenQuestionReason;
   sourceExcerpt: string;
+  pageReference?: string;
+}
+
+export interface ExtractionAttachment {
+  mimeType: string;
+  base64Data: string;
+  fileName?: string;
 }
 
 export interface ExtractedQuote {
-  vendorName: string;
+  vendorName: string | null;
+  vendorLocation?: string | null;
+  vendorContact?: VendorContact;
   category: VendorCategory;
   events: string[];
   quotedDate?: string;
   quoteKind: QuoteKind;
   currency: CurrencyCode;
   taxStatus: TaxOrGratuityStatus;
+  taxPercent?: number | null;
   gratuityStatus: TaxOrGratuityStatus;
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  serviceDurationHours?: number;
   lineItems: LineItem[];
+  inclusions?: PackageInclusion[];
+  exclusions?: string[];
+  restrictions?: string[];
   venueDetails?: VenueDetails;
   photographerDetails?: PhotographerDetails;
   paymentTerms?: PaymentTerms;

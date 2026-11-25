@@ -893,5 +893,223 @@
         }
       ]
     }
+  },
+  {
+    "id": "dev-uat-case-a-missing-gratuity",
+    "split": "dev",
+    "description": "UAT Case A: Banquet venue quote with 13% HST, unknown gratuity percentage, 150 guest min, and structured inclusions",
+    "rawMessage": "Our banquet package is $55 per person plus 13% HST and gratuity. Minimum 150 guests. Includes 4 appetizers, 3 main dishes, 2 desserts and unlimited soft drinks.",
+    "calcContext": {
+      "guestCount": 150
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 8250,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 2,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": null,
+      "gratuityBasis": "unknown",
+      "lineItems": [
+        {
+          "label": "Banquet package",
+          "pricingType": "per_person",
+          "amount": 55,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Our banquet package is $55 per person"
+        }
+      ],
+      "inclusions": [
+        { "category": "food", "name": "Appetizers", "quantity": 4, "unit": "appetizers" },
+        { "category": "food", "name": "Main dishes", "quantity": 3, "unit": "main dishes" },
+        { "category": "food", "name": "Desserts", "quantity": 2, "unit": "desserts" },
+        { "category": "beverage", "name": "Unlimited soft drinks" }
+      ],
+      "venueDetails": {
+        "minGuests": 150
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm the gratuity percentage and what it applies to.",
+          "reason": "missing_price",
+          "sourceExcerpt": "plus 13% HST and gratuity"
+        },
+        {
+          "question": "Confirm whether quoted prices are in CAD or USD.",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "$55 per person"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-uat-case-b-negotiated-photo",
+    "split": "dev",
+    "description": "UAT Case B: Negotiated photography quote with $100 savings, 6 hours coverage, $200 deposit, and no false conflict",
+    "rawMessage": "I normally charge $1,000 for 6 hours of photography, but I can do $900 for your engagement. Includes edited photos and an online gallery. $200 deposit to confirm.",
+    "calcContext": {
+      "hours": 6
+    },
+    "expected": {
+      "category": "photographer",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 900,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "photographer",
+      "events": [
+        "Engagement"
+      ],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 6,
+      "lineItems": [
+        {
+          "label": "6-hour engagement photography",
+          "pricingType": "flat",
+          "amount": 900,
+          "originalAmount": 1000,
+          "hours": 6,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "I normally charge $1,000 for 6 hours of photography, but I can do $900 for your engagement"
+        }
+      ],
+      "inclusions": [
+        { "category": "photography", "name": "Photography coverage", "quantity": 6, "unit": "hours" },
+        { "category": "photography", "name": "Edited photos" },
+        { "category": "photography", "name": "Online gallery" }
+      ],
+      "photographerDetails": {
+        "hoursIncluded": 6
+      },
+      "paymentTerms": {
+        "depositAmount": 200,
+        "methodRule": "unknown",
+        "scheduleNotes": "$200 deposit to confirm."
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm whether quoted prices are in CAD or USD.",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "$900 for your engagement"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-uat-case-c-complex-venue",
+    "split": "dev",
+    "description": "UAT Case C: Complex CAD venue quote with 150 min, 200 max, food-only 10% gratuity, 13% HST, third-party AV, 1:75 bartenders, and 30% deposit",
+    "rawMessage": "Our banquet package is CAD $60 per guest with a minimum guarantee of 150 guests. Includes 5 appetizers, 4 main dishes, 2 desserts and unlimited soft drinks. Maximum capacity is 200 guests. HST is 13% and gratuity is 10% of the food subtotal. AV is provided by our preferred third-party supplier for $750. Bartenders cost $250 each, with one required per 75 guests. A 30% deposit is required to secure the date, with the remaining balance due 30 days before the event.",
+    "calcContext": {
+      "guestCount": 175
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 12000,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 10,
+      "gratuityBasis": "food_subtotal",
+      "lineItems": [
+        {
+          "label": "Banquet package",
+          "pricingType": "per_person",
+          "amount": 60,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Our banquet package is CAD $60 per guest with a minimum guarantee of 150 guests"
+        },
+        {
+          "label": "AV package",
+          "pricingType": "flat",
+          "amount": 750,
+          "isThirdParty": true,
+          "thirdPartyProvider": "Preferred third-party supplier",
+          "isFoodItem": false,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "AV is provided by our preferred third-party supplier for $750"
+        },
+        {
+          "label": "Bartenders",
+          "pricingType": "per_guest_ratio",
+          "amount": 250,
+          "ratioGuests": 75,
+          "unitLabel": "bartender",
+          "isFoodItem": false,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Bartenders cost $250 each, with one required per 75 guests"
+        }
+      ],
+      "inclusions": [
+        { "category": "food", "name": "Appetizers", "quantity": 5, "unit": "appetizers" },
+        { "category": "food", "name": "Main dishes", "quantity": 4, "unit": "main dishes" },
+        { "category": "food", "name": "Desserts", "quantity": 2, "unit": "desserts" },
+        { "category": "beverage", "name": "Unlimited soft drinks" }
+      ],
+      "venueDetails": {
+        "minGuests": 150,
+        "maxCapacity": 200
+      },
+      "paymentTerms": {
+        "depositPercent": 30,
+        "methodRule": "unknown",
+        "scheduleNotes": "30% deposit to secure the date; remaining balance due 30 days before the event.",
+        "milestones": [
+          { "label": "Deposit", "percent": 30 },
+          {
+            "label": "Remaining balance",
+            "percent": 70,
+            "relativeDaysBeforeEvent": 30,
+            "relativeDeadlineText": "30 days before the event"
+          }
+        ]
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm the event date to calculate the 30-day remaining balance deadline.",
+          "reason": "missing_date",
+          "sourceExcerpt": "remaining balance due 30 days before the event"
+        }
+      ]
+    }
   }
 ]

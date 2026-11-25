@@ -6,6 +6,7 @@ import type {
   OpenQuestion,
   OpenQuestionReason,
   PaymentMethodRule,
+  PercentageBasis,
   PricingType,
   QuoteKind,
   TaxOrGratuityStatus,
@@ -31,7 +32,15 @@ const VALID_PRICING_TYPES = new Set<PricingType>([
   'per_person',
   'per_hour',
   'per_guest_ratio',
+  'percentage',
   'included',
+  'unknown',
+]);
+const VALID_PERCENTAGE_BASES = new Set<PercentageBasis>([
+  'specific_line_items',
+  'food_subtotal',
+  'entire_subtotal',
+  'custom_amount',
   'unknown',
 ]);
 const VALID_PAYMENT_RULES = new Set<PaymentMethodRule>([
@@ -84,7 +93,11 @@ function checkOptionalNumber(
   }
 }
 
-export function validateExtractedQuote(raw: unknown, rawMessage?: string): ValidationResult {
+export function validateExtractedQuote(
+  raw: unknown,
+  rawMessage?: string,
+  options?: { hasAttachments?: boolean },
+): ValidationResult {
   const schemaErrors: string[] = [];
   const sourceErrors: string[] = [];
 
@@ -92,8 +105,8 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
     return { valid: false, schemaErrors: ['Response must be a JSON object'], sourceErrors: [] };
   }
 
-  if (typeof raw.vendorName !== 'string' || raw.vendorName.trim() === '') {
-    schemaErrors.push('vendorName must be a non-empty string');
+  if (raw.vendorName !== null && typeof raw.vendorName !== 'string') {
+    schemaErrors.push('vendorName must be a string or null');
   }
   if (!VALID_CATEGORIES.has(raw.category as VendorCategory)) {
     schemaErrors.push(
@@ -117,8 +130,19 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
       `gratuityStatus must be included|excluded|unknown (got ${String(raw.gratuityStatus)})`,
     );
   }
+  checkOptionalNumber(raw, 'taxPercent', 'quote', schemaErrors);
+  checkOptionalNumber(raw, 'gratuityPercent', 'quote', schemaErrors);
+  checkOptionalNumber(raw, 'serviceDurationHours', 'quote', schemaErrors);
+  if (
+    raw.gratuityBasis !== undefined &&
+    raw.gratuityBasis !== null &&
+    !VALID_PERCENTAGE_BASES.has(raw.gratuityBasis as PercentageBasis)
+  ) {
+    schemaErrors.push(`gratuityBasis is invalid (got ${String(raw.gratuityBasis)})`);
+  }
 
-  const rawNorm = rawMessage ? normalizeText(rawMessage) : undefined;
+  const hasAttachments = options?.hasAttachments === true;
+  const rawNorm = !hasAttachments && rawMessage && rawMessage.trim() ? normalizeText(rawMessage) : undefined;
 
   // Validate lineItems
   if (!Array.isArray(raw.lineItems)) {
@@ -150,6 +174,22 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
       checkOptionalNumber(entry, 'minGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'ratioGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'hours', path, schemaErrors);
+      checkOptionalNumber(entry, 'percentageRate', path, schemaErrors);
+      checkOptionalNumber(entry, 'customBasisAmount', path, schemaErrors);
+      checkOptionalNumber(entry, 'originalAmount', path, schemaErrors);
+      if (entry.pricingType === 'percentage') {
+        const rate = entry.percentageRate ?? entry.amount;
+        if (!isFiniteNumber(rate) || rate < 0) {
+          schemaErrors.push(`${path}.percentageRate or amount must be a non-negative number for percentage items`);
+        }
+      }
+      if (
+        entry.percentageBasis !== undefined &&
+        entry.percentageBasis !== null &&
+        !VALID_PERCENTAGE_BASES.has(entry.percentageBasis as PercentageBasis)
+      ) {
+        schemaErrors.push(`${path}.percentageBasis is invalid (got ${String(entry.percentageBasis)})`);
+      }
       if (entry.chargeType !== undefined) {
         if (!VALID_CHARGE_TYPES.has(entry.chargeType as ChargeRequirement)) {
           schemaErrors.push(
@@ -197,10 +237,21 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
         }
       }
       if (typeof entry.sourceExcerpt !== 'string' || entry.sourceExcerpt.trim() === '') {
-        schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+        if (hasAttachments && typeof entry.pageReference === 'string' && entry.pageReference.trim() !== '') {
+          // Document evidence tracked via pageReference; warn if snippet itself is missing
+          sourceErrors.push(
+            `Line item "${String(entry.label)}" has page reference (${entry.pageReference}) but no visible source snippet — verify against uploaded document`,
+          );
+        } else {
+          schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+        }
       } else if (rawNorm && !rawNorm.includes(normalizeText(entry.sourceExcerpt))) {
         sourceErrors.push(
           `Unsupported line item "${String(entry.label)}" — sourceExcerpt not found verbatim in raw message`,
+        );
+      } else if (hasAttachments && entry.sourceExcerpt.trim().length < 3) {
+        sourceErrors.push(
+          `Line item "${String(entry.label)}" has insufficient document evidence — verify against uploaded document`,
         );
       }
     });

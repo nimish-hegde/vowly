@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
 import { handleExtractRequest } from './extract-handler.ts';
-import type { ProviderName } from './extractor.ts';
+import { validateAttachments, type ProviderName } from './extractor.ts';
 import {
   acknowledgeSourceWarnings,
   approveQuote,
@@ -17,7 +17,7 @@ import {
   resolvePriceConflict,
 } from './review.ts';
 import { TelemetryTracker } from './telemetry.ts';
-import type { CurrencyCode, EvalCase, ExtractedQuote } from './types.ts';
+import type { CurrencyCode, EvalCase, ExtractedQuote, ExtractionAttachment } from './types.ts';
 
 type SampleCase = EvalCase & { mockExtraction?: ExtractedQuote };
 
@@ -43,10 +43,18 @@ function sendJson(res: ServerResponse, status: number, payload: unknown) {
   res.end(JSON.stringify(payload));
 }
 
+const MAX_BODY_BYTES = 16 * 1024 * 1024; // 16 MB for base64-encoded attachments
+
 async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buf.length;
+    if (totalBytes > MAX_BODY_BYTES) {
+      throw new Error('Request payload too large (max 10 MB per uploaded file).');
+    }
+    chunks.push(buf);
   }
   const raw = Buffer.concat(chunks).toString('utf8');
   return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
@@ -76,6 +84,19 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === 'GET' && url.pathname === '/api/health') {
+      const configuredProvider: ProviderName =
+        (process.env.EXTRACTOR_PROVIDER as ProviderName | undefined) ??
+        (process.env.GEMINI_API_KEY ? 'gemini' : 'mock');
+      sendJson(res, 200, {
+        ok: true,
+        provider: configuredProvider,
+        geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+        model: process.env.GEMINI_MODEL ?? 'gemini-flash-lite-latest',
+      });
+      return;
+    }
+
     if (req.method === 'POST' && url.pathname === '/api/extract') {
       const body = await readBody(req);
       const rawMessage = String(body.rawMessage ?? '').trim();
@@ -84,16 +105,39 @@ const server = createServer(async (req, res) => {
         typeof body.guestCount === 'number' && Number.isFinite(body.guestCount)
           ? body.guestCount
           : 160;
+      const rawAttachments = Array.isArray(body.attachments)
+        ? (body.attachments as ExtractionAttachment[])
+        : undefined;
+      const requireLive = body.requireLive === true;
 
-      if (!rawMessage) {
-        sendJson(res, 400, { error: 'rawMessage is required' });
+      if (!rawMessage && (!rawAttachments || rawAttachments.length === 0)) {
+        sendJson(res, 400, { error: 'Provide a pasted vendor message or upload an image/PDF quote.' });
+        return;
+      }
+
+      const attachmentErrors = validateAttachments(rawAttachments);
+      if (attachmentErrors.length > 0) {
+        sendJson(res, 400, { error: attachmentErrors.join(' ') });
         return;
       }
 
       const sampleMatch = samples.find((s) => s.id === sampleId);
-      const provider: ProviderName | undefined = process.env.EXTRACTOR_PROVIDER as
+      const envProvider: ProviderName | undefined = process.env.EXTRACTOR_PROVIDER as
         | ProviderName
         | undefined;
+      const requestedProvider: ProviderName | undefined =
+        typeof body.provider === 'string' ? (body.provider as ProviderName) : undefined;
+      const resolvedProvider: ProviderName =
+        requestedProvider ?? envProvider ?? (process.env.GEMINI_API_KEY ? 'gemini' : 'mock');
+
+      if (requireLive && resolvedProvider === 'mock') {
+        sendJson(res, 503, {
+          error:
+            'Live AI extraction is not configured on the backend (GEMINI_API_KEY is not set). Set GEMINI_API_KEY on the server to analyze real quotes.',
+          errorKind: 'api_error',
+        });
+        return;
+      }
 
       const sessionId = `quote-${nextId++}`;
       const outcome = await handleExtractRequest(
@@ -102,8 +146,9 @@ const server = createServer(async (req, res) => {
           guestCount,
           sessionId,
           options: {
-            provider: provider ?? (process.env.GEMINI_API_KEY ? 'gemini' : 'mock'),
-            mockLookup: sampleMatch?.mockExtraction,
+            provider: resolvedProvider,
+            attachments: rawAttachments,
+            mockLookup: resolvedProvider === 'mock' ? sampleMatch?.mockExtraction : undefined,
           },
         },
         telemetry,

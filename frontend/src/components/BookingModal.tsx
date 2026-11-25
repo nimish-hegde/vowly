@@ -7,6 +7,7 @@ import {
   formatCurrency,
   getVendorActiveQuote,
   getVendorBookingEligibility,
+  resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { DemoDataNote } from './DemoLabel';
@@ -65,13 +66,25 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
     setDepositPayer(activeWorkspace.coupleNames || 'Unassigned');
     setBalancePayer('Unassigned');
 
-    // Check if primary event has a concrete date
+    // Check if primary event has a concrete date and compute relative balance deadline
     const primaryEvent = activeWorkspace.events.find((e) =>
       vendor.eventIds.includes(e.id)
     );
+    const relativeMilestone = activeQuote?.paymentMilestones?.find(
+      (m) => m.relativeDaysBeforeEvent !== undefined
+    );
+    const relativeDays = relativeMilestone?.relativeDaysBeforeEvent ?? 30;
+    const computedDue = resolveRelativeDeadlineDate(primaryEvent?.date, relativeDays);
+
     if (primaryEvent && !primaryEvent.date) {
       setBalanceHasKnownDate(false);
-      setBalanceRelativeLabel(`30 days prior to ${primaryEvent.name} (date TBD)`);
+      setBalanceRelativeLabel(
+        relativeMilestone?.relativeDeadlineText ??
+          `${relativeDays} days prior to ${primaryEvent.name} (date TBD)`
+      );
+    } else if (computedDue) {
+      setBalanceHasKnownDate(true);
+      setBalanceDueDate(computedDue);
     } else {
       setBalanceHasKnownDate(true);
       setBalanceDueDate('2027-07-15');

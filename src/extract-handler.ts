@@ -33,6 +33,8 @@ export async function handleExtractRequest(
     result = await extract(req.rawMessage, req.options);
   } catch (err) {
     const isExtractionError = err instanceof ExtractionError;
+    const status =
+      isExtractionError && err.statusCode === 400 ? 400 : 502;
     telemetry.recordExtraction({
       provider: req.options.provider ?? 'unknown',
       model: process.env.GEMINI_MODEL ?? 'unknown',
@@ -43,7 +45,7 @@ export async function handleExtractRequest(
       errorKind: isExtractionError ? err.kind : 'api_error',
     });
     return {
-      status: 502,
+      status,
       payload: {
         error: err instanceof Error ? err.message : String(err),
         errorKind: isExtractionError ? err.kind : 'api_error',
@@ -51,7 +53,10 @@ export async function handleExtractRequest(
     };
   }
 
-  const validation = validateExtractedQuote(result.rawResponse, req.rawMessage);
+  const hasAttachments = Boolean(req.options.attachments && req.options.attachments.length > 0);
+  const validation = validateExtractedQuote(result.rawResponse, req.rawMessage, {
+    hasAttachments,
+  });
   if (!validation.quote) {
     telemetry.recordExtraction({
       provider: result.provider,

@@ -3,10 +3,16 @@ import test from 'node:test';
 import { createDemoWorkspace } from '../data/demoWorkspace.ts';
 import {
   buildBookingMilestones,
+  calculateQuoteFinancials,
   calculateWorkspaceFinancials,
   DEFAULT_DEPOSIT_ALREADY_PAID,
   getVendorBookingEligibility,
+  resolveRelativeDeadlineDate,
 } from './financialCalculator.ts';
+import {
+  BackendQuoteExtractor,
+  mapBackendExtractionToFrontendResult,
+} from '../services/quoteExtractor.ts';
 import {
   applyApproveQuote,
   applyConfirmBooking,
@@ -315,4 +321,263 @@ test('deposits default to unpaid until explicitly confirmed by the user', () => 
     calculateWorkspaceFinancials(bookedPaid.workspace).paidToDate,
     beforePaid + 6000
   );
+});
+
+test('Parity UAT Case A: missing gratuity percentage blocks approval and booking without fabricating vendor info', () => {
+  const ws = createDemoWorkspace();
+  const mapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-case-a',
+        draftQuote: {
+          vendorName: null,
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'UNKNOWN',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          gratuityStatus: 'excluded',
+          gratuityPercent: null,
+          gratuityBasis: 'unknown',
+          lineItems: [
+            {
+              label: 'Banquet package',
+              pricingType: 'per_person',
+              amount: 55,
+              minGuests: 150,
+              isFoodItem: true,
+              chargeType: 'mandatory',
+              sourceExcerpt: 'Our banquet package is $55 per person',
+            },
+          ],
+          inclusions: [
+            { category: 'food', name: 'Appetizers', quantity: 4, unit: 'appetizers' },
+            { category: 'food', name: 'Main dishes', quantity: 3, unit: 'main dishes' },
+            { category: 'food', name: 'Desserts', quantity: 2, unit: 'desserts' },
+            { category: 'beverage', name: 'Unlimited soft drinks' },
+          ],
+          venueDetails: { minGuests: 150 },
+          openQuestions: [],
+        },
+      },
+    },
+    {
+      sourceType: 'pasted_message',
+      sourceChannel: 'Email',
+      rawText: 'Our banquet package is $55 per person plus 13% HST and gratuity.',
+      targetEventIds: ['evt-reception'],
+    }
+  );
+
+  assert.equal(mapped.suggestedVendorName, '');
+  assert.equal(mapped.vendorNameMissing, true);
+  assert.equal(mapped.suggestedLocation, '');
+  assert.equal(mapped.quote.structuredInclusions?.length, 4);
+
+  const calc = calculateQuoteFinancials(mapped.quote, ws.events, ['evt-reception'], 120);
+  assert.equal(calc.preTaxTotal, 8250); // 150 min * $55
+  assert.equal(calc.gratuityUnresolved, true);
+  assert.equal(calc.canApprove, false);
+  assert.equal(calc.isEstimateComplete, false);
+});
+
+test('Parity UAT Case B & C: negotiated photography savings and complex venue food-subtotal gratuity + bartenders', () => {
+  const ws = createDemoWorkspace();
+
+  // Case B: Negotiated photography
+  const caseB = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-case-b',
+        draftQuote: {
+          vendorName: null,
+          category: 'photographer',
+          events: ['Engagement'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'tax_exempt' as 'unknown',
+          gratuityStatus: 'unknown',
+          serviceDurationHours: 6,
+          lineItems: [
+            {
+              label: '6-hour engagement photography',
+              pricingType: 'flat',
+              amount: 900,
+              originalAmount: 1000,
+              hours: 6,
+              sourceExcerpt: 'I normally charge $1,000, but I can do $900',
+            },
+          ],
+          inclusions: [
+            { category: 'photography', name: 'Edited photos' },
+            { category: 'photography', name: 'Online gallery' },
+          ],
+          paymentTerms: { depositAmount: 200, methodRule: 'unknown' },
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'DM', rawText: 'Negotiated quote' }
+  );
+  const calcB = calculateQuoteFinancials(caseB.quote, ws.events, []);
+  assert.equal(calcB.preTaxTotal, 900);
+  assert.equal(calcB.negotiatedSavings, 100);
+  assert.equal(calcB.unresolvedConflictsCount, 0);
+  assert.equal(caseB.quote.depositAmount, 200);
+
+  // Case C: Complex venue at 175 guests — exact numerical parity with backend calculator
+  const caseC = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-case-c',
+        draftQuote: {
+          vendorName: 'Grand Banquet',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          gratuityStatus: 'excluded',
+          gratuityPercent: 10,
+          gratuityBasis: 'food_subtotal',
+          lineItems: [
+            {
+              label: 'Banquet package',
+              pricingType: 'per_person',
+              amount: 60,
+              minGuests: 150,
+              isFoodItem: true,
+              sourceExcerpt: 'CAD $60 per guest',
+            },
+            {
+              label: 'AV package',
+              pricingType: 'flat',
+              amount: 750,
+              isThirdParty: true,
+              thirdPartyProvider: 'Preferred third-party supplier',
+              isFoodItem: false,
+              sourceExcerpt: 'AV $750',
+            },
+            {
+              label: 'Bartenders',
+              pricingType: 'per_guest_ratio',
+              amount: 250,
+              ratioGuests: 75,
+              unitLabel: 'bartender',
+              isFoodItem: false,
+              sourceExcerpt: 'Bartenders $250 each, 1 per 75 guests',
+            },
+          ],
+          venueDetails: { minGuests: 150, maxCapacity: 200 },
+          paymentTerms: {
+            depositPercent: 30,
+            methodRule: 'unknown',
+            milestones: [
+              { label: 'Balance', percent: 70, relativeDaysBeforeEvent: 30 },
+            ],
+          },
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Complex venue' }
+  );
+
+  const calcC = calculateQuoteFinancials(caseC.quote, ws.events, ['evt-reception'], 175);
+  assert.equal(calcC.preTaxTotal, 12000); // 10,500 + 750 + 750
+  assert.equal(calcC.gratuityAmount, 1050); // 10% of $10,500 food subtotal
+  assert.equal(calcC.taxAmount, 1696.5); // 13% of $13,050
+  assert.equal(calcC.estimatedAllInTotal, 14746.5);
+  assert.equal(resolveRelativeDeadlineDate('2027-08-15', 30), '2027-07-16');
+});
+
+test('Case D: BackendQuoteExtractor sends distinct uploaded image payloads and never silently falls back to mock on failure', async () => {
+  const originalFetch = globalThis.fetch;
+  const sentPayloads: string[] = [];
+
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body)) as {
+      requireLive?: boolean;
+      attachments?: Array<{ base64Data: string; fileName: string }>;
+    };
+    assert.equal(body.requireLive, true);
+    const b64 = body.attachments?.[0]?.base64Data ?? '';
+    sentPayloads.push(b64);
+
+    if (b64 === 'FAIL_ME') {
+      return new Response(JSON.stringify({ error: 'Gemini unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        session: {
+          id: 's-img',
+          draftQuote: {
+            vendorName: b64 === 'IMG_ONE' ? 'First Venue' : 'Second Studio',
+            category: 'venue',
+            events: ['Reception'],
+            quoteKind: 'initial',
+            currency: 'CAD',
+            taxStatus: 'excluded',
+            gratuityStatus: 'unknown',
+            lineItems: [
+              {
+                label: 'Package',
+                pricingType: 'flat',
+                amount: b64 === 'IMG_ONE' ? 5000 : 9000,
+                sourceExcerpt: 'Visible price',
+              },
+            ],
+            openQuestions: [],
+          },
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
+  }) as typeof fetch;
+
+  try {
+    const extractor = new BackendQuoteExtractor('/api/extract');
+    const r1 = await extractor.extractQuote({
+      sourceType: 'screenshot',
+      sourceChannel: 'Screenshot',
+      rawText: '',
+      attachments: [
+        { mimeType: 'image/png', base64Data: 'IMG_ONE', fileName: 'a.png', sizeBytes: 100 },
+      ],
+    });
+    const r2 = await extractor.extractQuote({
+      sourceType: 'screenshot',
+      sourceChannel: 'Screenshot',
+      rawText: '',
+      attachments: [
+        { mimeType: 'image/png', base64Data: 'IMG_TWO', fileName: 'b.png', sizeBytes: 100 },
+      ],
+    });
+
+    assert.deepEqual(sentPayloads, ['IMG_ONE', 'IMG_TWO']);
+    assert.equal(r1.suggestedVendorName, 'First Venue');
+    assert.equal(r2.suggestedVendorName, 'Second Studio');
+    assert.notEqual(r1.quote.lineItems[0].unitPrice, r2.quote.lineItems[0].unitPrice);
+
+    await assert.rejects(
+      () =>
+        extractor.extractQuote({
+          sourceType: 'screenshot',
+          sourceChannel: 'Screenshot',
+          rawText: '',
+          attachments: [
+            { mimeType: 'image/png', base64Data: 'FAIL_ME', fileName: 'c.png', sizeBytes: 100 },
+          ],
+        }),
+      /Gemini unavailable/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

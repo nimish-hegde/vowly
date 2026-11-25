@@ -263,6 +263,11 @@ export function getApprovalBlockers(session: QuoteReviewSession): string[] {
       `Resolve mandatory TBD costs (${session.calculation.unknownItems.join(', ')}) before adding this quote to the budget.`,
     );
   }
+  if (session.calculation.gratuityUnresolved) {
+    blockers.push(
+      'Resolve the missing gratuity percentage or calculation basis before adding this quote to the budget.',
+    );
+  }
   if (session.sourceWarnings.length > 0 && !session.sourceWarningsAcknowledged) {
     blockers.push(
       'Some source excerpts were not found in the original message. Check them before approving.',
@@ -302,7 +307,7 @@ export function approveQuote(
       ...budget.approvedQuotes,
       {
         id: session.id,
-        vendorName: session.draftQuote.vendorName,
+        vendorName: session.draftQuote.vendorName ?? 'Unnamed vendor',
         currency: session.draftQuote.currency,
         knownSubtotal: calc.knownSubtotal,
         approvedAt: new Date().toISOString(),

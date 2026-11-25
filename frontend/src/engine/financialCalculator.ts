@@ -2,6 +2,7 @@ import type {
   BudgetRow,
   PastelTone,
   PaymentMilestone,
+  PercentageBasis,
   Quote,
   QuoteLineItem,
   TaxHandling,
@@ -13,6 +14,35 @@ import type {
 
 export const ONTARIO_HST_RATE = 0.13;
 
+const FOOD_ITEM_PATTERN =
+  /\b(banquet|dinner|buffet|menu|catering|food|meal|entree|appetizer|dessert|plated|brunch|lunch|reception package|per[\s-]person|per[\s-]guest)\b/i;
+
+export function resolveRelativeDeadlineDate(
+  eventDateIso: string | undefined,
+  relativeDaysBeforeEvent: number | undefined
+): string | null {
+  if (!eventDateIso || !/^\d{4}-\d{2}-\d{2}$/.test(eventDateIso)) return null;
+  if (relativeDaysBeforeEvent === undefined || !Number.isFinite(relativeDaysBeforeEvent)) {
+    return null;
+  }
+  const [y, m, d] = eventDateIso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - Math.round(relativeDaysBeforeEvent));
+  return dt.toISOString().slice(0, 10);
+}
+
+export interface LineItemBreakdown {
+  id: string;
+  label: string;
+  amount: number | null;
+  formulaText: string;
+  negotiatedOriginalAmount?: number;
+  negotiatedSavings?: number;
+  isThirdParty?: boolean;
+  thirdPartyProvider?: string;
+  unresolvedBasis?: boolean;
+}
+
 export interface QuoteCalculationResult {
   currencyLabel: string;
   isCurrencyUnknown: boolean;
@@ -22,6 +52,8 @@ export interface QuoteCalculationResult {
   paymentOptionAdjustment: number;
   preTaxTotal: number;
   gratuityAmount: number;
+  gratuityUnresolved: boolean;
+  gratuityBasisLabel?: string;
   taxRate: number;
   taxAmount: number;
   hstAssumed: boolean;
@@ -35,6 +67,10 @@ export interface QuoteCalculationResult {
   capacityExceeded: boolean;
   unresolvedMandatoryFeesCount: number;
   unresolvedConflictsCount: number;
+  unresolvedPercentageCount: number;
+  negotiatedSavings: number;
+  isEstimateComplete: boolean;
+  lineItemBreakdowns: LineItemBreakdown[];
   blockingReasons: string[];
   canApprove: boolean;
   addOnImpacts: Array<{
@@ -201,11 +237,71 @@ function resolveLineItemAmount(
   };
 }
 
+function resolvePercentageBasis(
+  basis: PercentageBasis | undefined,
+  baseItems: Array<{ item: QuoteLineItem; amount: number | null }>,
+  options?: { targetLabels?: string[]; customBasisAmount?: number }
+): { amount: number | null; label: string } {
+  const effectiveBasis = basis ?? 'unknown';
+  if (effectiveBasis === 'unknown') {
+    return { amount: null, label: 'calculation basis unresolved' };
+  }
+  if (effectiveBasis === 'custom_amount') {
+    if (
+      options?.customBasisAmount !== undefined &&
+      Number.isFinite(options.customBasisAmount) &&
+      options.customBasisAmount >= 0
+    ) {
+      return {
+        amount: Math.round(options.customBasisAmount * 100) / 100,
+        label: 'confirmed custom amount',
+      };
+    }
+    return { amount: null, label: 'custom amount not confirmed' };
+  }
+  if (effectiveBasis === 'entire_subtotal') {
+    const sum = baseItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: 'applicable subtotal' };
+  }
+  if (effectiveBasis === 'food_subtotal') {
+    const foodItems = baseItems.filter(
+      (e) =>
+        e.item.isFoodItem === true ||
+        (e.item.isFoodItem !== false &&
+          !e.item.isThirdParty &&
+          e.item.pricingModel !== 'guest_ratio' &&
+          FOOD_ITEM_PATTERN.test(e.item.label))
+    );
+    if (foodItems.length === 0 || foodItems.some((e) => e.amount === null)) {
+      return { amount: null, label: 'food subtotal unresolved' };
+    }
+    const sum = foodItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: 'food subtotal' };
+  }
+  if (effectiveBasis === 'specific_line_items') {
+    const targets = (options?.targetLabels ?? [])
+      .map((t) => t.toLowerCase().trim())
+      .filter(Boolean);
+    if (targets.length === 0) {
+      return { amount: null, label: 'target line items unresolved' };
+    }
+    const matched = baseItems.filter((e) =>
+      targets.some((t) => e.item.label.toLowerCase().includes(t))
+    );
+    if (matched.length === 0 || matched.some((e) => e.amount === null)) {
+      return { amount: null, label: 'target line items unresolved' };
+    }
+    const sum = matched.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: targets.join(', ') };
+  }
+  return { amount: null, label: 'calculation basis unresolved' };
+}
+
 /**
  * Pure deterministic calculator for any vendor quote.
- * Guarantees consistent Ontario 13% HST handling, minimum guest floors,
- * optional add-ons, cash vs regular payment alternatives, conflict checks,
- * and approval blockers.
+ * Guarantees consistent tax/gratuity handling, structured percentage bases,
+ * minimum guest floors, staffing ratios, optional add-ons, negotiated savings,
+ * conflict checks, and approval blockers.
  */
 export function calculateQuoteFinancials(
   quote: Quote,
@@ -226,6 +322,11 @@ export function calculateQuoteFinancials(
   let appliedMinGuests: number | null = null;
   let effectiveGuestCountUsed: number | null = null;
   let guestCountMissing = false;
+  let negotiatedSavings = 0;
+  let unresolvedPercentageCount = 0;
+  const lineItemBreakdowns: LineItemBreakdown[] = [];
+  const resolvedBaseItems: Array<{ item: QuoteLineItem; amount: number | null }> = [];
+  const percentageItems: QuoteLineItem[] = [];
 
   const resolvedConflictPriceByLineItem: Record<string, number> = {};
   for (const conflict of quote.conflicts) {
@@ -240,6 +341,10 @@ export function calculateQuoteFinancials(
   }
 
   for (const item of quote.lineItems) {
+    if (item.pricingModel === 'percentage') {
+      percentageItems.push(item);
+      continue;
+    }
     const overriddenUnitPrice =
       resolvedConflictPriceByLineItem[item.id] !== undefined
         ? resolvedConflictPriceByLineItem[item.id]
@@ -262,6 +367,91 @@ export function calculateQuoteFinancials(
     }
     if (res.guestsUsed !== null) effectiveGuestCountUsed = res.guestsUsed;
     if (res.guestMissing) guestCountMissing = true;
+
+    let itemSavings: number | undefined;
+    let itemOriginalTotal: number | undefined;
+    if (
+      item.originalUnitPrice !== undefined &&
+      item.originalUnitPrice > overriddenUnitPrice &&
+      !quote.conflicts.some((c) => c.targetLineItemId === item.id)
+    ) {
+      const origRes = resolveLineItemAmount(
+        { ...effectiveItem, unitPrice: item.originalUnitPrice },
+        guestMap,
+        primaryEventGuests,
+        guestCountOverride
+      );
+      if (origRes.amount > res.amount) {
+        itemOriginalTotal = Math.round(origRes.amount * 100) / 100;
+        itemSavings = Math.round((origRes.amount - res.amount) * 100) / 100;
+        negotiatedSavings = Math.round((negotiatedSavings + itemSavings) * 100) / 100;
+      }
+    }
+
+    let formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} fixed`;
+    if (effectiveItem.pricingModel === 'per_person') {
+      formulaText =
+        res.guestsUsed !== null
+          ? `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest × ${res.guestsUsed} guests${
+              res.minApplied && res.appliedMin ? ` (min ${res.appliedMin} applied)` : ''
+            }`
+          : `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest (guest count needed)`;
+    } else if (effectiveItem.pricingModel === 'guest_ratio') {
+      const divisor = effectiveItem.ratioDivisor && effectiveItem.ratioDivisor > 0 ? effectiveItem.ratioDivisor : 10;
+      const unitWord = effectiveItem.unitLabel || 'unit';
+      if (res.guestsUsed !== null) {
+        const units = Math.ceil(res.guestsUsed / divisor);
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} · 1 per ${divisor} guests · ${res.guestsUsed} guests → ${units} ${unitWord}${units === 1 ? '' : 's'}`;
+      } else {
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} (1 per ${divisor} guests)`;
+      }
+    } else if (effectiveItem.pricingModel === 'hourly') {
+      const hrs = effectiveItem.quantity ?? 1;
+      formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/hr × ${hrs} hr${hrs === 1 ? '' : 's'}`;
+    }
+
+    resolvedBaseItems.push({ item: effectiveItem, amount: res.guestMissing && res.amount === 0 ? null : res.amount });
+    lineItemBreakdowns.push({
+      id: item.id,
+      label: item.label,
+      amount: Math.round(res.amount * 100) / 100,
+      formulaText,
+      negotiatedOriginalAmount: itemOriginalTotal,
+      negotiatedSavings: itemSavings,
+      isThirdParty: item.isThirdParty,
+      thirdPartyProvider: item.thirdPartyProvider,
+    });
+  }
+
+  for (const pctItem of percentageItems) {
+    const rate = pctItem.unitPrice;
+    const basis = resolvePercentageBasis(pctItem.percentageBasis, resolvedBaseItems, {
+      targetLabels: pctItem.percentageTargetLabels,
+      customBasisAmount: pctItem.customBasisAmount,
+    });
+    if (basis.amount === null) {
+      unresolvedPercentageCount += 1;
+      lineItemBreakdowns.push({
+        id: pctItem.id,
+        label: pctItem.label,
+        amount: null,
+        formulaText: `${rate}% (${basis.label})`,
+        isThirdParty: pctItem.isThirdParty,
+        thirdPartyProvider: pctItem.thirdPartyProvider,
+        unresolvedBasis: true,
+      });
+    } else {
+      const charge = Math.round(basis.amount * (rate / 100) * 100) / 100;
+      baseSubtotal = Math.round((baseSubtotal + charge) * 100) / 100;
+      lineItemBreakdowns.push({
+        id: pctItem.id,
+        label: pctItem.label,
+        amount: charge,
+        formulaText: `${rate}% of ${basis.label} ($${basis.amount.toLocaleString('en-CA')})`,
+        isThirdParty: pctItem.isThirdParty,
+        thirdPartyProvider: pctItem.thirdPartyProvider,
+      });
+    }
   }
 
   let paymentOptionAdjustment = 0;
@@ -286,11 +476,17 @@ export function calculateQuoteFinancials(
 
   const hstIncluded = effectiveTaxHandling === 'included';
   const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
+  const explicitTaxRate =
+    quote.taxPercent !== undefined && Number.isFinite(quote.taxPercent)
+      ? quote.taxPercent / 100
+      : ONTARIO_HST_RATE;
+  const hasExplicitTaxLineItem = quote.lineItems.some((li) =>
+    /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
+  );
   const taxRate =
-    effectiveTaxHandling === 'excluded_plus_hst' ||
-    effectiveTaxHandling === 'unspecified_ontario_assumed'
-      ? ONTARIO_HST_RATE
-      : 0;
+    hasExplicitTaxLineItem || effectiveTaxHandling === 'included' || effectiveTaxHandling === 'tax_exempt'
+      ? 0
+      : explicitTaxRate;
 
   let selectedAddOnsPreTax = 0;
   const addOnImpacts = quote.addOns.map((addon) => {
@@ -310,12 +506,49 @@ export function calculateQuoteFinancials(
 
   const preTaxTotal = Math.max(
     0,
-    baseSubtotal + paymentOptionAdjustment + confirmedExtraFeesPreTax + selectedAddOnsPreTax
+    Math.round(
+      (baseSubtotal + paymentOptionAdjustment + confirmedExtraFeesPreTax + selectedAddOnsPreTax) *
+        100
+    ) / 100
   );
 
-  const gratuityAmount = quote.gratuityPercent
-    ? Math.round(preTaxTotal * (quote.gratuityPercent / 100) * 100) / 100
-    : 0;
+  // Gratuity calculation (prevent duplicate application; support structured bases)
+  const hasExplicitGratuityLineItem = quote.lineItems.some((li) =>
+    /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
+  );
+  let gratuityAmount = 0;
+  let gratuityUnresolved = false;
+  let gratuityBasisLabel: string | undefined;
+
+  if (!hasExplicitGratuityLineItem) {
+    if (
+      quote.gratuityStatus === 'excluded' &&
+      (quote.gratuityPercent === undefined || quote.gratuityPercent === null)
+    ) {
+      gratuityUnresolved = true;
+      gratuityBasisLabel = 'percentage unknown';
+    } else if (
+      quote.gratuityPercent !== undefined &&
+      quote.gratuityPercent !== null &&
+      quote.gratuityPercent > 0 &&
+      quote.gratuityStatus !== 'included'
+    ) {
+      const basisType = quote.gratuityBasis ?? 'entire_subtotal';
+      if (basisType === 'entire_subtotal') {
+        gratuityAmount = Math.round(preTaxTotal * (quote.gratuityPercent / 100) * 100) / 100;
+        gratuityBasisLabel = 'applicable subtotal';
+      } else {
+        const basis = resolvePercentageBasis(basisType, resolvedBaseItems);
+        if (basis.amount === null) {
+          gratuityUnresolved = true;
+          gratuityBasisLabel = basis.label;
+        } else {
+          gratuityAmount = Math.round(basis.amount * (quote.gratuityPercent / 100) * 100) / 100;
+          gratuityBasisLabel = basis.label;
+        }
+      }
+    }
+  }
 
   const taxableBase = preTaxTotal + gratuityAmount;
   const taxAmount = Math.round(taxableBase * taxRate * 100) / 100;
@@ -345,6 +578,23 @@ export function calculateQuoteFinancials(
       `Resolve ${unresolvedMandatoryFeesCount} unconfirmed mandatory ${
         unresolvedMandatoryFeesCount === 1 ? 'fee' : 'fees'
       } (enter confirmed amount or mark included/waived), or Save as Draft.`
+    );
+  }
+  if (gratuityUnresolved) {
+    blockingReasons.push(
+      'Confirm the mandatory gratuity percentage and calculation basis before approving, or Save as Draft.'
+    );
+  }
+  if (unresolvedPercentageCount > 0) {
+    blockingReasons.push(
+      `Confirm the calculation basis for ${unresolvedPercentageCount} percentage-based ${
+        unresolvedPercentageCount === 1 ? 'charge' : 'charges'
+      } before approving, or Save as Draft.`
+    );
+  }
+  if (quote.sourceWarnings && quote.sourceWarnings.length > 0 && !quote.sourceWarningsAcknowledged) {
+    blockingReasons.push(
+      'Review flagged source evidence warnings against the original document before approving.'
     );
   }
 
@@ -387,6 +637,8 @@ export function calculateQuoteFinancials(
     paymentOptionAdjustment,
     preTaxTotal,
     gratuityAmount,
+    gratuityUnresolved,
+    gratuityBasisLabel,
     taxRate,
     taxAmount,
     hstAssumed,
@@ -400,6 +652,10 @@ export function calculateQuoteFinancials(
     capacityExceeded,
     unresolvedMandatoryFeesCount,
     unresolvedConflictsCount,
+    unresolvedPercentageCount,
+    negotiatedSavings,
+    isEstimateComplete: blockingReasons.length === 0 && !guestCountMissing,
+    lineItemBreakdowns,
     blockingReasons,
     canApprove: blockingReasons.length === 0,
     addOnImpacts,
@@ -459,6 +715,18 @@ export function getVendorBookingEligibility(
       blockingReasons.push(
         `Resolve ${calc.unresolvedConflictsCount} conflicting price ${
           calc.unresolvedConflictsCount === 1 ? 'figure' : 'figures'
+        } before booking.`
+      );
+    }
+    if (calc.gratuityUnresolved) {
+      blockingReasons.push(
+        'Confirm the mandatory gratuity percentage and calculation basis before booking.'
+      );
+    }
+    if (calc.unresolvedPercentageCount > 0) {
+      blockingReasons.push(
+        `Confirm the calculation basis for ${calc.unresolvedPercentageCount} percentage-based ${
+          calc.unresolvedPercentageCount === 1 ? 'charge' : 'charges'
         } before booking.`
       );
     }
