@@ -216,7 +216,7 @@ function resolveLineItemAmount(
   }
 
   if (item.pricingModel === 'hourly') {
-    const hours = item.quantity ?? 1;
+    const hours = item.isConditionalOvertime ? (item.quantity ?? 0) : (item.quantity ?? 1);
     return {
       amount: hours * item.unitPrice,
       guestsUsed: null,
@@ -406,8 +406,16 @@ export function calculateQuoteFinancials(
         formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} (1 per ${divisor} guests)`;
       }
     } else if (effectiveItem.pricingModel === 'hourly') {
-      const hrs = effectiveItem.quantity ?? 1;
-      formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/hr × ${hrs} hr${hrs === 1 ? '' : 's'}`;
+      if (effectiveItem.isConditionalOvertime) {
+        const overtimeHrs = effectiveItem.quantity ?? 0;
+        const includedText = effectiveItem.includedPackageHours
+          ? ` (above ${effectiveItem.includedPackageHours} included hrs)`
+          : '';
+        formulaText = `${overtimeHrs} overtime hr${overtimeHrs === 1 ? '' : 's'} × $${overriddenUnitPrice.toLocaleString('en-CA')}/hr${includedText}`;
+      } else {
+        const hrs = effectiveItem.quantity ?? 1;
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/hr × ${hrs} hr${hrs === 1 ? '' : 's'}`;
+      }
     }
 
     resolvedBaseItems.push({ item: effectiveItem, amount: res.guestMissing && res.amount === 0 ? null : res.amount });
@@ -423,6 +431,112 @@ export function calculateQuoteFinancials(
     });
   }
 
+  let paymentOptionAdjustment = 0;
+  let effectiveTaxHandling: TaxHandling = quote.taxHandling;
+  if (quote.paymentOptions && quote.paymentOptions.length > 0) {
+    const activeOpt =
+      quote.paymentOptions.find((o) => o.id === quote.selectedPaymentOptionId) ??
+      quote.paymentOptions[0];
+    paymentOptionAdjustment = activeOpt.adjustmentDelta;
+    effectiveTaxHandling = activeOpt.taxHandling;
+  }
+
+  // Resolve confirmed extra fees BEFORE evaluating whole-subtotal percentage charges
+  let confirmedExtraFeesPreTax = 0;
+  let unresolvedMandatoryFeesCount = 0;
+  for (const fee of quote.unconfirmedFees) {
+    if (fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number') {
+      confirmedExtraFeesPreTax += fee.confirmedAmount;
+      resolvedBaseItems.push({
+        item: {
+          id: fee.id,
+          label: fee.label,
+          pricingModel: 'flat',
+          unitPrice: fee.confirmedAmount,
+          isFoodItem: false,
+        },
+        amount: fee.confirmedAmount,
+      });
+    } else if (fee.mandatory && fee.status === 'unconfirmed') {
+      unresolvedMandatoryFeesCount += 1;
+    }
+  }
+
+  const hstIncluded = effectiveTaxHandling === 'included';
+  const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
+  const explicitTaxRate =
+    quote.taxPercent !== undefined && Number.isFinite(quote.taxPercent)
+      ? quote.taxPercent / 100
+      : ONTARIO_HST_RATE;
+  const hasExplicitTaxLineItem = quote.lineItems.some((li) =>
+    /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
+  );
+  const taxRate =
+    hasExplicitTaxLineItem || effectiveTaxHandling === 'included' || effectiveTaxHandling === 'tax_exempt'
+      ? 0
+      : explicitTaxRate;
+
+  // Evaluate optional add-ons using their preserved pricing models (per_person, hourly, guest_ratio, percentage, flat)
+  let selectedAddOnsPreTax = 0;
+  const addOnImpacts = quote.addOns.map((addon) => {
+    const model = addon.pricingModel ?? 'flat';
+    let computedPreTax = addon.pricePreTax;
+    if (model === 'percentage') {
+      const basis = resolvePercentageBasis(addon.percentageBasis, resolvedBaseItems, {
+        targetLabels: addon.percentageTargetLabels,
+        customBasisAmount: addon.customBasisAmount,
+      });
+      computedPreTax =
+        basis.amount !== null
+          ? Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100
+          : 0;
+    } else if (model !== 'flat') {
+      const addonRes = resolveLineItemAmount(
+        {
+          id: addon.id,
+          label: addon.label,
+          pricingModel: model,
+          unitPrice: addon.pricePreTax,
+          quantity: addon.quantity,
+          ratioDivisor: addon.ratioDivisor,
+          unitLabel: addon.unitLabel,
+          minGuests: addon.minGuests,
+          eventId: addon.eventId,
+        },
+        guestMap,
+        primaryEventGuests,
+        guestCountOverride
+      );
+      computedPreTax = Math.round(addonRes.amount * 100) / 100;
+    }
+
+    if (addon.selected) {
+      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
+      if (model !== 'percentage') {
+        resolvedBaseItems.push({
+          item: {
+            id: addon.id,
+            label: addon.label,
+            pricingModel: model,
+            unitPrice: addon.pricePreTax,
+            isFoodItem: false,
+          },
+          amount: computedPreTax,
+        });
+      }
+    }
+    const impactWithTax = Math.round(computedPreTax * (1 + taxRate) * 100) / 100;
+    return {
+      id: addon.id,
+      label: addon.label,
+      description: addon.description,
+      pricePreTax: computedPreTax,
+      impactWithTax,
+      selected: addon.selected,
+    };
+  });
+
+  // Evaluate percentage-based line items AFTER confirmed fees & selected non-percentage add-ons
   for (const pctItem of percentageItems) {
     const rate = pctItem.unitPrice;
     const basis = resolvePercentageBasis(pctItem.percentageBasis, resolvedBaseItems, {
@@ -453,56 +567,6 @@ export function calculateQuoteFinancials(
       });
     }
   }
-
-  let paymentOptionAdjustment = 0;
-  let effectiveTaxHandling: TaxHandling = quote.taxHandling;
-  if (quote.paymentOptions && quote.paymentOptions.length > 0) {
-    const activeOpt =
-      quote.paymentOptions.find((o) => o.id === quote.selectedPaymentOptionId) ??
-      quote.paymentOptions[0];
-    paymentOptionAdjustment = activeOpt.adjustmentDelta;
-    effectiveTaxHandling = activeOpt.taxHandling;
-  }
-
-  let confirmedExtraFeesPreTax = 0;
-  let unresolvedMandatoryFeesCount = 0;
-  for (const fee of quote.unconfirmedFees) {
-    if (fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number') {
-      confirmedExtraFeesPreTax += fee.confirmedAmount;
-    } else if (fee.mandatory && fee.status === 'unconfirmed') {
-      unresolvedMandatoryFeesCount += 1;
-    }
-  }
-
-  const hstIncluded = effectiveTaxHandling === 'included';
-  const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
-  const explicitTaxRate =
-    quote.taxPercent !== undefined && Number.isFinite(quote.taxPercent)
-      ? quote.taxPercent / 100
-      : ONTARIO_HST_RATE;
-  const hasExplicitTaxLineItem = quote.lineItems.some((li) =>
-    /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
-  );
-  const taxRate =
-    hasExplicitTaxLineItem || effectiveTaxHandling === 'included' || effectiveTaxHandling === 'tax_exempt'
-      ? 0
-      : explicitTaxRate;
-
-  let selectedAddOnsPreTax = 0;
-  const addOnImpacts = quote.addOns.map((addon) => {
-    if (addon.selected) {
-      selectedAddOnsPreTax += addon.pricePreTax;
-    }
-    const impactWithTax = Math.round(addon.pricePreTax * (1 + taxRate) * 100) / 100;
-    return {
-      id: addon.id,
-      label: addon.label,
-      description: addon.description,
-      pricePreTax: addon.pricePreTax,
-      impactWithTax,
-      selected: addon.selected,
-    };
-  });
 
   const preTaxTotal = Math.max(
     0,

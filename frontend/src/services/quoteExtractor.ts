@@ -870,6 +870,37 @@ function formatStructuredInclusion(inc: StructuredInclusion): string {
   return inc.name;
 }
 
+const OVERTIME_PATTERN =
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
+
+function findIncludedHoursFromBackendQuote(bq: BackendExtractedQuote, excludeIdx: number): number | undefined {
+  let hasSiblingFlat = false;
+  for (let i = 0; i < bq.lineItems.length; i++) {
+    if (i === excludeIdx) continue;
+    const sibling = bq.lineItems[i];
+    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      hasSiblingFlat = true;
+      if (sibling.hours !== undefined && sibling.hours > 0) return sibling.hours;
+    }
+  }
+  if (hasSiblingFlat && bq.photographerDetails?.hoursIncluded && bq.photographerDetails.hoursIncluded > 0) {
+    return bq.photographerDetails.hoursIncluded;
+  }
+  if (hasSiblingFlat && bq.serviceDurationHours && bq.serviceDurationHours > 0) {
+    return bq.serviceDurationHours;
+  }
+  return undefined;
+}
+
+function mapPricingTypeToModel(pricingType: string): LineItemPricingModel {
+  if (pricingType === 'per_person') return 'per_person';
+  if (pricingType === 'per_hour') return 'hourly';
+  if (pricingType === 'per_guest_ratio') return 'guest_ratio';
+  if (pricingType === 'percentage') return 'percentage';
+  return 'flat';
+}
+
 export function mapBackendExtractionToFrontendResult(
   payload: BackendExtractResponse,
   input: ExtractionInput
@@ -922,22 +953,38 @@ export function mapBackendExtractionToFrontendResult(
     }
 
     if (isOptional) {
+      const addOnModel = mapPricingTypeToModel(item.pricingType);
       addOns.push({
         id: `ao-${idx}-${Date.now()}`,
         label: item.label,
         description: item.sourceExcerpt || 'Optional add-on',
-        pricePreTax: item.amount,
+        pricePreTax: addOnModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
+        pricingModel: addOnModel,
+        quantity: addOnModel === 'hourly' ? item.hours : undefined,
+        ratioDivisor: item.ratioGuests,
+        unitLabel: item.unitLabel,
+        minGuests: item.minGuests,
+        eventId: input.targetEventIds?.[0],
+        percentageBasis: item.percentageBasis,
+        percentageTargetLabels: item.percentageTargetLabels,
+        customBasisAmount: item.customBasisAmount,
         selected: false,
         evidenceId: evId,
       });
       return;
     }
 
-    let pricingModel: LineItemPricingModel = 'flat';
-    if (item.pricingType === 'per_person') pricingModel = 'per_person';
-    else if (item.pricingType === 'per_hour') pricingModel = 'hourly';
-    else if (item.pricingType === 'per_guest_ratio') pricingModel = 'guest_ratio';
-    else if (item.pricingType === 'percentage') pricingModel = 'percentage';
+    const pricingModel = mapPricingTypeToModel(item.pricingType);
+    const includedPackageHours =
+      pricingModel === 'hourly' ? findIncludedHoursFromBackendQuote(bq, idx) : undefined;
+    const isConditionalOvertime =
+      pricingModel === 'hourly' &&
+      includedPackageHours !== undefined &&
+      !(item.hours !== undefined && item.hours > 0) &&
+      ((bq.photographerDetails?.extraHourRate !== undefined &&
+        Math.abs(item.amount - bq.photographerDetails.extraHourRate) < 0.01) ||
+        OVERTIME_PATTERN.test(item.label) ||
+        OVERTIME_PATTERN.test(item.sourceExcerpt));
 
     const liId = `li-${idx}-${Date.now()}`;
     lineItems.push({
@@ -945,7 +992,14 @@ export function mapBackendExtractionToFrontendResult(
       label: item.label,
       pricingModel,
       unitPrice: pricingModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
-      quantity: pricingModel === 'hourly' ? item.hours : undefined,
+      quantity:
+        pricingModel === 'hourly'
+          ? isConditionalOvertime
+            ? 0
+            : item.hours
+          : undefined,
+      isConditionalOvertime: isConditionalOvertime || undefined,
+      includedPackageHours: isConditionalOvertime ? includedPackageHours : undefined,
       ratioDivisor: item.ratioGuests,
       unitLabel: item.unitLabel,
       percentageBasis: item.percentageBasis,

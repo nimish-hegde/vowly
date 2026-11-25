@@ -581,3 +581,133 @@ test('Case D: BackendQuoteExtractor sends distinct uploaded image payloads and n
     globalThis.fetch = originalFetch;
   }
 });
+
+test('Codex P2 fixes: per-person optional add-ons, conditional overtime defaulting to 0 hrs, and confirmed extra fees in whole-subtotal percentage bases', () => {
+  const ws = createDemoWorkspace();
+
+  // 1. Optional per-person add-on ($20/person for 100 guests = $2,000, not $20)
+  const addOnMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-addon',
+        draftQuote: {
+          vendorName: 'Catering Co',
+          category: 'catering',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'included',
+          lineItems: [
+            {
+              label: 'Base dinner',
+              pricingType: 'flat',
+              amount: 5000,
+              sourceExcerpt: 'Base dinner $5,000',
+            },
+            {
+              label: 'Optional late-night station',
+              pricingType: 'per_person',
+              amount: 20,
+              chargeType: 'optional',
+              optionalAddon: true,
+              sourceExcerpt: 'Optional late-night station $20/person',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Catering quote' }
+  );
+  addOnMapped.quote.addOns[0].selected = true;
+  const addOnCalc = calculateQuoteFinancials(addOnMapped.quote, ws.events, ['evt-reception'], 100);
+  assert.equal(addOnCalc.selectedAddOnsPreTax, 2000);
+  assert.equal(addOnCalc.preTaxTotal, 7000);
+
+  // 2. Conditional overtime ($2,000 8-hr package + $250/hr overtime => $2,000, NOT $2,250)
+  const overtimeMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-overtime',
+        draftQuote: {
+          vendorName: 'Lens Studio',
+          category: 'photographer',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'included',
+          photographerDetails: { hoursIncluded: 8, extraHourRate: 250 },
+          lineItems: [
+            {
+              label: '8-hour wedding coverage',
+              pricingType: 'flat',
+              amount: 2000,
+              hours: 8,
+              sourceExcerpt: '8-hour coverage $2,000',
+            },
+            {
+              label: 'Overtime hours',
+              pricingType: 'per_hour',
+              amount: 250,
+              chargeType: 'conditional',
+              sourceExcerpt: 'Additional overtime hours $250/hr',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Photo quote' }
+  );
+  const overtimeCalc = calculateQuoteFinancials(overtimeMapped.quote, ws.events, []);
+  assert.equal(overtimeCalc.preTaxTotal, 2000);
+
+  // 3. Confirmed extra fees included in whole-subtotal percentage bases ($1,000 + $500 confirmed + 10% = $1,650)
+  const pctMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-pct',
+        draftQuote: {
+          vendorName: 'Hall Co',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'included',
+          lineItems: [
+            {
+              label: 'Hall package',
+              pricingType: 'flat',
+              amount: 1000,
+              sourceExcerpt: 'Hall package $1,000',
+            },
+            {
+              label: 'Setup fee',
+              pricingType: 'unknown',
+              amount: null,
+              chargeType: 'mandatory',
+              sourceExcerpt: 'Setup fee TBD',
+            },
+            {
+              label: 'Service surcharge',
+              pricingType: 'percentage',
+              amount: 10,
+              percentageRate: 10,
+              percentageBasis: 'entire_subtotal',
+              sourceExcerpt: '10% service surcharge on total',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Hall quote' }
+  );
+  pctMapped.quote.unconfirmedFees[0].status = 'confirmed_amount';
+  pctMapped.quote.unconfirmedFees[0].confirmedAmount = 500;
+  const pctCalc = calculateQuoteFinancials(pctMapped.quote, ws.events, []);
+  assert.equal(pctCalc.preTaxTotal, 1650); // $1,000 + $500 + 10% of $1,500 ($150)
+});

@@ -112,6 +112,8 @@ export interface QuoteLineItem {
   pricingModel: LineItemPricingModel;
   unitPrice: number;
   quantity?: number; // hours for hourly, or fixed count
+  isConditionalOvertime?: boolean; // conditional extra/overtime hourly rate (defaults to 0 hrs)
+  includedPackageHours?: number; // included base package hours before overtime applies
   ratioDivisor?: number; // e.g., 75 guests per bartender for guest_ratio
   unitLabel?: string; // e.g., "bartender", "table"
   percentageBasis?: PercentageBasis;
@@ -133,6 +135,15 @@ export interface QuoteAddOn {
   label: string;
   description: string;
   pricePreTax: number;
+  pricingModel?: LineItemPricingModel;
+  quantity?: number;
+  ratioDivisor?: number;
+  unitLabel?: string;
+  minGuests?: number;
+  eventId?: string;
+  percentageBasis?: PercentageBasis;
+  percentageTargetLabels?: string[];
+  customBasisAmount?: number;
   selected: boolean;
   evidenceId?: string;
 }
