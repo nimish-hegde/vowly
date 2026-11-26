@@ -246,3 +246,61 @@ node src/eval.ts --provider gemini --split held-out --show-raw
 node src/eval.ts --provider gemini --split held-out-v2 --show-raw
 npm run ui
 ```
+
+---
+
+## 11. `v0.5` Live Gemini Benchmark & Multimodal Extraction (`feat/v0.5-real-quote-import`)
+
+Following the `v0.5` multimodal, schema, and calculator updates (`PR #13`), we ran the expanded **63-case** text benchmark (`60` original cases + `3` new UAT dev cases) and **3 live multimodal file tests** (2 PNG screenshots + 1 PDF) on the Gemini free tier (`gemini-flash-lite-latest`, resolved to **`gemini-3.5-flash-lite`**).
+
+### 11.1 Initial `v0.5` live run & root-cause fixes (`55/63` → `63/63`)
+
+The first `v0.5` live run on `gemini-3.5-flash-lite` scored **55/63 (87.3%)** with **2 critical financial errors** and 6 non-blocker failures:
+1. **`dev-catering-per-person-addons` (Critical financial error: `$6,681.50` vs `$5,810`):** Adding `pricingType: "percentage"` caused Gemini to emit the `15% service charge` *both* as a `percentage` line item (`entire_subtotal`) and in `gratuityPercent: 15`, inflating `knownSubtotal`. **Fix:** Clarified in `src/extractor.ts` that percentage gratuities/service charges belong only in top-level `gratuityStatus`/`gratuityPercent`, and added deterministic deduplication in both `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts`. Also stripped spurious `originalAmount === amount` and `0` placeholder fields in `normalizeProviderResponse`.
+2. **`heldout-venue-sat-ratio-cap` (Critical financial error: `$18,950` vs `$16,100`):** Gemini copied `maxCapacity: 190` into `minGuests: 190` on a 160-guest quote. **Fix:** Added an explicit guard in `src/extractor.ts` Rule 8 never to copy `maxCapacity` into `minGuests`.
+3. **`dev-uat-case-a-missing-gratuity` & `dev-uat-case-c-complex-venue` (`category: "unknown"` vs `"venue"`):** Explicit `"banquet package"` and `"Maximum capacity is 200 guests"` cues were classified as `unknown` under Rule 4. **Fix:** Included `"banquet package"` and `"maximum capacity"` as explicit venue-space cues while keeping generic `"dinner/reception package"` quotes `unknown`.
+4. **Omitted `paymentTerms` (3 cases) & `openQuestions` (1 case):** Gemini omitted `paymentTerms` when only a payment method rule was present, and omitted `openQuestions` on `heldout-dj-relative-deadline-unknown-currency`. **Fix:** Added `'paymentTerms'` to `GEMINI_RESPONSE_SCHEMA.required` and strengthened Rule 10 for `UNKNOWN` currency and relative deadlines.
+
+### 11.2 Post-fix live 63-case results vs. `v0.3` baseline (`a391f49`)
+
+#### Original 60 cases comparison (`v0.3` `a391f49` vs. `v0.5` post-fix)
+
+| Metric | `v0.3` Final (`a391f49`, 60 cases) | `v0.5` Initial (60 orig. subset) | `v0.5` Post-Fix (60 orig. subset) |
+|---|---:|---:|---:|
+| End-to-end success | 59/60 (98.3%) | 54/60 (90.0%) | **60/60 (100.0%)** |
+| Regression split | 6/6 (100.0%) | 6/6 (100.0%) | **6/6 (100.0%)** |
+| Dev split (original 17) | 17/17 (100.0%) | 15/17 (88.2%) | **17/17 (100.0%)** |
+| Original held-out split | 25/25 (100.0%) | 22/25 (88.0%) | **25/25 (100.0%)** |
+| `held-out-v2` split | 11/12 (91.7%) | 11/12 (91.7%) | **12/12 (100.0%)** |
+| Critical financial errors | 0 | 2 | **0** |
+| Unsupported currency guesses | 0 | 0 | **0** |
+| Release blockers | 0 | 2 | **0** |
+
+#### Full 63-case summary & 3 new UAT cases (post-fix, `gemini-3.5-flash-lite`)
+
+- **All 63 cases:** **63/63 (100.0%)** e2e success · **63/63 (100.0%)** API availability · **63/63 (100.0%)** schema validity · **0** parse errors · **0** critical financial errors · **0** currency guesses · **0** release blockers.
+- **Latency & retries:** **2,417 ms** avg latency incl. retries (**1,749 ms** excl. retries) · **7** transient free-tier retries (`429`/`503`).
+- **Tokens & cost:** **146,170** prompt / **25,536** output tokens · **`$0.02483`** total estimated paid cost (**`$0.000394`** per successful extraction; `$0` on Gemini free tier).
+
+| New UAT Case (`eval-data/dev/cases.json`) | Initial Run | Post-Fix Run | Latency | Verified Result |
+|---|---|---|---|---|
+| `dev-uat-case-a-missing-gratuity` | Fail (`category: unknown`) | **PASS** | 1,343 ms | `$55/person` (150 min → `$8,250`), `13%` HST, `gratuityUnresolved: true`, `4` structured inclusions, `vendorName: null`, `currency: UNKNOWN` |
+| `dev-uat-case-b-negotiated-photo` | Pass | **PASS** | 1,613 ms | `$900` active (`$1,000` original → `$100` savings, `0` conflicts), `6` hrs, `$200` deposit, `quoteKind: initial` |
+| `dev-uat-case-c-complex-venue` | Fail (`category: unknown`) | **PASS** | 2,238 ms | At 175 guests: `$10,500` banquet + `$750` 3rd-party AV + `$750` bartenders (`3 × $250`) = **`$12,000`** subtotal, `10%` food-subtotal gratuity (`$1,050`), `13%` HST (`$1,696.50`), `30%` deposit + `30 days before the event` milestone |
+
+### 11.3 Live multimodal image (2 PNGs) & PDF extraction tests
+
+Tested real `inlineData` attachments (`rawMessage: ""`) against live `gemini-3.5-flash-lite` after the post-fix changes:
+
+| File (`mimeType`) | Latency | Tokens (in / out) | Est. Cost | Schema & Grounding | Verified Extraction & Deterministic Calculation |
+|---|---:|---:|---:|---|---|
+| `quote_venue.png` (`image/png`) | 3,226 ms | 3,372 / 811 | `$0.000662` | Valid · `pageReference: "Screenshot"` | `Sapphire Banquet Hall` (`venue`, `CAD`), `$72/person` (`$12,600` at 175) + `$250` bartenders 1:75 (`3 × $250 = $750`) = `$13,350`, `10%` food-subtotal gratuity (`$1,260`), `13%` HST (`$1,899.30`), `$16,509.30` all-in, `$4,000` deposit + `30 days before event` |
+| `quote_photo.png` (`image/png`) | 2,441 ms | 3,372 / 450 | `$0.000517` | Valid · `pageReference: "Screenshot"` | `Lumina Wedding Photography` (`photographer`, `CAD`), `$2,100` active / `$2,400` original (`$300` negotiated savings, `0` conflicts), `8` hrs, `2` photographers + deliverables, `$500` deposit |
+| `quote_decor.pdf` (`application/pdf`) | 1,568 ms | 2,814 / 362 | `$0.000426` | Valid · `pageReference: "Page 1"` | `Royal Mandap Decor` (`decor`, `CAD`), `$4,500` flat, unpriced `Lighting setup fee` in `unknownItems` (`isEstimateComplete: false`), `13%` HST (`$585`), `$1,000` deposit |
+
+### 11.4 Offline parity suite (post-fix)
+
+- Backend unit & UAT tests (`npm test`): **47/47 passing**
+- Backend offline mock evals (`npm run eval -- --provider mock`): **63/63 passing**
+- Frontend safeguard & parity tests (`cd frontend && npm test`): **10/10 passing**
+- Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)

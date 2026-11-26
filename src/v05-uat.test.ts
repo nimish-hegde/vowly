@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateQuoteTotal, resolveRelativeDeadlineDate } from './calculator.ts';
-import { extractQuote, validateAttachments } from './extractor.ts';
+import { extractQuote, normalizeProviderResponse, validateAttachments } from './extractor.ts';
 import { createReviewSession, getApprovalBlockers } from './review.ts';
 import type { ExtractedQuote } from './types.ts';
 import { validateExtractedQuote } from './validator.ts';
@@ -342,4 +342,67 @@ test('Case D: multimodal attachment validation, distinct Gemini inlineData paylo
     if (originalKey === undefined) delete process.env.GEMINI_API_KEY;
     else process.env.GEMINI_API_KEY = originalKey;
   }
+});
+
+test('deduplicates duplicate service-charge percentage line item when gratuityPercent is already set and strips zero/equal provider placeholders', () => {
+  const normalized = normalizeProviderResponse({
+    lineItems: [
+      {
+        label: 'Wedding buffet',
+        pricingType: 'per_person',
+        amount: 42,
+        originalAmount: 42,
+        ratioGuests: 0,
+        percentageRate: 0,
+        percentageBasis: 'unknown',
+        sourceExcerpt: 'Wedding buffet is $42/person',
+      },
+    ],
+  }) as { lineItems: Array<Record<string, unknown>> };
+
+  assert.equal('originalAmount' in normalized.lineItems[0]!, false);
+  assert.equal('ratioGuests' in normalized.lineItems[0]!, false);
+  assert.equal('percentageRate' in normalized.lineItems[0]!, false);
+  assert.equal('percentageBasis' in normalized.lineItems[0]!, false);
+
+  const dupQuote: ExtractedQuote = {
+    vendorName: 'Saffron Kitchen Catering',
+    category: 'catering',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    taxPercent: 13,
+    gratuityStatus: 'excluded',
+    gratuityPercent: 15,
+    gratuityBasis: 'entire_subtotal',
+    lineItems: [
+      {
+        label: 'Wedding buffet',
+        pricingType: 'per_person',
+        amount: 42,
+        minGuests: 120,
+        sourceExcerpt: 'Wedding buffet is $42/person',
+      },
+      {
+        label: 'Delivery fee',
+        pricingType: 'flat',
+        amount: 350,
+        sourceExcerpt: 'flat $350 delivery fee',
+      },
+      {
+        label: 'service charge',
+        pricingType: 'percentage',
+        amount: 15,
+        percentageRate: 15,
+        percentageBasis: 'entire_subtotal',
+        sourceExcerpt: '15% service charge',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const calc = calculateQuoteTotal(dupQuote, { guestCount: 130 });
+  assert.equal(calc.knownSubtotal, 5810);
+  assert.equal(calc.gratuityAmount, 871.5);
 });

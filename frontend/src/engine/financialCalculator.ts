@@ -297,6 +297,14 @@ function resolvePercentageBasis(
   return { amount: null, label: 'calculation basis unresolved' };
 }
 
+function isDuplicateGratuityPercentageItem(item: QuoteLineItem, quote: Quote): boolean {
+  if (item.pricingModel !== 'percentage') return false;
+  if (!/\b(gratuity|tip|service\s*charge)\b/i.test(item.label)) return false;
+  if (quote.gratuityStatus !== 'excluded') return false;
+  if (quote.gratuityPercent === undefined || quote.gratuityPercent === null) return false;
+  return Math.abs(item.unitPrice - quote.gratuityPercent) < 0.01;
+}
+
 /**
  * Pure deterministic calculator for any vendor quote.
  * Guarantees consistent tax/gratuity handling, structured percentage bases,
@@ -536,8 +544,11 @@ export function calculateQuoteFinancials(
     };
   });
 
-  // Evaluate percentage-based line items AFTER confirmed fees & selected non-percentage add-ons
+  // Evaluate non-duplicate percentage-based line items AFTER confirmed fees & selected non-percentage add-ons
   for (const pctItem of percentageItems) {
+    if (isDuplicateGratuityPercentageItem(pctItem, quote)) {
+      continue;
+    }
     const rate = pctItem.unitPrice;
     const basis = resolvePercentageBasis(pctItem.percentageBasis, resolvedBaseItems, {
       targetLabels: pctItem.percentageTargetLabels,
@@ -577,8 +588,10 @@ export function calculateQuoteFinancials(
   );
 
   // Gratuity calculation (prevent duplicate application; support structured bases)
-  const hasExplicitGratuityLineItem = quote.lineItems.some((li) =>
-    /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
+  const hasExplicitGratuityLineItem = quote.lineItems.some(
+    (li) =>
+      !isDuplicateGratuityPercentageItem(li, quote) &&
+      /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
   );
   let gratuityAmount = 0;
   let gratuityUnresolved = false;

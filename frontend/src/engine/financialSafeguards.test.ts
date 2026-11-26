@@ -710,4 +710,53 @@ test('Codex P2 fixes: per-person optional add-ons, conditional overtime defaulti
   pctMapped.quote.unconfirmedFees[0].confirmedAmount = 500;
   const pctCalc = calculateQuoteFinancials(pctMapped.quote, ws.events, []);
   assert.equal(pctCalc.preTaxTotal, 1650); // $1,000 + $500 + 10% of $1,500 ($150)
+
+  // 4. Duplicate service-charge percentage line item matching gratuityPercent counts once in gratuityAmount, not preTaxTotal
+  const dupServiceQuote = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-dup-gratuity',
+        draftQuote: {
+          vendorName: 'Saffron Kitchen Catering',
+          category: 'catering',
+          events: ['Wedding'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          gratuityStatus: 'excluded',
+          gratuityPercent: 15,
+          gratuityBasis: 'entire_subtotal',
+          lineItems: [
+            {
+              label: 'Wedding buffet',
+              pricingType: 'per_person',
+              amount: 42,
+              minGuests: 120,
+              sourceExcerpt: 'Wedding buffet is $42/person',
+            },
+            {
+              label: 'Delivery fee',
+              pricingType: 'flat',
+              amount: 350,
+              sourceExcerpt: 'flat $350 delivery',
+            },
+            {
+              label: 'service charge',
+              pricingType: 'percentage',
+              amount: 15,
+              percentageRate: 15,
+              percentageBasis: 'entire_subtotal',
+              sourceExcerpt: '15% service charge',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Catering quote' }
+  );
+  const dupCalc = calculateQuoteFinancials(dupServiceQuote.quote, ws.events, [], 130);
+  assert.equal(dupCalc.preTaxTotal, 5810);
+  assert.equal(dupCalc.gratuityAmount, 871.5);
 });

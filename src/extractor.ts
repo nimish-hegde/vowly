@@ -95,19 +95,19 @@ Follow these rules strictly:
    - If the vendor name is NOT stated in the source, set "vendorName": null. Do NOT invent a placeholder name or use an uploaded filename as the vendor name.
    - Only set "vendorLocation" or "vendorContact" if explicitly stated in the source.
 4. Classify vendor "category" by the vendor's commercial role and supporting evidence:
-   - "venue": ONLY when there is explicit evidence that the vendor provides the physical event space (such as a hall, ballroom, banquet facility, convention centre, estate, hotel, room name, room rental, room capacity, parking, or in-house space). When the vendor is a confirmed venue, bundled food, dinner menus, appetizers, open bar, staffing, or extra surcharges still stay "venue" — food words alone do NOT make a venue a caterer.
+   - "venue": ONLY when there is explicit evidence that the vendor provides the physical event space or banquet facility (such as a hall, ballroom, banquet facility, banquet package, convention centre, estate, hotel, room name, room rental, room capacity / maximum capacity, parking, or in-house space). When the vendor is a confirmed venue, bundled food, dinner menus, appetizers, open bar, staffing, or extra surcharges still stay "venue" — food words alone do NOT make a venue a caterer.
    - "catering": ONLY when there is explicit evidence that the vendor is an independent food-and-beverage provider (such as "Catering"/"Caterers" in the vendor name, off-site catering, food delivery/chafing dishes, or catering at a separate named venue).
    - "photographer", "dj", "decor", "entertainment", "other": Use when the message clearly states that service.
-   - "unknown": A dinner or reception package, per-person pricing, setup fee, or minimum guest count ALONE does NOT prove the vendor provides the physical event space or is an independent caterer. Whenever those cues appear without explicit venue-space evidence or independent-catering evidence (e.g., generic "Events" or "Hospitality" names), set "category" to "unknown" and add an "ambiguous_rule" open question asking the couple to confirm the vendor's role.
+   - "unknown": A generic dinner or reception package, per-person pricing, setup fee, or minimum guest count ALONE (without "banquet", maximum/room capacity, or physical-space cues, e.g., generic "Events" or "Hospitality" names) does NOT prove the vendor provides the physical event space or is an independent caterer. Set "category" to "unknown" and add an "ambiguous_rule" open question asking the couple to confirm the vendor's role.
 5. Never invent a price, tax rate, gratuity rate, or currency:
    - If the source only uses "$" without explicitly stating CAD, CA$, USD, or US$, set "currency" to "UNKNOWN". Never guess currency from city names, taxes like HST, or venue names.
    - Never infer tax treatment from payment method (for example, cash does NOT imply tax-free).
-   - Extract "taxPercent" (e.g., 13 for "13% HST") and "gratuityPercent" (e.g., 10 for "10% gratuity") ONLY when stated. Set "gratuityBasis" ("food_subtotal", "entire_subtotal", "specific_line_items", or "unknown") when gratuity is mentioned.
-   - Do NOT duplicate tax or gratuity as both a line item and top-level "taxStatus"/"gratuityStatus". Keep tax and gratuity in top-level fields; if gratuity is stated as extra/excluded without a percentage (e.g., "plus 13% HST and gratuity"), set "gratuityStatus": "excluded", "gratuityPercent": null, and add an "openQuestions" entry with "reason": "missing_price" asking for the gratuity percentage.
+   - Extract "taxPercent" (e.g., 13 for "13% HST") and "gratuityPercent" (e.g., 10 for "10% gratuity", 15 for "15% service charge") ONLY when stated. Set "gratuityBasis" ("food_subtotal", "entire_subtotal", "specific_line_items", or "unknown") when gratuity or a percentage service charge is mentioned.
+   - Keep taxes (HST/GST/PST), gratuities, AND percentage service charges (e.g., "plus 15% service charge", "10% gratuity") ONLY in top-level "taxStatus"/"taxPercent" and "gratuityStatus"/"gratuityPercent"/"gratuityBasis". NEVER also add them as a separate "lineItems" entry. If gratuity is stated as extra/excluded without a percentage (e.g., "plus 13% HST and gratuity"), set "gratuityStatus": "excluded", "gratuityPercent": null, and add an "openQuestions" entry with "reason": "missing_price" asking for the gratuity percentage.
 6. Extract EVERY distinct stated charge, surcharge, third-party fee, or additional cost:
    - Never drop a stated additional charge just because it has no numeric price or is mentioned inside a sentence about a menu item, package, setup, or condition.
    - Whenever a stated charge has no numeric price (e.g., "TBD", "costs extra", "extra charge", "additional fee", "priced separately", "pricing on request", or depends on setup/selection/distance), include it in "lineItems" with "pricingType": "unknown" and "amount": null.
-   - For percentage-based non-tax/non-gratuity surcharges (e.g., "18% service charge on food"), use "pricingType": "percentage", set "amount" and "percentageRate" to the numeric percent, and set "percentageBasis".
+   - Reserve "pricingType": "percentage" in "lineItems" ONLY for separate non-tax, non-gratuity percentage fees (e.g., card processing fee), setting "amount" and "percentageRate" to the numeric percent and setting "percentageBasis". Do NOT use "percentage" for HST or percentage gratuity/service charges.
    - Mark "isFoodItem": true on food/banquet/catering menu line items when a food-only gratuity or service charge applies.
    - Mark "isThirdParty": true (and "thirdPartyProvider" if named) when a charge is provided by a third-party or preferred external supplier (e.g., third-party AV).
    - Set "chargeType" on every line item:
@@ -115,22 +115,22 @@ Follow these rules strictly:
      b) "conditional": a stated charge whose cost depends on a choice, setup, location, or condition without explicit opt-in wording. Keep "optionalAddon": false.
      c) "optional": ONLY when the message uses explicit opt-in language (e.g., "optional", "upgrade available", "add-on if desired", "additional hours if needed"). Set "optionalAddon": true ONLY when "chargeType" is "optional".
    - Never mark a "mandatory" or "conditional" unpriced charge as "optional" or "optionalAddon": true.
-   - Put deposits and payment schedules in "paymentTerms" ONLY (including structured "milestones" with "relativeDaysBeforeEvent" and "relativeDeadlineText" when stated). Never add a deposit as a separate price in "lineItems".
+   - Always populate "paymentTerms" with "methodRule" ("cash_only", "etransfer", "card", "any", or "unknown" if unstated), plus any stated "depositAmount", "depositPercent", "scheduleNotes", and "milestones" (with "relativeDaysBeforeEvent" and "relativeDeadlineText"). Never add a deposit as a separate price in "lineItems".
 7. Negotiated prices vs. genuine price conflicts (CRITICAL):
-   - EXPLICIT NEGOTIATED PRICE: When a vendor states their normal/standard price alongside an explicitly discounted or negotiated price for the couple (e.g., "I normally charge $1,000, but I can do $900 for your engagement"), set "amount" to the active negotiated price (900) and "originalAmount" to the normal price (1000). Do NOT populate "conflictingOptions" and do NOT create a conflict open question.
+   - EXPLICIT NEGOTIATED PRICE: When a vendor states their normal/standard price alongside an explicitly discounted or negotiated price for the couple (e.g., "I normally charge $1,000, but I can do $900 for your engagement"), set "amount" to the active negotiated price (900) and "originalAmount" to the normal price (1000). Omit "originalAmount" when no separate original price was quoted. Do NOT populate "conflictingOptions" and do NOT create a conflict open question.
    - GENUINE PRICE CONFLICT: When two sources or documents state different prices for the SAME service without a clear explanation of which applies (e.g., an Instagram DM vs. a PDF contract), represent that service as ONE line item — NEVER two separate billable line items. Set "amount" to the earlier/agreed price, record ALL conflicting candidate prices in "conflictingOptions", and add a "conflict" entry in "openQuestions".
 8. Classify staffing ratios, guest minimums, duration, and structured inclusions accurately:
    - When a fee scales by guest count blocks (for example, "$250 each, 1 required per 75 guests" or "$495 each, up to 150 guests per bartender"), use "pricingType": "per_guest_ratio", set "amount" to the per-unit price, set "ratioGuests" to the guest block size, and set "unitLabel" (e.g., "bartender"). Do NOT use "flat".
-   - When a per-person rate has a guest minimum (e.g., "150-person minimum"), set "minGuests" on the line item and in "venueDetails.minGuests".
+   - When a per-person rate has a guest minimum (e.g., "150-person minimum"), set "minGuests" on the line item and in "venueDetails.minGuests". NEVER copy "maxCapacity" (e.g., "max 190 guests", "fits up to 200") into "minGuests". Only set "minGuests" when the source explicitly states a minimum guest count or minimum guarantee.
    - Preserve structured "inclusions" with "category", "name", "quantity", "unit", and "sourceExcerpt" where stated (e.g., 4 appetizers, 3 main dishes, 2 desserts, unlimited soft drinks, 6 hours of photography, edited photos, online gallery). Also preserve "exclusions", "restrictions", and "serviceDurationHours" when stated.
 9. Classify "quoteKind":
    - Use "revision" ONLY when the message updates an earlier quote previously sent to this couple or notes a conflict with a printed brochure, draft contract, or earlier offer.
    - Use "initial" for a standalone first quote — even if the vendor mentions a standard price and offers a negotiated rate in that first message.
 10. Open questions — actionable only, never noisy:
-    - Add an entry in "openQuestions" when:
+    - Always add an entry in "openQuestions" whenever ANY of these holds:
       a) A "mandatory" or "conditional" charge has no price, or gratuity is excluded/extra with no stated percentage ("reason": "missing_price").
       b) Two sources or terms conflict ("reason": "conflict").
-      c) A payment or booking deadline is relative to an event date that is NOT stated in the message (e.g., "due 30 days before the event" with no event date given) ("reason": "missing_date").
+      c) A payment or booking deadline is relative to an event date that is NOT stated in the message (e.g., "due 30 days before the event" or "7 days before the wedding" with no event date given) ("reason": "missing_date").
       d) Currency is "UNKNOWN" because only bare "$" appears without CAD/USD ("reason": "ambiguous_rule", asking to confirm currency).
       e) Vendor category is "unknown" ("reason": "ambiguous_rule", asking to confirm vendor category).
     - Do NOT invent unnecessary open questions for complete quotes.
@@ -150,6 +150,7 @@ const GEMINI_RESPONSE_SCHEMA = {
     'taxStatus',
     'gratuityStatus',
     'lineItems',
+    'paymentTerms',
     'openQuestions',
   ],
   properties: {
@@ -332,6 +333,7 @@ export const OLLAMA_RESPONSE_SCHEMA = {
     'taxStatus',
     'gratuityStatus',
     'lineItems',
+    'paymentTerms',
     'openQuestions',
   ],
   properties: {
@@ -562,7 +564,7 @@ async function fetchWithRetry(
   });
 }
 
-function normalizeProviderResponse(parsed: unknown): unknown {
+export function normalizeProviderResponse(parsed: unknown): unknown {
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     return parsed;
   }
@@ -575,6 +577,26 @@ function normalizeProviderResponse(parsed: unknown): unknown {
     const pd = obj.photographerDetails as Record<string, unknown>;
     if (pd.includesMiniShoot === 'yes') pd.includesMiniShoot = true;
     else if (pd.includesMiniShoot === 'no') pd.includesMiniShoot = false;
+  }
+  if (Array.isArray(obj.lineItems)) {
+    for (const rawItem of obj.lineItems) {
+      if (typeof rawItem !== 'object' || rawItem === null || Array.isArray(rawItem)) continue;
+      const li = rawItem as Record<string, unknown>;
+      if (
+        typeof li.originalAmount === 'number' &&
+        typeof li.amount === 'number' &&
+        Math.abs(li.originalAmount - li.amount) < 0.01
+      ) {
+        delete li.originalAmount;
+      }
+      if (li.pricingType !== 'per_guest_ratio' && li.ratioGuests === 0) {
+        delete li.ratioGuests;
+      }
+      if (li.pricingType !== 'percentage') {
+        if (li.percentageRate === 0) delete li.percentageRate;
+        if (li.percentageBasis === 'unknown') delete li.percentageBasis;
+      }
+    }
   }
   return obj;
 }

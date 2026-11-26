@@ -281,6 +281,15 @@ function isConditionalOvertimeItem(
   );
 }
 
+function isDuplicateGratuityPercentageItem(item: LineItem, quote: ExtractedQuote): boolean {
+  if (item.pricingType !== 'percentage') return false;
+  if (!/\b(gratuity|tip|service\s*charge)\b/i.test(item.label)) return false;
+  if (quote.gratuityStatus !== 'excluded') return false;
+  if (quote.gratuityPercent === undefined || quote.gratuityPercent === null) return false;
+  const rate = item.percentageRate ?? item.amount;
+  return rate !== null && Math.abs(rate - quote.gratuityPercent) < 0.01;
+}
+
 function calculateLineItem(
   item: LineItem,
   quote: ExtractedQuote,
@@ -463,8 +472,13 @@ export function calculateQuoteTotal(
     }
   }
 
-  // Second pass: evaluate percentage-based line items against structured bases
+  // Second pass: evaluate non-duplicate percentage-based line items against structured bases
+  const activePercentageItems: LineItem[] = [];
   for (const { item } of percentageItems) {
+    if (isDuplicateGratuityPercentageItem(item, quote)) {
+      continue;
+    }
+    activePercentageItems.push(item);
     const rate = item.percentageRate ?? item.amount;
     if (rate === null || rate === undefined || !Number.isFinite(rate)) {
       unknownItems.push(item.label);
@@ -493,9 +507,12 @@ export function calculateQuoteTotal(
     }
   }
 
-  // Gratuity calculation (prevent duplicate application if already included as a line item)
+  // Gratuity calculation (prevent duplicate application if already included as a non-skipped line item)
   const hasExplicitGratuityLineItem = quote.lineItems.some(
-    (li) => !isOptionalItem(li) && /\b(gratuity|tip|service\s*charge)\b/i.test(li.label),
+    (li) =>
+      !isOptionalItem(li) &&
+      !isDuplicateGratuityPercentageItem(li, quote) &&
+      /\b(gratuity|tip|service\s*charge)\b/i.test(li.label),
   );
   let gratuityAmount: number | null = 0;
   let gratuityUnresolved = false;
