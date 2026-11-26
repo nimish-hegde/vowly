@@ -376,9 +376,10 @@ Following Codex review on `eda6c4d` and founder manual UAT, four release blocker
 
 ### Offline & Browser E2E UAT Verification
 
-- Backend unit tests (`npm test`): **51/51 pass**
+- Backend unit tests (`npm test`): **52/52 pass**
 - Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
-- Frontend tests (`cd frontend && npm test`): **15/15 pass** | `npm run lint`: **0 errors** | `npm run build`: **Pass**
+- Frontend tests (`cd frontend && npm test`): **16/16 pass** | `npm run lint`: **0 errors** | `npm run build`: **Pass**
+- Targeted live Gemini checks (3 anonymized UAT cases): **3/3 pass** (extraction prompt/schema unchanged since 66/66 live benchmark)
 - Browser E2E UAT (`http://localhost:3000/`, live Gemini on `:3001`):
   - **HSR Photography:** Extracted `CAD $900.00` (`0` overtime hrs for `"Additional Hourly Pricing: $250/hr"`), showed `"Tax not stated — excluded from estimate."`, blocked booking in Vendor Drawer until resolved via `"Edit quote"`, and populated `BookingModal` with `$900` contract total, `$200` deposit (`Due upon signing / date TBD`, unpaid by default), and `$700` balance due `2027-08-13`.
   - **Multi-Package Venue (`Palace Banquet Hall`):** Preserved both `Royal Package` and `Imperial Package`, blocked approval when unselected (`CAD $0.00`), and switched totals & package-scoped inclusions cleanly on selection.

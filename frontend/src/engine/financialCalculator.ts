@@ -60,6 +60,7 @@ export interface QuoteCalculationResult {
   hstAssumed: boolean;
   hstIncluded: boolean;
   taxNotStated: boolean;
+  taxRateUnresolved: boolean;
   taxStatusLabel: string;
   effectiveTaxHandling: TaxHandling;
   estimatedAllInTotal: number;
@@ -749,24 +750,33 @@ export function calculateQuoteFinancials(
   const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
   const effectiveTaxPercentValue =
     selectedPackage?.taxPercent !== undefined ? selectedPackage.taxPercent : quote.taxPercent;
-  const explicitTaxRate =
-    effectiveTaxPercentValue !== undefined && Number.isFinite(effectiveTaxPercentValue)
-      ? effectiveTaxPercentValue / 100
-      : ONTARIO_HST_RATE;
   const hasExplicitTaxLineItem = activeItems.some((li) =>
     /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
   );
   const taxNotStated = !hasExplicitTaxLineItem && effectiveTaxHandling === 'unspecified';
+  // When a quote explicitly says "plus tax" without a stated percentage (taxPercent === null),
+  // preserve the unknown rate instead of silently defaulting to 13% HST.
+  const taxRateUnresolved =
+    !hasExplicitTaxLineItem &&
+    effectiveTaxHandling === 'excluded_plus_hst' &&
+    effectiveTaxPercentValue === null;
+  const explicitTaxRate =
+    typeof effectiveTaxPercentValue === 'number' && Number.isFinite(effectiveTaxPercentValue)
+      ? effectiveTaxPercentValue / 100
+      : ONTARIO_HST_RATE;
   const taxRate =
     hasExplicitTaxLineItem ||
     effectiveTaxHandling === 'included' ||
     effectiveTaxHandling === 'tax_exempt' ||
-    effectiveTaxHandling === 'unspecified'
+    effectiveTaxHandling === 'unspecified' ||
+    taxRateUnresolved
       ? 0
       : explicitTaxRate;
   const taxStatusLabel = hasExplicitTaxLineItem
     ? 'Tax listed in line items'
-    : getTaxStatusLabel(effectiveTaxHandling, taxRate);
+    : taxRateUnresolved
+      ? 'Plus tax (rate not stated — excluded from estimate.)'
+      : getTaxStatusLabel(effectiveTaxHandling, taxRate);
 
   // Evaluate optional add-ons using their preserved pricing models (filtered by selected package if scoped)
   let selectedAddOnsPreTax = 0;
@@ -781,10 +791,14 @@ export function calculateQuoteFinancials(
         targetLabels: addon.percentageTargetLabels,
         customBasisAmount: addon.customBasisAmount,
       });
-      computedPreTax =
-        basis.amount !== null
-          ? Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100
-          : 0;
+      if (basis.amount === null) {
+        computedPreTax = 0;
+        if (addon.selected) {
+          unresolvedPercentageCount += 1;
+        }
+      } else {
+        computedPreTax = Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100;
+      }
     } else if (model !== 'flat') {
       const addonRes = resolveLineItemAmount(
         {
@@ -1027,6 +1041,7 @@ export function calculateQuoteFinancials(
     hstAssumed,
     hstIncluded,
     taxNotStated,
+    taxRateUnresolved,
     taxStatusLabel,
     effectiveTaxHandling,
     estimatedAllInTotal,
@@ -1043,7 +1058,8 @@ export function calculateQuoteFinancials(
     unresolvedConflictsCount,
     unresolvedPercentageCount,
     negotiatedSavings,
-    isEstimateComplete: blockingReasons.length === 0 && !guestCountMissing && !taxNotStated,
+    isEstimateComplete:
+      blockingReasons.length === 0 && !guestCountMissing && !taxNotStated && !taxRateUnresolved,
     lineItemBreakdowns,
     blockingReasons,
     canApprove: blockingReasons.length === 0,
@@ -1104,6 +1120,11 @@ export function getVendorBookingEligibility(
     if (calc.taxNotStated) {
       blockingReasons.push(
         'Confirm tax handling before booking (tax is not stated on this quote).'
+      );
+    }
+    if (calc.taxRateUnresolved) {
+      blockingReasons.push(
+        'Confirm the tax percentage before booking (quote states plus tax without a rate).'
       );
     }
     if (calc.legacyReviewReasons.length > 0) {
@@ -1269,12 +1290,20 @@ export function deriveBookingScheduleDefaults(
       /\b(balance|remaining|final|rest|due)\b/i.test(m.label)
   ) ?? (milestones.length >= 2 ? milestones[milestones.length - 1] : undefined);
 
-  // Deposit amount: explicit milestone amount/percent -> quote depositAmount/depositPercent -> 0
+  // Deposit amount: selected package milestone/deposit -> quote milestone/deposit -> 0
   let depositAmount = 0;
   if (depositMilestone?.amount !== undefined && depositMilestone.amount > 0) {
     depositAmount = depositMilestone.amount;
   } else if (depositMilestone?.percent !== undefined && depositMilestone.percent > 0 && contractTotal > 0) {
     depositAmount = Math.round(contractTotal * (depositMilestone.percent / 100) * 100) / 100;
+  } else if (selectedPackage?.depositAmount !== undefined && selectedPackage.depositAmount > 0) {
+    depositAmount = selectedPackage.depositAmount;
+  } else if (
+    selectedPackage?.depositPercent !== undefined &&
+    selectedPackage.depositPercent > 0 &&
+    contractTotal > 0
+  ) {
+    depositAmount = Math.round(contractTotal * (selectedPackage.depositPercent / 100) * 100) / 100;
   } else if (quote?.depositAmount !== undefined && quote.depositAmount > 0) {
     depositAmount = quote.depositAmount;
   } else if (quote?.depositPercent !== undefined && quote.depositPercent > 0 && contractTotal > 0) {

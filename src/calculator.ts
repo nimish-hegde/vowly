@@ -792,6 +792,7 @@ export function calculateQuoteTotal(
     priceConflicts.length === 0 &&
     !gratuityUnresolved &&
     !taxNotStated &&
+    taxAmount !== null &&
     quote.currency !== 'UNKNOWN';
 
   const maxCap = selectedPackage?.maxCapacity ?? quote.venueDetails?.maxCapacity;

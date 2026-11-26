@@ -585,3 +585,32 @@ test('UAT Conditional hourly pricing ("Additional Hourly Pricing: $250/hr") with
   assert.equal(calc.taxNotStated, true);
   assert.equal(calc.isEstimateComplete, false);
 });
+
+test('Codex parity: "plus tax" without a stated percentage preserves taxAmount null and marks estimate incomplete', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'US Studio',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'USD',
+    taxStatus: 'excluded',
+    taxPercent: null,
+    gratuityStatus: 'included',
+    lineItems: [
+      {
+        label: 'Photography package',
+        pricingType: 'flat',
+        amount: 1000,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'USD $1,000 plus tax',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const calc = calculateQuoteTotal(quote);
+  assert.equal(calc.knownSubtotal, 1000);
+  assert.equal(calc.taxAmount, null);
+  assert.equal(calc.knownAllInTotal, 1000);
+  assert.equal(calc.isEstimateComplete, false);
+});

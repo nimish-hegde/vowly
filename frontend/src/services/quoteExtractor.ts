@@ -1364,7 +1364,12 @@ export function mapBackendExtractionToFrontendResult(
             isFoodItem: pkg.isFoodItem,
             fees: pkgFees.length > 0 ? pkgFees : undefined,
             taxHandling: pkg.taxStatus ? mapBackendTaxStatus(pkg.taxStatus) : undefined,
-            taxPercent: pkg.taxPercent ?? undefined,
+            taxPercent:
+              pkg.taxPercent !== undefined && pkg.taxPercent !== null
+                ? pkg.taxPercent
+                : pkg.taxStatus === 'excluded'
+                  ? null
+                  : undefined,
             gratuityStatus: pkg.gratuityStatus,
             gratuityPercent: pkg.gratuityPercent ?? undefined,
             gratuityBasis: pkg.gratuityBasis,
@@ -1373,6 +1378,8 @@ export function mapBackendExtractionToFrontendResult(
             deliveryTerms: pkg.deliveryTerms,
             paymentTermsSummary: pkgPayParts.length > 0 ? pkgPayParts.join(' · ') : undefined,
             paymentMilestones: pkg.paymentTerms?.milestones,
+            depositAmount: pkg.paymentTerms?.depositAmount,
+            depositPercent: pkg.paymentTerms?.depositPercent,
             evidenceId: pkgEvId,
             pageReference: pkg.pageReference,
           };
@@ -1427,7 +1434,12 @@ export function mapBackendExtractionToFrontendResult(
     currencySource: bq.currency === 'UNKNOWN' ? 'unknown' : 'explicit_quote',
     locationContext: rawLocation || undefined,
     taxHandling,
-    taxPercent: bq.taxPercent ?? (bq.taxStatus === 'excluded' ? 13 : undefined),
+    taxPercent:
+      bq.taxPercent !== undefined && bq.taxPercent !== null
+        ? bq.taxPercent
+        : bq.taxStatus === 'excluded'
+          ? null
+          : undefined,
     gratuityStatus: bq.gratuityStatus,
     gratuityPercent: bq.gratuityPercent ?? null,
     gratuityBasis: bq.gratuityBasis,

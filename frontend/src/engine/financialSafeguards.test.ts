@@ -1204,3 +1204,155 @@ test('UAT HSR Photography: "Additional Hourly Pricing: $250/hr" defaults to $900
   assert.equal(noDatesSchedule.balanceHasKnownDate, false);
   assert.equal(noDatesSchedule.balanceDueDate, '');
 });
+
+test('Codex final 3 findings: unknown tax rate on plus-tax quotes, selected percentage add-on unresolved basis blocker, and package-specific deposits', () => {
+  const ws = createDemoWorkspace();
+
+  // 1. USD $1,000 "plus tax" without rate must NOT default to 13% ($1,130), must be incomplete & block booking
+  const plusTaxMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-usd-plus-tax',
+        draftQuote: {
+          vendorName: 'US Studio',
+          category: 'photographer',
+          events: ['Wedding'],
+          quoteKind: 'initial',
+          currency: 'USD',
+          taxStatus: 'excluded',
+          taxPercent: null,
+          gratuityStatus: 'included',
+          lineItems: [
+            {
+              label: 'Photography package',
+              pricingType: 'flat',
+              amount: 1000,
+              chargeType: 'mandatory',
+              sourceExcerpt: 'USD $1,000 plus tax',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'USD $1,000 plus tax' }
+  );
+
+  assert.equal(plusTaxMapped.quote.taxPercent, null);
+  const plusTaxCalc = calculateQuoteFinancials(plusTaxMapped.quote, ws.events, []);
+  assert.equal(plusTaxCalc.taxRateUnresolved, true);
+  assert.equal(plusTaxCalc.taxAmount, 0);
+  assert.equal(plusTaxCalc.estimatedAllInTotal, 1000); // NOT 1130
+  assert.equal(plusTaxCalc.canApprove, true); // Allows incomplete projected estimate
+  assert.equal(plusTaxCalc.isEstimateComplete, false);
+
+  const plusTaxVendor: Vendor = {
+    id: 'v-usd-plus-tax',
+    name: 'US Studio',
+    category: 'photography',
+    eventIds: [],
+    location: '',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    status: 'Quoted',
+    isPreferred: true,
+    notes: '',
+    quotes: [{ ...plusTaxMapped.quote, approvalState: 'approved' }],
+    activeQuoteId: plusTaxMapped.quote.id,
+  };
+  const plusTaxElig = getVendorBookingEligibility(plusTaxVendor, ws.events);
+  assert.equal(plusTaxElig.canBook, false);
+  assert.ok(plusTaxElig.blockingReasons.some((r) => /tax percentage/i.test(r)));
+
+  // 2. Percentage add-on with unknown basis: nonblocking when unselected, blocks approval & booking when selected
+  const addOnQuote = makeCleanQuote({
+    id: 'q-pct-addon',
+    legacyReviewAcknowledged: true,
+    taxHandling: 'included',
+    lineItems: [{ id: 'li-1', label: 'Base package', pricingModel: 'flat', unitPrice: 1000 }],
+    addOns: [
+      {
+        id: 'ao-pct',
+        label: 'Optional 10% rush fee',
+        description: '10% rush processing',
+        pricePreTax: 10,
+        pricingModel: 'percentage',
+        percentageBasis: 'unknown',
+        selected: false,
+      },
+    ],
+  });
+  const unselectedAddOnCalc = calculateQuoteFinancials(addOnQuote, ws.events, []);
+  assert.equal(unselectedAddOnCalc.unresolvedPercentageCount, 0);
+  assert.equal(unselectedAddOnCalc.canApprove, true);
+
+  const selectedAddOnQuote: Quote = {
+    ...addOnQuote,
+    addOns: addOnQuote.addOns.map((a) => ({ ...a, selected: true })),
+  };
+  const selectedAddOnCalc = calculateQuoteFinancials(selectedAddOnQuote, ws.events, []);
+  assert.equal(selectedAddOnCalc.unresolvedPercentageCount, 1);
+  assert.equal(selectedAddOnCalc.canApprove, false);
+  assert.equal(selectedAddOnCalc.isEstimateComplete, false);
+
+  const addOnVendor: Vendor = {
+    ...plusTaxVendor,
+    id: 'v-pct-addon',
+    quotes: [selectedAddOnQuote],
+    activeQuoteId: selectedAddOnQuote.id,
+  };
+  assert.equal(getVendorBookingEligibility(addOnVendor, ws.events).canBook, false);
+
+  // 3. Package-specific depositAmount / depositPercent prioritized over quote-level defaults
+  const pkgDepositMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-pkg-deposit',
+        draftQuote: {
+          vendorName: 'Crown Hall',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'included',
+          selectedPackageId: 'pkg-50pct',
+          packages: [
+            {
+              id: 'pkg-50pct',
+              name: 'Gold Package',
+              pricingType: 'flat',
+              amount: 1000,
+              paymentTerms: { depositPercent: 50, methodRule: 'etransfer' },
+              sourceExcerpt: 'Gold Package $1,000, 50% deposit',
+            },
+            {
+              id: 'pkg-fixed',
+              name: 'Silver Package',
+              pricingType: 'flat',
+              amount: 1000,
+              paymentTerms: { depositAmount: 350, methodRule: 'etransfer' },
+              sourceExcerpt: 'Silver Package $1,000, $350 deposit',
+            },
+          ],
+          lineItems: [],
+          paymentTerms: { depositAmount: 100, methodRule: 'etransfer' },
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Package deposits' }
+  );
+
+  const goldSchedule = deriveBookingScheduleDefaults(pkgDepositMapped.quote, ws.events, [], 1000);
+  assert.equal(goldSchedule.depositAmount, 500); // 50% of $1,000 (overrides quote-level $100)
+
+  const silverSchedule = deriveBookingScheduleDefaults(
+    { ...pkgDepositMapped.quote, selectedPackageId: 'pkg-fixed' },
+    ws.events,
+    [],
+    1000
+  );
+  assert.equal(silverSchedule.depositAmount, 350); // $350 fixed (overrides quote-level $100)
+});

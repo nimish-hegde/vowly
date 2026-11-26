@@ -175,6 +175,7 @@ export function QuoteImportModal({
   const [editingBookedVendor, setEditingBookedVendor] = useState(false);
   const [pkgPriceInput, setPkgPriceInput] = useState('');
   const [pkgPriceModel, setPkgPriceModel] = useState<'flat' | 'per_person'>('flat');
+  const [taxPercentInput, setTaxPercentInput] = useState('');
   const [onboardingEventName, setOnboardingEventName] = useState('');
   const [onboardingPlannedGuests, setOnboardingPlannedGuests] = useState('');
   const [extractionMetaLabel, setExtractionMetaLabel] = useState<string | null>(null);
@@ -1709,6 +1710,45 @@ export function QuoteImportModal({
                           })}
                         </span>
                       </div>
+                      {calc.taxRateUnresolved && (
+                        <div className="rounded-lg bg-[#FFFBEB] border border-[#F59E0B]/50 p-2.5 space-y-1.5">
+                          <div className="text-[11px] text-[#92400E]">
+                            This quote states “plus tax” without a percentage. Enter the confirmed tax rate (or estimate 13% HST) before booking.
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Tax % (e.g. 13)"
+                              value={taxPercentInput}
+                              onChange={(e) => setTaxPercentInput(e.target.value)}
+                              className="w-28 rounded-md border border-[#E5DED2] bg-white px-2 py-1 font-num text-[11px]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const parsed = parseFloat(taxPercentInput);
+                                if (Number.isNaN(parsed) || parsed < 0) return;
+                                updateEffectiveTaxHandling('excluded_plus_hst', parsed);
+                                setTaxPercentInput('');
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded-md bg-[#486755] text-white cursor-pointer"
+                            >
+                              Apply rate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateEffectiveTaxHandling('unspecified_ontario_assumed', 13)
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Estimate 13% HST
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {calc.taxNotStated && (
                         <div className="rounded-lg bg-[#FFFBEB] border border-[#F59E0B]/50 p-2.5 space-y-1.5">
                           <div className="text-[11px] text-[#92400E]">

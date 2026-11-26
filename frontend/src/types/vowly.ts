@@ -106,7 +106,7 @@ export interface QuotePackageOption {
   isFoodItem?: boolean;
   fees?: QuoteLineItem[];
   taxHandling?: TaxHandling;
-  taxPercent?: number;
+  taxPercent?: number | null;
   gratuityStatus?: 'included' | 'excluded' | 'unknown';
   gratuityPercent?: number | null;
   gratuityBasis?: PercentageBasis;
@@ -115,6 +115,8 @@ export interface QuotePackageOption {
   deliveryTerms?: string[];
   paymentTermsSummary?: string;
   paymentMilestones?: QuotePaymentMilestone[];
+  depositAmount?: number;
+  depositPercent?: number;
   evidenceId?: string;
   pageReference?: string;
 }
@@ -257,7 +259,7 @@ export interface Quote {
   currencySource: CurrencySource;
   locationContext?: string; // e.g., "Mississauga, ON, Canada"
   taxHandling: TaxHandling;
-  taxPercent?: number;
+  taxPercent?: number | null;
   gratuityStatus?: 'included' | 'excluded' | 'unknown';
   gratuityPercent?: number | null;
   gratuityBasis?: PercentageBasis;
