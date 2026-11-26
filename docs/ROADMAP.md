@@ -94,12 +94,12 @@ Record significant product, architecture, and model decisions here as they are m
   - `normalizeIsoDate` and `deriveBookingScheduleDefaults` in `financialCalculator.ts` wired into `BookingModal.tsx` (explicit date -> relative deadline -> unresolved; zero hardcoded fallback dates; preserves existing `Paid` milestones in `applyConfirmBooking`).
   - Strengthened `SYSTEM_PROMPT` Rule 5 in `src/extractor.ts` to keep unmentioned tax as `unknown`.
 - **Verification Results:**
-  - Offline: `52/52` backend tests, `66/66` mock evals, `16/16` frontend tests, `0` TS errors, clean Vite build (includes final Codex P1/P2 fixes: unknown tax rate on `"plus tax"` quotes preserved as incomplete & booking-blocked, selected percentage add-ons with unknown basis block approval & booking while unselected remain nonblocking, and package-specific `depositAmount`/`depositPercent` prioritized in `BookingModal` defaults).
-  - Live Gemini (`gemini-3.5-flash-lite`, 66 cases): **66/66 (100.0%)**, `0` critical financial errors, `0` release blockers, `1,775 ms` avg latency excl. retries (`2,859 ms` incl. retries), est. paid cost `$0.03101` (`$0.000470`/extraction); `3/3` targeted live checks re-verified after final frontend parity fixes (extraction prompt/schema unchanged).
+  - Offline: `53/53` backend tests, `66/66` mock evals, `17/17` frontend tests, `0` TS errors, clean Vite build (all Codex P1/P2 findings resolved, including explicit null package gratuity preservation, conflicting price-option pricing models, order-independent percentage add-ons, and whole-subtotal gratuity parity across backend and frontend).
+  - Live Gemini (`gemini-3.5-flash-lite`, 66 cases): **66/66 (100.0%)**, `0` critical financial errors, `0` release blockers, `1,775 ms` avg latency excl. retries (`2,859 ms` incl. retries), est. paid cost `$0.03101` (`$0.000470`/extraction); `3/3` targeted live checks re-verified (extraction prompt/schema unchanged).
   - Browser E2E UAT: Passed both HSR Photography (`$900` subtotal, unknown-tax booking block, `2027-08-13` balance due date) and Multi-Package Venue (Royal vs. Imperial isolation & package-scoped inclusions).
 - **Deferred to Next Milestone (`v0.6` Non-Blocking Usability Improvements):**
   - Multi-installment (>2 milestones) custom payment schedule builder inside `BookingModal`.
   - Post-event actual overtime reconciliation workflow.
   - Side-by-side multi-package comparison inside `VendorComparisonView`.
   - Inline editing of package-specific fees/overrides without leaving the package card.
-- **Decision:** **Ready for fresh Codex review and PM final approval on PR #13 (do not merge yet).**
+- **Decision:** **Approved by PM and merged (`#13`).**

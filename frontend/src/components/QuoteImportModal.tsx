@@ -1337,7 +1337,11 @@ export function QuoteImportModal({
                                     ),
                                     lineItems: q.lineItems.map((li) =>
                                       li.id === conflict.targetLineItemId
-                                        ? { ...li, unitPrice: opt.amount }
+                                        ? {
+                                            ...li,
+                                            unitPrice: opt.amount,
+                                            pricingModel: opt.pricingModel ?? li.pricingModel,
+                                          }
                                         : li
                                     ),
                                   }));
@@ -1350,6 +1354,11 @@ export function QuoteImportModal({
                               >
                                 <div className="font-num text-sm font-semibold text-[#22201D]">
                                   {formatShortCad(opt.amount)}
+                                  {opt.pricingModel === 'per_person'
+                                    ? '/person'
+                                    : opt.pricingModel === 'hourly'
+                                      ? '/hr'
+                                      : ''}
                                 </div>
                                 <div className="text-[11px] text-[#6B655C]">
                                   {opt.sourceLabel}

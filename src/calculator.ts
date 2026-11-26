@@ -730,7 +730,8 @@ export function calculateQuoteTotal(
     }
   }
 
-  // Effective tax & gratuity rules (package-specific overrides fall back to quote-level)
+  // Effective tax & gratuity rules (package-specific overrides fall back to quote-level;
+  // explicit null on a package override must never inherit quote-level percentages)
   const effectiveGratuityStatus = selectedPackage?.gratuityStatus ?? quote.gratuityStatus;
   const effectiveGratuityPercent =
     selectedPackage?.gratuityPercent !== undefined
@@ -755,15 +756,18 @@ export function calculateQuoteTotal(
       gratuityAmount = null;
       gratuityUnresolved = true;
     } else {
-      const basis = resolvePercentageBasisAmount(
-        effectiveGratuityBasis ?? 'entire_subtotal',
-        resolvedBaseItems,
-      );
-      if (basis.amount === null) {
-        gratuityAmount = null;
-        gratuityUnresolved = true;
+      const basisType = effectiveGratuityBasis ?? 'entire_subtotal';
+      if (basisType === 'entire_subtotal') {
+        // Use completed knownSubtotal (which includes applicable percentage fees) for parity with frontend
+        gratuityAmount = roundMoney(knownSubtotal * (effectiveGratuityPercent / 100));
       } else {
-        gratuityAmount = roundMoney(basis.amount * (effectiveGratuityPercent / 100));
+        const basis = resolvePercentageBasisAmount(basisType, resolvedBaseItems);
+        if (basis.amount === null) {
+          gratuityAmount = null;
+          gratuityUnresolved = true;
+        } else {
+          gratuityAmount = roundMoney(basis.amount * (effectiveGratuityPercent / 100));
+        }
       }
     }
   }

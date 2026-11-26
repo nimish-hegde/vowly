@@ -1267,25 +1267,35 @@ export function mapBackendExtractionToFrontendResult(
 
     if (item.conflictingOptions && item.conflictingOptions.length > 0) {
       const optionsList: QuoteConflict['options'] = [];
+      const formatOptLabel = (amt: number, model: LineItemPricingModel, src: string) => {
+        const suffix =
+          model === 'per_person' ? '/person' : model === 'hourly' ? '/hr' : '';
+        return `$${amt.toLocaleString('en-CA')}${suffix} (${src})`;
+      };
       const hasPrimary = item.conflictingOptions.some(
-        (o) => Math.abs(o.amount - item.amount!) < 0.01
+        (o) =>
+          Math.abs(o.amount - item.amount!) < 0.01 &&
+          mapPricingTypeToModel(o.pricingType) === pricingModel
       );
       if (!hasPrimary) {
         optionsList.push({
           id: `opt-${idPrefix}-${idx}-primary`,
-          label: `$${item.amount.toLocaleString('en-CA')} (Primary quote)`,
+          label: formatOptLabel(item.amount, pricingModel, 'Primary quote'),
           sourceLabel: 'Primary quote',
           amount: item.amount,
+          pricingModel,
           evidenceId: evId,
         });
       }
       item.conflictingOptions.forEach((opt, optIdx) => {
         const optEvId = addEvidence(opt.sourceExcerpt, opt.sourceLabel, item.pageReference);
+        const optModel = mapPricingTypeToModel(opt.pricingType);
         optionsList.push({
           id: `opt-${idPrefix}-${idx}-${optIdx}`,
-          label: `$${opt.amount.toLocaleString('en-CA')} (${opt.sourceLabel})`,
+          label: formatOptLabel(opt.amount, optModel, opt.sourceLabel),
           sourceLabel: opt.sourceLabel,
           amount: opt.amount,
+          pricingModel: optModel,
           evidenceId: optEvId,
         });
       });
@@ -1371,7 +1381,12 @@ export function mapBackendExtractionToFrontendResult(
                   ? null
                   : undefined,
             gratuityStatus: pkg.gratuityStatus,
-            gratuityPercent: pkg.gratuityPercent ?? undefined,
+            gratuityPercent:
+              pkg.gratuityPercent !== undefined && pkg.gratuityPercent !== null
+                ? pkg.gratuityPercent
+                : pkg.gratuityStatus === 'excluded'
+                  ? null
+                  : undefined,
             gratuityBasis: pkg.gratuityBasis,
             inclusions: Array.from(new Set(pkgInclusionStrings)),
             structuredInclusions: pkg.inclusions,

@@ -614,3 +614,73 @@ test('Codex parity: "plus tax" without a stated percentage preserves taxAmount n
   assert.equal(calc.knownAllInTotal, 1000);
   assert.equal(calc.isEstimateComplete, false);
 });
+
+test('Codex parity: whole-subtotal gratuity includes mandatory percentage fees and explicit null package gratuity does not inherit quote default', () => {
+  // 1. $1,000 dinner + 10% mandatory admin fee ($100) + 15% whole-subtotal gratuity ($165) = $1,265
+  const pctAndGratQuote: ExtractedQuote = {
+    vendorName: 'Grand Ballroom',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'included',
+    gratuityStatus: 'excluded',
+    gratuityPercent: 15,
+    gratuityBasis: 'entire_subtotal',
+    lineItems: [
+      {
+        label: 'Dinner package',
+        pricingType: 'flat',
+        amount: 1000,
+        chargeType: 'mandatory',
+        sourceExcerpt: 'Dinner package $1,000',
+      },
+      {
+        label: 'Administrative fee',
+        pricingType: 'percentage',
+        amount: 10,
+        percentageRate: 10,
+        percentageBasis: 'entire_subtotal',
+        chargeType: 'mandatory',
+        sourceExcerpt: '10% administrative fee',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const calc = calculateQuoteTotal(pctAndGratQuote);
+  assert.equal(calc.knownSubtotal, 1100);
+  assert.equal(calc.gratuityAmount, 165);
+  assert.equal(calc.knownAllInTotal, 1265);
+  assert.equal(calc.isEstimateComplete, true);
+
+  // 2. Explicit null package gratuity percentage never inherits quote-level 15%
+  const nullPkgGratQuote: ExtractedQuote = {
+    ...pctAndGratQuote,
+    lineItems: [],
+    selectedPackageId: 'pkg-tbd-grat',
+    packages: [
+      {
+        id: 'pkg-tbd-grat',
+        name: 'Royal Package',
+        pricingType: 'flat',
+        amount: 1000,
+        gratuityStatus: 'excluded',
+        gratuityPercent: null,
+        sourceExcerpt: 'Royal Package $1,000 plus gratuity',
+      },
+      {
+        id: 'pkg-std',
+        name: 'Classic Package',
+        pricingType: 'flat',
+        amount: 1200,
+        sourceExcerpt: 'Classic Package $1,200',
+      },
+    ],
+  };
+
+  const pkgCalc = calculateQuoteTotal(nullPkgGratQuote);
+  assert.equal(pkgCalc.gratuityUnresolved, true);
+  assert.equal(pkgCalc.gratuityAmount, null);
+  assert.equal(pkgCalc.isEstimateComplete, false);
+});

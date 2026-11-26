@@ -524,14 +524,20 @@ export function calculateQuoteFinancials(
   const resolvedBaseItems: Array<{ item: QuoteLineItem; amount: number | null }> = [];
   const percentageItems: QuoteLineItem[] = [];
 
-  const resolvedConflictPriceByLineItem: Record<string, number> = {};
+  const resolvedConflictByLineItem: Record<
+    string,
+    { amount: number; pricingModel?: QuoteLineItem['pricingModel'] }
+  > = {};
   for (const conflict of quote.conflicts) {
     if (conflict.targetLineItemId) {
       const chosen =
         conflict.options.find((o) => o.id === conflict.resolvedOptionId) ??
         conflict.options[0];
       if (chosen) {
-        resolvedConflictPriceByLineItem[conflict.targetLineItemId] = chosen.amount;
+        resolvedConflictByLineItem[conflict.targetLineItemId] = {
+          amount: chosen.amount,
+          pricingModel: chosen.pricingModel,
+        };
       }
     }
   }
@@ -617,12 +623,14 @@ export function calculateQuoteFinancials(
       percentageItems.push(item);
       continue;
     }
+    const conflictOverride = resolvedConflictByLineItem[item.id];
     const overriddenUnitPrice =
-      resolvedConflictPriceByLineItem[item.id] !== undefined
-        ? resolvedConflictPriceByLineItem[item.id]
-        : item.unitPrice;
+      conflictOverride !== undefined ? conflictOverride.amount : item.unitPrice;
+    const overriddenPricingModel =
+      conflictOverride?.pricingModel ?? item.pricingModel;
     const effectiveItem: QuoteLineItem = {
       ...item,
+      pricingModel: overriddenPricingModel,
       unitPrice: overriddenUnitPrice,
       minGuests: item.minGuests ?? selectedPackage?.minGuests ?? quote.minGuests,
     };
@@ -778,28 +786,20 @@ export function calculateQuoteFinancials(
       ? 'Plus tax (rate not stated — excluded from estimate.)'
       : getTaxStatusLabel(effectiveTaxHandling, taxRate);
 
-  // Evaluate optional add-ons using their preserved pricing models (filtered by selected package if scoped)
+  // Evaluate optional add-ons in two order-independent passes:
+  // Pass 1: resolve all non-percentage add-ons and add selected ones to resolvedBaseItems
+  // Pass 2: evaluate percentage add-ons against the completed resolvedBaseItems
   let selectedAddOnsPreTax = 0;
   const activeAddOns = quote.addOns.filter(
     (a) => !a.packageId || (selectedPackage && a.packageId === selectedPackage.id)
   );
-  const addOnImpacts = activeAddOns.map((addon) => {
+  const preTaxByAddOnId = new Map<string, number>();
+
+  for (const addon of activeAddOns) {
     const model = addon.pricingModel ?? 'flat';
+    if (model === 'percentage') continue;
     let computedPreTax = addon.pricePreTax;
-    if (model === 'percentage') {
-      const basis = resolvePercentageBasis(addon.percentageBasis, resolvedBaseItems, {
-        targetLabels: addon.percentageTargetLabels,
-        customBasisAmount: addon.customBasisAmount,
-      });
-      if (basis.amount === null) {
-        computedPreTax = 0;
-        if (addon.selected) {
-          unresolvedPercentageCount += 1;
-        }
-      } else {
-        computedPreTax = Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100;
-      }
-    } else if (model !== 'flat') {
+    if (model !== 'flat') {
       const addonRes = resolveLineItemAmount(
         {
           id: addon.id,
@@ -810,6 +810,7 @@ export function calculateQuoteFinancials(
           ratioDivisor: addon.ratioDivisor,
           unitLabel: addon.unitLabel,
           minGuests: addon.minGuests,
+          guestThreshold: addon.minGuests,
           eventId: addon.eventId,
         },
         guestMap,
@@ -818,22 +819,45 @@ export function calculateQuoteFinancials(
       );
       computedPreTax = Math.round(addonRes.amount * 100) / 100;
     }
-
+    preTaxByAddOnId.set(addon.id, computedPreTax);
     if (addon.selected) {
       selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
-      if (model !== 'percentage') {
-        resolvedBaseItems.push({
-          item: {
-            id: addon.id,
-            label: addon.label,
-            pricingModel: model,
-            unitPrice: addon.pricePreTax,
-            isFoodItem: false,
-          },
-          amount: computedPreTax,
-        });
-      }
+      resolvedBaseItems.push({
+        item: {
+          id: addon.id,
+          label: addon.label,
+          pricingModel: model,
+          unitPrice: addon.pricePreTax,
+          isFoodItem: false,
+        },
+        amount: computedPreTax,
+      });
     }
+  }
+
+  for (const addon of activeAddOns) {
+    const model = addon.pricingModel ?? 'flat';
+    if (model !== 'percentage') continue;
+    const basis = resolvePercentageBasis(addon.percentageBasis, resolvedBaseItems, {
+      targetLabels: addon.percentageTargetLabels,
+      customBasisAmount: addon.customBasisAmount,
+    });
+    let computedPreTax = 0;
+    if (basis.amount === null) {
+      if (addon.selected) {
+        unresolvedPercentageCount += 1;
+      }
+    } else {
+      computedPreTax = Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100;
+    }
+    preTaxByAddOnId.set(addon.id, computedPreTax);
+    if (addon.selected) {
+      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
+    }
+  }
+
+  const addOnImpacts = activeAddOns.map((addon) => {
+    const computedPreTax = preTaxByAddOnId.get(addon.id) ?? 0;
     const impactWithTax = Math.round(computedPreTax * (1 + taxRate) * 100) / 100;
     return {
       id: addon.id,
@@ -888,7 +912,8 @@ export function calculateQuoteFinancials(
     ) / 100
   );
 
-  // Gratuity calculation (prevent duplicate application; support package-specific overrides & structured bases)
+  // Gratuity calculation (prevent duplicate application; support package-specific overrides & structured bases;
+  // explicit null on a selected package override never inherits quote-level gratuityPercent)
   const effectiveGratuityStatus = selectedPackage?.gratuityStatus ?? quote.gratuityStatus;
   const effectiveGratuityPercent =
     selectedPackage?.gratuityPercent !== undefined

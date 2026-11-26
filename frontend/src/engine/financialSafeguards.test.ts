@@ -1356,3 +1356,171 @@ test('Codex final 3 findings: unknown tax rate on plus-tax quotes, selected perc
   );
   assert.equal(silverSchedule.depositAmount, 350); // $350 fixed (overrides quote-level $100)
 });
+
+test('Codex 4 findings + combined rules: null package gratuity, conflicting pricing models, order-independent percentage add-ons, and whole-subtotal gratuity parity', () => {
+  const ws = createDemoWorkspace();
+
+  // 1. Explicit null package gratuity under quote-wide 15% default must remain unresolved and block approval & booking
+  const nullGratMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-null-pkg-grat',
+        draftQuote: {
+          vendorName: 'Royal Estate',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'excluded',
+          gratuityPercent: 15,
+          gratuityBasis: 'entire_subtotal',
+          selectedPackageId: 'pkg-tbd-grat',
+          packages: [
+            {
+              id: 'pkg-tbd-grat',
+              name: 'Royal Package',
+              pricingType: 'flat',
+              amount: 1000,
+              gratuityStatus: 'excluded',
+              gratuityPercent: null,
+              sourceExcerpt: 'Royal Package $1,000 plus gratuity',
+            },
+            {
+              id: 'pkg-classic',
+              name: 'Classic Package',
+              pricingType: 'flat',
+              amount: 1200,
+              sourceExcerpt: 'Classic Package $1,200',
+            },
+          ],
+          lineItems: [],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Royal Package quote' }
+  );
+
+  assert.equal(nullGratMapped.quote.packages?.[0].gratuityPercent, null);
+  const nullGratCalc = calculateQuoteFinancials(nullGratMapped.quote, ws.events, []);
+  assert.equal(nullGratCalc.gratuityUnresolved, true);
+  assert.equal(nullGratCalc.canApprove, false);
+  assert.equal(nullGratCalc.isEstimateComplete, false);
+
+  // 2. Conflicting price options with different pricing models (flat $1,000 vs per_person $20 @ 100 guests -> $2,000)
+  const conflictModelMapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-conflict-model',
+        draftQuote: {
+          vendorName: 'Catering Co',
+          category: 'catering',
+          events: ['Reception'],
+          quoteKind: 'revision',
+          currency: 'CAD',
+          taxStatus: 'included',
+          gratuityStatus: 'included',
+          lineItems: [
+            {
+              label: 'Buffet service',
+              pricingType: 'flat',
+              amount: 1000,
+              chargeType: 'mandatory',
+              conflictingOptions: [
+                {
+                  sourceLabel: 'PDF contract',
+                  pricingType: 'per_person',
+                  amount: 20,
+                  sourceExcerpt: '$20/person in PDF contract',
+                },
+              ],
+              sourceExcerpt: '$1,000 flat in DM',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Conflict quote' }
+  );
+
+  const conflict = conflictModelMapped.quote.conflicts[0];
+  assert.equal(conflict.options.length, 2);
+  const perPersonOpt = conflict.options.find((o) => o.sourceLabel === 'PDF contract')!;
+  assert.equal(perPersonOpt.pricingModel, 'per_person');
+
+  const resolvedConflictQuote: Quote = {
+    ...conflictModelMapped.quote,
+    conflicts: conflictModelMapped.quote.conflicts.map((c) => ({
+      ...c,
+      resolvedOptionId: perPersonOpt.id,
+    })),
+  };
+  const resolvedConflictCalc = calculateQuoteFinancials(resolvedConflictQuote, ws.events, [], 100);
+  assert.equal(resolvedConflictCalc.preTaxTotal, 2000); // 100 * $20, NOT $20!
+  assert.equal(resolvedConflictCalc.canApprove, true);
+
+  // 3. Order-independent percentage add-ons + mandatory percentage fee + whole-subtotal gratuity combined
+  const baseWithPctFirst = makeCleanQuote({
+    id: 'q-order-1',
+    legacyReviewAcknowledged: true,
+    taxHandling: 'included',
+    gratuityStatus: 'excluded',
+    gratuityPercent: 15,
+    gratuityBasis: 'entire_subtotal',
+    lineItems: [
+      { id: 'li-1', label: 'Dinner package', pricingModel: 'flat', unitPrice: 1000 },
+      {
+        id: 'li-2',
+        label: 'Administrative fee',
+        pricingModel: 'percentage',
+        unitPrice: 10,
+        percentageBasis: 'entire_subtotal',
+      },
+    ],
+    addOns: [
+      {
+        id: 'ao-pct',
+        label: '10% coordination surcharge',
+        description: '10% of entire subtotal',
+        pricePreTax: 10,
+        pricingModel: 'percentage',
+        percentageBasis: 'entire_subtotal',
+        selected: true,
+      },
+      {
+        id: 'ao-flat',
+        label: 'Late-night dessert station',
+        description: 'Flat $500',
+        pricePreTax: 500,
+        pricingModel: 'flat',
+        selected: true,
+      },
+    ],
+  });
+
+  const baseWithFlatFirst: Quote = {
+    ...baseWithPctFirst,
+    addOns: [...baseWithPctFirst.addOns].reverse(),
+  };
+
+  const calcPctFirst = calculateQuoteFinancials(baseWithPctFirst, ws.events, []);
+  const calcFlatFirst = calculateQuoteFinancials(baseWithFlatFirst, ws.events, []);
+
+  // Both orders must yield identical pre-tax & all-in totals:
+  // Non-pct base: $1,000 + $500 = $1,500; 10% add-on = $150; 10% admin fee = $150 -> preTax = $1,800; 15% gratuity = $270 -> all-in = $2,070
+  assert.equal(calcPctFirst.preTaxTotal, 1800);
+  assert.equal(calcFlatFirst.preTaxTotal, 1800);
+  assert.equal(calcPctFirst.gratuityAmount, 270);
+  assert.equal(calcFlatFirst.gratuityAmount, 270);
+  assert.equal(calcPctFirst.estimatedAllInTotal, 2070);
+  assert.equal(calcFlatFirst.estimatedAllInTotal, 2070);
+
+  // Exact backend parity check on $1,000 + 10% admin fee + 15% whole-subtotal gratuity (no add-ons) = $1,265
+  const noAddOnQuote: Quote = { ...baseWithPctFirst, addOns: [] };
+  const noAddOnCalc = calculateQuoteFinancials(noAddOnQuote, ws.events, []);
+  assert.equal(noAddOnCalc.preTaxTotal, 1100);
+  assert.equal(noAddOnCalc.gratuityAmount, 165);
+  assert.equal(noAddOnCalc.estimatedAllInTotal, 1265);
+});

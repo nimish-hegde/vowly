@@ -199,6 +199,7 @@ export interface QuoteConflictOption {
   label: string;
   sourceLabel: string;
   amount: number;
+  pricingModel?: LineItemPricingModel;
   evidenceId?: string;
 }
 
