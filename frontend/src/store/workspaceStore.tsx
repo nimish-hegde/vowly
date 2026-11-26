@@ -90,7 +90,8 @@ interface WorkspaceContextValue {
   approveQuote: (
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
-    approvedQuote: Quote
+    approvedQuote: Quote,
+    revisionNote?: string
   ) => string;
   confirmBooking: (payload: {
     vendorId: string;
@@ -504,7 +505,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const approveQuote = (
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
-    approvedQuote: Quote
+    approvedQuote: Quote,
+    revisionNote?: string
   ): string => {
     const cleanQuote: Quote = { ...approvedQuote, approvalState: 'approved' };
     const targetId = vendorId ?? `ven-${Date.now()}`;
@@ -519,7 +521,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
     mutateActive(
       (ws) =>
-        applyApproveQuote(ws, vendorId, newVendorPayload, cleanQuote, targetId)
+        applyApproveQuote(ws, vendorId, newVendorPayload, cleanQuote, targetId, revisionNote)
           .workspace,
       {
         summary: `Approved quote "${cleanQuote.title}" for ${vendorName}.`,

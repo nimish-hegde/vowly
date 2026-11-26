@@ -15,6 +15,7 @@ export type CurrencyCode = 'CAD' | 'USD' | 'UNKNOWN';
 export type PricingType =
   | 'flat'
   | 'per_person'
+  | 'per_extra_guest'
   | 'per_hour'
   | 'per_guest_ratio'
   | 'percentage'
@@ -58,6 +59,10 @@ export interface LineItem {
   amount: number | null;
   /** Minimum guest count that applies to this item (e.g., 150-person minimum). */
   minGuests?: number;
+  /** Guest threshold above which per_extra_guest pricing applies (e.g., 150 for "$55/extra guest above 150"). */
+  guestThreshold?: number;
+  /** Optional package ID if this line item applies only when a specific package option is selected. */
+  packageId?: string;
   /** Ratio denominator for per_guest_ratio items (e.g., 75 for "1 bartender per 75 guests"). */
   ratioGuests?: number;
   /** Plain-language unit label for ratio items (e.g., "bartender", "server", "table"). */
@@ -100,7 +105,44 @@ export interface PackageInclusion {
   name: string;
   quantity?: number;
   unit?: string;
+  /** Separate coverage/service duration in hours when distinct from quantity (e.g., 1 second photographer for 5 hours). */
+  durationHours?: number;
+  /** Optional package ID when this inclusion belongs to a specific package tier. */
+  packageId?: string;
   sourceExcerpt?: string;
+}
+
+export interface PackageOption {
+  /** Stable slug identifier (e.g., "royal-package", "imperial-package"). */
+  id: string;
+  /** Display name of the mutually exclusive package tier. */
+  name: string;
+  pricingType: 'flat' | 'per_person' | 'unknown';
+  amount: number | null;
+  /** Minimum guest guarantee for this specific package (e.g., 150 for Royal, 100 for Imperial). */
+  minGuests?: number;
+  /** Included guest count covered by a flat package before extraGuestRate applies. */
+  includedGuests?: number;
+  /** Genuine incremental per-guest rate ONLY for guests above includedGuests / minGuests. */
+  extraGuestRate?: number;
+  maxCapacity?: number;
+  /** Service hours included in this package option. */
+  hours?: number;
+  isFoodItem?: boolean;
+  /** Package-specific mandatory or conditional fees when supported by the source. */
+  fees?: LineItem[];
+  /** Package-specific tax override when different from quote-level tax. */
+  taxStatus?: TaxOrGratuityStatus;
+  taxPercent?: number | null;
+  /** Package-specific gratuity override when different from quote-level gratuity. */
+  gratuityStatus?: TaxOrGratuityStatus;
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  inclusions?: PackageInclusion[];
+  deliveryTerms?: string[];
+  paymentTerms?: PaymentTerms;
+  sourceExcerpt: string;
+  pageReference?: string;
 }
 
 export interface VendorContact {
@@ -170,8 +212,14 @@ export interface ExtractedQuote {
   gratuityPercent?: number | null;
   gratuityBasis?: PercentageBasis;
   serviceDurationHours?: number;
+  /** Mutually exclusive package/tier options (e.g., Royal vs. Imperial). Never summed together. */
+  packages?: PackageOption[];
+  /** Selected package option ID (null/omitted until the user explicitly chooses one). */
+  selectedPackageId?: string | null;
   lineItems: LineItem[];
   inclusions?: PackageInclusion[];
+  /** Delivery turnaround times, sneak peeks, gallery/USB format, and RAW file terms. */
+  deliveryTerms?: string[];
   exclusions?: string[];
   restrictions?: string[];
   venueDetails?: VenueDetails;
@@ -195,6 +243,7 @@ export interface EvalCase {
   calcContext?: {
     guestCount?: number;
     hours?: number;
+    selectedPackageId?: string;
   };
   expected: {
     category: VendorCategory;
@@ -207,5 +256,9 @@ export interface EvalCase {
     paymentMethodRule?: PaymentMethodRule;
     /** Expected numeric discrepancy when the case contains conflicting prices for one service. */
     expectedPriceConflictDiscrepancy?: number;
+    /** Expected count of mutually exclusive package options when the quote offers multiple tiers. */
+    expectedPackageCount?: number;
+    /** True when the quote must block approval until one package option is selected. */
+    expectUnresolvedPackageSelection?: boolean;
   };
 }

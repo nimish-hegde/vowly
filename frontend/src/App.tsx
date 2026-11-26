@@ -42,6 +42,7 @@ function VowlyAppContent() {
   const [quotePresetId, setQuotePresetId] = useState<string | undefined>(undefined);
   const [quoteTargetVendorId, setQuoteTargetVendorId] = useState<string | undefined>(undefined);
   const [resumeDraftVendorId, setResumeDraftVendorId] = useState<string | undefined>(undefined);
+  const [editApprovedVendorId, setEditApprovedVendorId] = useState<string | undefined>(undefined);
 
   // Booking Modal state
   const [bookingVendorId, setBookingVendorId] = useState<string | null>(null);
@@ -63,6 +64,7 @@ function VowlyAppContent() {
 
   const openQuoteImport = (presetId?: string, vendorId?: string) => {
     setResumeDraftVendorId(undefined);
+    setEditApprovedVendorId(undefined);
     setQuotePresetId(presetId);
     setQuoteTargetVendorId(vendorId);
     setQuoteModalOpen(true);
@@ -71,7 +73,16 @@ function VowlyAppContent() {
   const openResumeDraft = (vendorId: string) => {
     setQuotePresetId(undefined);
     setQuoteTargetVendorId(undefined);
+    setEditApprovedVendorId(undefined);
     setResumeDraftVendorId(vendorId);
+    setQuoteModalOpen(true);
+  };
+
+  const openEditApprovedQuote = (vendorId: string) => {
+    setQuotePresetId(undefined);
+    setQuoteTargetVendorId(undefined);
+    setResumeDraftVendorId(undefined);
+    setEditApprovedVendorId(vendorId);
     setQuoteModalOpen(true);
   };
 
@@ -205,6 +216,9 @@ function VowlyAppContent() {
         onResumeDraft={(vendorId) => {
           openResumeDraft(vendorId);
         }}
+        onEditApprovedQuote={(vendorId) => {
+          openEditApprovedQuote(vendorId);
+        }}
         onOpenBooking={(vendorId) => setBookingVendorId(vendorId)}
       />
 
@@ -215,6 +229,7 @@ function VowlyAppContent() {
         initialPresetId={quotePresetId}
         initialVendorId={quoteTargetVendorId}
         resumeDraftForVendorId={resumeDraftVendorId}
+        editApprovedForVendorId={editApprovedVendorId}
       />
 
       {/* Explicit Booking Confirmation Modal */}

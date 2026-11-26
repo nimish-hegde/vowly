@@ -70,3 +70,16 @@ Record significant product, architecture, and model decisions here as they are m
 - **Evidence:** Passed Codex review with 0 findings; merged via PR `#14` (`88abe8a`).
 - **Trade-offs:** Lightweight Markdown rules/skills only—no custom hooks or MCP overhead.
 - **Decision:** **Shipped** (`#14`).
+
+
+### D-005 — Multi-Package Quotes, Conditional Charges, Honest Unknown Tax & Manual Quote Editing (PR #13 UAT Remediation)
+
+- **Hypothesis:** Real-world vendor quotes frequently present mutually exclusive package tiers (e.g., Royal vs. Imperial), incremental extra-guest / overtime-hour rates, multi-shooter coverage durations, delivery turnaround terms, and unstated tax. Modeling packages as first-class mutually exclusive options with deterministic approval/booking gates, fixing conditional overtime & inclusion formatting, separating `'unspecified'` tax from `'tax_exempt'`, flagging buggy legacy quotes, and enabling manual editing of approved quotes with full revision history will eliminate the critical UAT financial errors without regressing the existing 63-case benchmark.
+- **Changes:**
+  - Backend (`src/types.ts`, `src/extractor.ts`, `src/validator.ts`, `src/calculator.ts`, `src/review.ts`, `src/eval.ts`): Added `PackageOption` (`packages[]`, `selectedPackageId`, package-scoped inclusions/tax/gratuity/delivery/fees), `per_extra_guest` with `guestThreshold` & redundant extra-guest deduplication, `durationHours` on inclusions, `deliveryTerms[]`, conditional overtime `hours <= 1` fix, and single-package normalization.
+  - Frontend (`vowly.ts`, `financialCalculator.ts`, `quoteExtractor.ts`, `workspaceTransitions.ts`, `QuoteImportModal.tsx`, `VendorDetailDrawer.tsx`, `VendorsView.tsx`, `ImageLightboxModal.tsx`, `App.tsx`): Parity calculation for multi-package selection (blocks approval & booking until chosen, preserves all options), `'unspecified'` tax state (`"Tax not stated — excluded from estimate."`, allowed for projected budget as incomplete, blocks booking), legacy suspicious-quote re-review detection & booking block, full manual quote editing with version preservation & `QuoteRevisionRecord` (without touching booked obligations or paid milestones), stable vendor-name input, inclusion hygiene, and zoomable source image lightbox.
+- **Evaluation Results:**
+  - Offline: `50/50` backend tests, `66/66` mock evals, `13/13` frontend tests, `0` lint errors, clean Vite build.
+  - Live (`gemini-3.5-flash-lite`): **66/66 (100.0%)** (`23/23 dev`, `6/6 regression`, `25/25 held-out`, `12/12 held-out-v2`), **0 critical financial errors**, **0 release blockers**, avg latency `1,796 ms` excl. retries (`2,798 ms` incl. 8 HTTP-429 retries), est. paid cost `$0.03062` (`$0.000464` / successful extraction).
+- **Trade-offs:** Keeping `packages.items` lean in `GEMINI_RESPONSE_SCHEMA` (routing package-specific fees via `lineItems[].packageId`) avoided schema bloat and kept `gemini-3.5-flash-lite` latency under `1.8s` excl. retries.
+- **Decision:** **Pending fresh Codex review, manual UAT, and explicit PM approval on PR #13 (do not merge yet).**

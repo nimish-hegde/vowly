@@ -1111,5 +1111,167 @@
         }
       ]
     }
+  },
+  {
+    "id": "dev-uat-multi-package-venue",
+    "split": "dev",
+    "description": "Anonymized UAT: Multi-package venue brochure (Royal vs Imperial) with per-package minimums, inclusions, and repeated extra-guest phrasing must not sum packages",
+    "rawMessage": "Palace Banquet Hall (CAD): We offer two wedding reception packages. Royal Package is $55/person (minimum 150 guests, additional guests $55/person) and includes 4 appetizers, 3 main dishes, and open soft drink bar. Imperial Package is $65/person (minimum 100 guests, additional guests $65/person) and includes 6 appetizers, 5 main dishes, and deluxe dessert table. All packages are plus 13% HST and 10% gratuity.",
+    "calcContext": {
+      "guestCount": 175
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 0,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded",
+      "expectedPackageCount": 2,
+      "expectUnresolvedPackageSelection": true
+    },
+    "mockExtraction": {
+      "vendorName": "Palace Banquet Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 10,
+      "gratuityBasis": "entire_subtotal",
+      "selectedPackageId": null,
+      "packages": [
+        {
+          "id": "royal-package",
+          "name": "Royal Package",
+          "pricingType": "per_person",
+          "amount": 55,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "Appetizers", "quantity": 4, "unit": "appetizers" },
+            { "name": "Main dishes", "quantity": 3, "unit": "main dishes" },
+            { "name": "Open soft drink bar" }
+          ],
+          "sourceExcerpt": "Royal Package is $55/person (minimum 150 guests, additional guests $55/person)"
+        },
+        {
+          "id": "imperial-package",
+          "name": "Imperial Package",
+          "pricingType": "per_person",
+          "amount": 65,
+          "minGuests": 100,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "Appetizers", "quantity": 6, "unit": "appetizers" },
+            { "name": "Main dishes", "quantity": 5, "unit": "main dishes" },
+            { "name": "Deluxe dessert table" }
+          ],
+          "sourceExcerpt": "Imperial Package is $65/person (minimum 100 guests, additional guests $65/person)"
+        }
+      ],
+      "lineItems": [],
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-uat-photo-overtime-default-zero",
+    "split": "dev",
+    "description": "Anonymized UAT: Photography package ($900 for 5 hours) + $250/hr additional hours defaults to $900 with 0 extra hours and unknown tax",
+    "rawMessage": "CAD $900 photography package includes 5 hours of wedding coverage, edited high-resolution photos, and an online gallery. Additional hours are $250/hour.",
+    "calcContext": {},
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 900,
+      "unknownItemLabels": [],
+      "taxStatus": "unknown"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 5,
+      "lineItems": [
+        {
+          "label": "5-hour photography package",
+          "pricingType": "flat",
+          "amount": 900,
+          "hours": 5,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "CAD $900 photography package includes 5 hours of wedding coverage"
+        },
+        {
+          "label": "Additional hourly coverage",
+          "pricingType": "per_hour",
+          "amount": 250,
+          "chargeType": "conditional",
+          "sourceExcerpt": "Additional hours are $250/hour"
+        }
+      ],
+      "inclusions": [
+        { "name": "Wedding coverage", "quantity": 5, "unit": "hours" },
+        { "name": "Edited high-resolution photos" },
+        { "name": "Online gallery" }
+      ],
+      "photographerDetails": { "hoursIncluded": 5, "extraHourRate": 250 },
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-uat-photo-second-shooter-delivery",
+    "split": "dev",
+    "description": "Anonymized UAT: $3,500 photography studio package with 2nd photographer 5-hour coverage and explicit delivery turnaround terms",
+    "rawMessage": "Northstar Photo Studio (CAD): Full wedding collection is $3,500. Includes 8 hours lead photographer, second photographer for 5 hours, and full printing rights. Sneak peeks delivered within 48 hours and full online gallery delivered in 6-8 weeks.",
+    "calcContext": {},
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 3500,
+      "unknownItemLabels": [],
+      "taxStatus": "unknown"
+    },
+    "mockExtraction": {
+      "vendorName": "Northstar Photo Studio",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 8,
+      "lineItems": [
+        {
+          "label": "Full wedding collection",
+          "pricingType": "flat",
+          "amount": 3500,
+          "hours": 8,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Full wedding collection is $3,500"
+        }
+      ],
+      "inclusions": [
+        { "name": "Lead photographer", "quantity": 1, "unit": "photographer", "durationHours": 8 },
+        { "name": "Second photographer", "quantity": 1, "unit": "photographer", "durationHours": 5 },
+        { "name": "Full printing rights" }
+      ],
+      "deliveryTerms": [
+        "Sneak peeks delivered within 48 hours",
+        "Full online gallery delivered in 6-8 weeks"
+      ],
+      "photographerDetails": { "hoursIncluded": 8, "teamSize": 2 },
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
   }
 ]

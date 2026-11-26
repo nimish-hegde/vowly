@@ -90,7 +90,7 @@ const SYSTEM_PROMPT = `You extract structured wedding vendor quote facts from ra
 
 Follow these rules strictly:
 1. Return valid JSON only. Omit optional fields when not stated. Never output "undefined".
-2. Always include the required arrays: "events", "lineItems", and "openQuestions" (use [] if none).
+2. Always include the required arrays: "events", "packages", "lineItems", and "openQuestions" (use [] if none).
 3. Never invent vendor identity or location:
    - If the vendor name is NOT stated in the source, set "vendorName": null. Do NOT invent a placeholder name or use an uploaded filename as the vendor name.
    - Only set "vendorLocation" or "vendorContact" if explicitly stated in the source.
@@ -119,10 +119,14 @@ Follow these rules strictly:
 7. Negotiated prices vs. genuine price conflicts (CRITICAL):
    - EXPLICIT NEGOTIATED PRICE: When a vendor states their normal/standard price alongside an explicitly discounted or negotiated price for the couple (e.g., "I normally charge $1,000, but I can do $900 for your engagement"), set "amount" to the active negotiated price (900) and "originalAmount" to the normal price (1000). Omit "originalAmount" when no separate original price was quoted. Do NOT populate "conflictingOptions" and do NOT create a conflict open question.
    - GENUINE PRICE CONFLICT: When two sources or documents state different prices for the SAME service without a clear explanation of which applies (e.g., an Instagram DM vs. a PDF contract), represent that service as ONE line item — NEVER two separate billable line items. Set "amount" to the earlier/agreed price, record ALL conflicting candidate prices in "conflictingOptions", and add a "conflict" entry in "openQuestions".
-8. Classify staffing ratios, guest minimums, duration, and structured inclusions accurately:
+8. Classify mutually exclusive packages, extra-guest tiers, staffing ratios, guest minimums, overtime hours, structured inclusions, and delivery terms accurately:
+   - MUTUALLY EXCLUSIVE PACKAGES / TIERS: When a vendor brochure, menu, or message presents TWO OR MORE alternative base packages/tiers for the couple to choose between (for example, "Royal Package $55/person, min 150 guests" vs. "Imperial Package $65/person, min 100 guests", or Silver / Gold / Platinum tiers), populate "packages" with one object per tier (each having "id", "name", "pricingType", "amount", "minGuests", "includedGuests", "extraGuestRate", "inclusions", "sourceExcerpt", and any package-specific "taxStatus"/"taxPercent", "gratuityStatus"/"gratuityPercent", or "deliveryTerms"). Put any package-specific fee in "lineItems" with "packageId" set to that tier's "id", and keep shared charges in "lineItems" without "packageId". Do NOT put mutually exclusive package tiers into "lineItems" and NEVER sum alternative packages together. Leave "selectedPackageId" null unless the couple explicitly confirmed one package. For single-package quotes, set "packages": [] and put the single package in "lineItems" as usual.
+   - EXTRA-GUEST PRICING VS. REPEATED PER-PERSON RATES: If a per-person package already states "$55/person (min 150 guests)" and simply restates "$55/person for additional guests", do NOT emit a duplicate second "$55/person" line item. Use "pricingType": "per_extra_guest" with "guestThreshold" (or "extraGuestRate" on a flat package with "includedGuests") ONLY when an incremental rate applies strictly to guests ABOVE an included threshold (e.g., "$8,250 flat up to 150 guests, $55 per extra guest above 150") or when the per-guest rate above a threshold differs from the base rate.
+   - CONDITIONAL OVERTIME / ADDITIONAL HOURS: When a quote includes a base coverage duration (e.g., "$900 for 5 hours") and also lists an additional/overtime hourly rate (e.g., "$250 per additional hour"), extract the additional hourly rate with "pricingType": "per_hour", "chargeType": "conditional", and OMIT "hours" (do NOT set "hours": 1 unless the couple explicitly requested 1 overtime hour).
    - When a fee scales by guest count blocks (for example, "$250 each, 1 required per 75 guests" or "$495 each, up to 150 guests per bartender"), use "pricingType": "per_guest_ratio", set "amount" to the per-unit price, set "ratioGuests" to the guest block size, and set "unitLabel" (e.g., "bartender"). Do NOT use "flat".
-   - When a per-person rate has a guest minimum (e.g., "150-person minimum"), set "minGuests" on the line item and in "venueDetails.minGuests". NEVER copy "maxCapacity" (e.g., "max 190 guests", "fits up to 200") into "minGuests". Only set "minGuests" when the source explicitly states a minimum guest count or minimum guarantee.
-   - Preserve structured "inclusions" with "category", "name", "quantity", "unit", and "sourceExcerpt" where stated (e.g., 4 appetizers, 3 main dishes, 2 desserts, unlimited soft drinks, 6 hours of photography, edited photos, online gallery). Also preserve "exclusions", "restrictions", and "serviceDurationHours" when stated.
+   - When a per-person rate has a guest minimum (e.g., "150-person minimum"), set "minGuests" on the line item (or package) and in "venueDetails.minGuests". NEVER copy "maxCapacity" (e.g., "max 190 guests", "fits up to 200") into "minGuests". Only set "minGuests" when the source explicitly states a minimum guest count or minimum guarantee.
+   - Preserve structured "inclusions" with plain-language "name", optional "quantity", "unit", "durationHours", and "sourceExcerpt" where stated (e.g., 4 appetizers, 3 main dishes, 6 hours of photography, online gallery). Never output internal schema or snake_case tokens (such as "photography_coverage", "deliverables", or "included") in "name" or "unit". When a team member or service has its own coverage duration (e.g., "Second photographer for 5 hours"), set "name": "Second photographer", "quantity": 1, "unit": "photographer", and "durationHours": 5.
+   - Extract delivery timelines, sneak-peek windows, gallery/USB delivery formats, print rights, and RAW file policies into "deliveryTerms". Also preserve "exclusions", "restrictions", and "serviceDurationHours" when stated.
 9. Classify "quoteKind":
    - Use "revision" ONLY when the message updates an earlier quote previously sent to this couple or notes a conflict with a printed brochure, draft contract, or earlier offer.
    - Use "initial" for a standalone first quote — even if the vendor mentions a standard price and offers a negotiated rate in that first message.
@@ -149,6 +153,7 @@ const GEMINI_RESPONSE_SCHEMA = {
     'currency',
     'taxStatus',
     'gratuityStatus',
+    'packages',
     'lineItems',
     'paymentTerms',
     'openQuestions',
@@ -190,6 +195,52 @@ const GEMINI_RESPONSE_SCHEMA = {
       enum: ['specific_line_items', 'food_subtotal', 'entire_subtotal', 'custom_amount', 'unknown'],
     },
     serviceDurationHours: { type: 'NUMBER' },
+    selectedPackageId: { type: 'STRING', nullable: true },
+    packages: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        required: ['id', 'name', 'pricingType', 'amount', 'inclusions', 'sourceExcerpt'],
+        properties: {
+          id: { type: 'STRING' },
+          name: { type: 'STRING' },
+          pricingType: { type: 'STRING', enum: ['flat', 'per_person', 'unknown'] },
+          amount: { type: 'NUMBER', nullable: true },
+          minGuests: { type: 'NUMBER' },
+          includedGuests: { type: 'NUMBER' },
+          extraGuestRate: { type: 'NUMBER' },
+          maxCapacity: { type: 'NUMBER' },
+          hours: { type: 'NUMBER' },
+          isFoodItem: { type: 'BOOLEAN' },
+          taxStatus: { type: 'STRING', enum: ['included', 'excluded', 'unknown'] },
+          taxPercent: { type: 'NUMBER', nullable: true },
+          gratuityStatus: { type: 'STRING', enum: ['included', 'excluded', 'unknown'] },
+          gratuityPercent: { type: 'NUMBER', nullable: true },
+          gratuityBasis: {
+            type: 'STRING',
+            enum: ['specific_line_items', 'food_subtotal', 'entire_subtotal', 'custom_amount', 'unknown'],
+          },
+          inclusions: {
+            type: 'ARRAY',
+            items: {
+              type: 'OBJECT',
+              required: ['name'],
+              properties: {
+                category: { type: 'STRING' },
+                name: { type: 'STRING' },
+                quantity: { type: 'NUMBER' },
+                unit: { type: 'STRING' },
+                durationHours: { type: 'NUMBER' },
+                sourceExcerpt: { type: 'STRING' },
+              },
+            },
+          },
+          deliveryTerms: { type: 'ARRAY', items: { type: 'STRING' } },
+          sourceExcerpt: { type: 'STRING' },
+          pageReference: { type: 'STRING' },
+        },
+      },
+    },
     lineItems: {
       type: 'ARRAY',
       items: {
@@ -199,10 +250,12 @@ const GEMINI_RESPONSE_SCHEMA = {
           label: { type: 'STRING' },
           pricingType: {
             type: 'STRING',
-            enum: ['flat', 'per_person', 'per_hour', 'per_guest_ratio', 'percentage', 'included', 'unknown'],
+            enum: ['flat', 'per_person', 'per_extra_guest', 'per_hour', 'per_guest_ratio', 'percentage', 'included', 'unknown'],
           },
           amount: { type: 'NUMBER', nullable: true },
           minGuests: { type: 'NUMBER' },
+          guestThreshold: { type: 'NUMBER' },
+          packageId: { type: 'STRING' },
           ratioGuests: { type: 'NUMBER' },
           unitLabel: { type: 'STRING' },
           hours: { type: 'NUMBER' },
@@ -227,7 +280,7 @@ const GEMINI_RESPONSE_SCHEMA = {
                 sourceLabel: { type: 'STRING' },
                 pricingType: {
                   type: 'STRING',
-                  enum: ['flat', 'per_person', 'per_hour', 'per_guest_ratio', 'percentage', 'included', 'unknown'],
+                  enum: ['flat', 'per_person', 'per_extra_guest', 'per_hour', 'per_guest_ratio', 'percentage', 'included', 'unknown'],
                 },
                 amount: { type: 'NUMBER' },
                 sourceExcerpt: { type: 'STRING' },
@@ -249,10 +302,13 @@ const GEMINI_RESPONSE_SCHEMA = {
           name: { type: 'STRING' },
           quantity: { type: 'NUMBER' },
           unit: { type: 'STRING' },
+          durationHours: { type: 'NUMBER' },
+          packageId: { type: 'STRING' },
           sourceExcerpt: { type: 'STRING' },
         },
       },
     },
+    deliveryTerms: { type: 'ARRAY', items: { type: 'STRING' } },
     exclusions: { type: 'ARRAY', items: { type: 'STRING' } },
     restrictions: { type: 'ARRAY', items: { type: 'STRING' } },
     venueDetails: {
@@ -595,6 +651,70 @@ export function normalizeProviderResponse(parsed: unknown): unknown {
       if (li.pricingType !== 'percentage') {
         if (li.percentageRate === 0) delete li.percentageRate;
         if (li.percentageBasis === 'unknown') delete li.percentageBasis;
+      }
+    }
+  }
+  const sanitizeInclusions = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const rawInc of list) {
+      if (typeof rawInc !== 'object' || rawInc === null || Array.isArray(rawInc)) continue;
+      const inc = rawInc as Record<string, unknown>;
+      if (
+        typeof inc.unit === 'string' &&
+        (inc.unit.trim().length > 30 || inc.unit.includes('_'))
+      ) {
+        delete inc.unit;
+      }
+    }
+  };
+  sanitizeInclusions(obj.inclusions);
+  if (Array.isArray(obj.packages)) {
+    for (const rawPkg of obj.packages) {
+      if (typeof rawPkg === 'object' && rawPkg !== null && !Array.isArray(rawPkg)) {
+        sanitizeInclusions((rawPkg as Record<string, unknown>).inclusions);
+      }
+    }
+    // Single-package quotes belong in lineItems (packages[] is strictly for >= 2 mutually exclusive tiers).
+    // If the model put a single package in packages[], fold it into lineItems only if not already duplicated.
+    if (obj.packages.length === 1 && Array.isArray(obj.lineItems)) {
+      const onlyPkg = obj.packages[0] as Record<string, unknown>;
+      const alreadyInLineItems = obj.lineItems.some((rawLi) => {
+        if (typeof rawLi !== 'object' || rawLi === null) return false;
+        const li = rawLi as Record<string, unknown>;
+        return (
+          li.pricingType === onlyPkg.pricingType &&
+          typeof li.amount === 'number' &&
+          typeof onlyPkg.amount === 'number' &&
+          Math.abs(li.amount - onlyPkg.amount) < 0.01
+        );
+      });
+      if (!alreadyInLineItems && typeof onlyPkg.name === 'string') {
+        obj.lineItems.unshift({
+          label: onlyPkg.name,
+          pricingType: onlyPkg.pricingType ?? 'flat',
+          amount: onlyPkg.amount ?? null,
+          minGuests: onlyPkg.minGuests,
+          hours: onlyPkg.hours,
+          isFoodItem: onlyPkg.isFoodItem,
+          chargeType: 'mandatory',
+          sourceExcerpt: onlyPkg.sourceExcerpt ?? onlyPkg.name,
+          pageReference: onlyPkg.pageReference,
+        });
+      }
+      // Merge any package-level inclusions into quote.inclusions before clearing single-item packages[]
+      if (Array.isArray(onlyPkg.inclusions) && onlyPkg.inclusions.length > 0) {
+        const existingIncs = Array.isArray(obj.inclusions) ? obj.inclusions : [];
+        obj.inclusions = [...onlyPkg.inclusions, ...existingIncs];
+      }
+      obj.packages = [];
+    }
+  }
+  // Clear stray packageId values when quote does not have >= 2 mutually exclusive packages
+  const hasMultiPackages = Array.isArray(obj.packages) && obj.packages.length >= 2;
+  if (!hasMultiPackages && Array.isArray(obj.lineItems)) {
+    for (const rawLi of obj.lineItems) {
+      if (typeof rawLi === 'object' && rawLi !== null && !Array.isArray(rawLi)) {
+        delete (rawLi as Record<string, unknown>).packageId;
       }
     }
   }

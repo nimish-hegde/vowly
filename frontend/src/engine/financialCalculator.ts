@@ -5,6 +5,7 @@ import type {
   PercentageBasis,
   Quote,
   QuoteLineItem,
+  QuotePackageOption,
   TaxHandling,
   Vendor,
   VendorCategory,
@@ -58,6 +59,8 @@ export interface QuoteCalculationResult {
   taxAmount: number;
   hstAssumed: boolean;
   hstIncluded: boolean;
+  taxNotStated: boolean;
+  taxStatusLabel: string;
   effectiveTaxHandling: TaxHandling;
   estimatedAllInTotal: number;
   effectiveGuestCountUsed: number | null;
@@ -65,6 +68,9 @@ export interface QuoteCalculationResult {
   minGuestsApplied: boolean;
   appliedMinGuests: number | null;
   capacityExceeded: boolean;
+  unresolvedPackageSelection: boolean;
+  selectedPackageName?: string;
+  legacyReviewReasons: string[];
   unresolvedMandatoryFeesCount: number;
   unresolvedConflictsCount: number;
   unresolvedPercentageCount: number;
@@ -194,6 +200,27 @@ function resolveLineItemAmount(
     };
   }
 
+  if (item.pricingModel === 'per_extra_guest') {
+    const threshold = item.guestThreshold ?? item.minGuests ?? 0;
+    if (rawGuests === null) {
+      return {
+        amount: 0,
+        guestsUsed: null,
+        minApplied: false,
+        appliedMin: null,
+        guestMissing: true,
+      };
+    }
+    const extraGuests = Math.max(0, rawGuests - threshold);
+    return {
+      amount: extraGuests * item.unitPrice,
+      guestsUsed: rawGuests,
+      minApplied: false,
+      appliedMin: null,
+      guestMissing: false,
+    };
+  }
+
   if (item.pricingModel === 'guest_ratio') {
     if (rawGuests === null) {
       return {
@@ -305,6 +332,163 @@ function isDuplicateGratuityPercentageItem(item: QuoteLineItem, quote: Quote): b
   return Math.abs(item.unitPrice - quote.gratuityPercent) < 0.01;
 }
 
+const EXTRA_GUEST_LABEL_PATTERN =
+  /\b(extra|additional)\s+(guests?|persons?|people|plates?)\b|\bguests?\s+(over|above|beyond)\b/i;
+
+const LEGACY_OVERTIME_PATTERN =
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\bovertime\b/i;
+
+const MULTI_TIER_PACKAGE_PATTERN =
+  /\b(package|menu|tier|plan|royal|imperial|silver|gold|platinum|diamond|classic|deluxe|premium)\b/i;
+
+export function getSelectedPackageOption(quote: Quote): {
+  hasMultiplePackages: boolean;
+  selectedPackage?: QuotePackageOption;
+} {
+  const pkgs = quote.packages ?? [];
+  if (pkgs.length < 2) {
+    return { hasMultiplePackages: false, selectedPackage: pkgs[0] };
+  }
+  if (!quote.selectedPackageId) {
+    return { hasMultiplePackages: true, selectedPackage: undefined };
+  }
+  const chosen = pkgs.find((p) => p.id === quote.selectedPackageId);
+  return { hasMultiplePackages: true, selectedPackage: chosen };
+}
+
+export function getEffectiveQuoteInclusions(quote: Quote): string[] {
+  const { selectedPackage } = getSelectedPackageOption(quote);
+  if (selectedPackage) {
+    return Array.from(new Set([...selectedPackage.inclusions, ...quote.inclusions]));
+  }
+  return quote.inclusions;
+}
+
+export function getEffectiveQuoteDeliveryTerms(quote: Quote): string[] {
+  const { selectedPackage } = getSelectedPackageOption(quote);
+  const pkgTerms = selectedPackage?.deliveryTerms ?? [];
+  const quoteTerms = quote.deliveryTerms ?? [];
+  return Array.from(new Set([...pkgTerms, ...quoteTerms]));
+}
+
+export function getTaxStatusLabel(taxHandling: TaxHandling, taxRate: number): string {
+  switch (taxHandling) {
+    case 'included':
+      return 'Tax / HST included';
+    case 'excluded_plus_hst':
+      return taxRate > 0 ? `Plus ${Math.round(taxRate * 100)}% HST / tax` : 'Plus tax';
+    case 'unspecified_ontario_assumed':
+      return `Est. +${Math.round(taxRate * 100)}% HST (assumed)`;
+    case 'tax_exempt':
+      return 'Confirmed no tax charged (0%)';
+    case 'unspecified':
+    default:
+      return 'Tax not stated — excluded from estimate.';
+  }
+}
+
+function isRedundantExtraGuestLineItem(
+  item: QuoteLineItem,
+  activeItems: QuoteLineItem[],
+  quote: Quote,
+  selectedPackage?: QuotePackageOption
+): boolean {
+  if (selectedPackage && item.id === `pkg-active-${selectedPackage.id}`) return false;
+  const isExtraGuestCandidate =
+    item.pricingModel === 'per_extra_guest' ||
+    (item.pricingModel === 'per_person' && EXTRA_GUEST_LABEL_PATTERN.test(item.label));
+  if (!isExtraGuestCandidate) return false;
+
+  if (
+    selectedPackage &&
+    selectedPackage.pricingModel === 'per_person' &&
+    Math.abs(selectedPackage.unitPrice - item.unitPrice) < 0.01
+  ) {
+    return true;
+  }
+  if (
+    !item.packageId &&
+    (quote.packages ?? []).some(
+      (p) =>
+        p.pricingModel === 'per_person' &&
+        Math.abs(p.unitPrice - item.unitPrice) < 0.01
+    )
+  ) {
+    return true;
+  }
+
+  return activeItems.some(
+    (sibling) =>
+      sibling.id !== item.id &&
+      sibling.pricingModel === 'per_person' &&
+      !EXTRA_GUEST_LABEL_PATTERN.test(sibling.label) &&
+      Math.abs(sibling.unitPrice - item.unitPrice) < 0.01
+  );
+}
+
+/**
+ * Flags legacy saved quotes that exhibit known pre-fix calculation failure patterns
+ * so they are never silently retained as bookable without user re-review.
+ */
+export function detectLegacyQuoteReviewReasons(quote: Quote): string[] {
+  if (quote.legacyReviewAcknowledged) return [];
+  const reasons: string[] = [];
+
+  // 1. Multiple per_person package/tier items summed in a legacy quote without packages[]
+  if (!quote.packages || quote.packages.length === 0) {
+    const perPersonBaseItems = quote.lineItems.filter(
+      (li) => li.pricingModel === 'per_person' && !EXTRA_GUEST_LABEL_PATTERN.test(li.label)
+    );
+    const tierNamedItems = perPersonBaseItems.filter((li) =>
+      MULTI_TIER_PACKAGE_PATTERN.test(li.label)
+    );
+    if (tierNamedItems.length >= 2) {
+      reasons.push(
+        'Multiple per-person package options appear summed together — re-review and choose one package.'
+      );
+    }
+
+    const extraGuestPerPerson = quote.lineItems.filter(
+      (li) => li.pricingModel === 'per_person' && EXTRA_GUEST_LABEL_PATTERN.test(li.label)
+    );
+    if (perPersonBaseItems.length >= 1 && extraGuestPerPerson.length >= 1) {
+      reasons.push(
+        'Extra-guest pricing may be applied across all guests instead of incremental guests — re-review line items.'
+      );
+    }
+  }
+
+  // 2. Conditional overtime hourly rate billed by default alongside a flat package
+  const hasFlatBase = quote.lineItems.some((li) => li.pricingModel === 'flat');
+  if (hasFlatBase) {
+    const suspiciousOvertime = quote.lineItems.find(
+      (li) =>
+        li.pricingModel === 'hourly' &&
+        !li.isConditionalOvertime &&
+        (li.quantity ?? 1) >= 1 &&
+        LEGACY_OVERTIME_PATTERN.test(li.label)
+    );
+    if (suspiciousOvertime) {
+      reasons.push(
+        `Additional hourly rate ("${suspiciousOvertime.label}") is billed by default — verify whether extra hours are needed.`
+      );
+    }
+  }
+
+  // 3. Unknown tax previously auto-mapped to tax_exempt
+  if (
+    quote.taxHandling === 'tax_exempt' &&
+    quote.sourceText.trim().length > 0 &&
+    !/\b(tax[\s-]*exempt|no\s*tax|tax[\s-]*free|0%\s*tax|zero\s*tax)\b/i.test(quote.sourceText)
+  ) {
+    reasons.push(
+      'Tax was previously marked tax-exempt without explicit source wording — confirm actual tax handling.'
+    );
+  }
+
+  return reasons;
+}
+
 /**
  * Pure deterministic calculator for any vendor quote.
  * Guarantees consistent tax/gratuity handling, structured percentage bases,
@@ -348,7 +532,69 @@ export function calculateQuoteFinancials(
     }
   }
 
-  for (const item of quote.lineItems) {
+  const { hasMultiplePackages, selectedPackage } = getSelectedPackageOption(quote);
+  const unresolvedPackageSelection = hasMultiplePackages && !selectedPackage;
+
+  const activeItems: QuoteLineItem[] = [];
+  if (selectedPackage) {
+    activeItems.push({
+      id: `pkg-active-${selectedPackage.id}`,
+      label: selectedPackage.name,
+      pricingModel: selectedPackage.pricingModel,
+      unitPrice: selectedPackage.unitPrice,
+      minGuests: selectedPackage.minGuests,
+      isFoodItem: selectedPackage.isFoodItem,
+      eventId: vendorEventIds[0],
+      evidenceId: selectedPackage.evidenceId,
+      pageReference: selectedPackage.pageReference,
+    });
+
+    if (
+      selectedPackage.pricingModel === 'flat' &&
+      selectedPackage.extraGuestRate !== undefined &&
+      selectedPackage.extraGuestRate > 0 &&
+      (selectedPackage.includedGuests !== undefined || selectedPackage.minGuests !== undefined)
+    ) {
+      activeItems.push({
+        id: `pkg-extra-${selectedPackage.id}`,
+        label: `${selectedPackage.name} extra guests`,
+        pricingModel: 'per_extra_guest',
+        unitPrice: selectedPackage.extraGuestRate,
+        guestThreshold: selectedPackage.includedGuests ?? selectedPackage.minGuests,
+        isFoodItem: selectedPackage.isFoodItem,
+        eventId: vendorEventIds[0],
+        evidenceId: selectedPackage.evidenceId,
+      });
+    }
+
+    if (selectedPackage.fees && selectedPackage.fees.length > 0) {
+      activeItems.push(...selectedPackage.fees);
+    }
+  }
+
+  const knownPackageIds = new Set((quote.packages ?? []).map((p) => p.id.toLowerCase()));
+  for (const li of quote.lineItems) {
+    const liPkgId = li.packageId?.trim().toLowerCase();
+    if (hasMultiplePackages && liPkgId && knownPackageIds.has(liPkgId)) {
+      if (!selectedPackage || liPkgId !== selectedPackage.id.toLowerCase()) {
+        continue;
+      }
+    }
+    if (
+      selectedPackage &&
+      !hasMultiplePackages &&
+      li.pricingModel === selectedPackage.pricingModel &&
+      Math.abs(li.unitPrice - selectedPackage.unitPrice) < 0.01
+    ) {
+      continue;
+    }
+    activeItems.push(li);
+  }
+
+  for (const item of activeItems) {
+    if (isRedundantExtraGuestLineItem(item, activeItems, quote, selectedPackage)) {
+      continue;
+    }
     if (item.pricingModel === 'percentage') {
       percentageItems.push(item);
       continue;
@@ -360,7 +606,7 @@ export function calculateQuoteFinancials(
     const effectiveItem: QuoteLineItem = {
       ...item,
       unitPrice: overriddenUnitPrice,
-      minGuests: item.minGuests ?? quote.minGuests,
+      minGuests: item.minGuests ?? selectedPackage?.minGuests ?? quote.minGuests,
     };
     const res = resolveLineItemAmount(
       effectiveItem,
@@ -404,6 +650,14 @@ export function calculateQuoteFinancials(
               res.minApplied && res.appliedMin ? ` (min ${res.appliedMin} applied)` : ''
             }`
           : `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest (guest count needed)`;
+    } else if (effectiveItem.pricingModel === 'per_extra_guest') {
+      const threshold = effectiveItem.guestThreshold ?? effectiveItem.minGuests ?? 0;
+      if (res.guestsUsed !== null) {
+        const extra = Math.max(0, res.guestsUsed - threshold);
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} × ${extra} extra guest${extra === 1 ? '' : 's'}`;
+      } else {
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} (guest count needed)`;
+      }
     } else if (effectiveItem.pricingModel === 'guest_ratio') {
       const divisor = effectiveItem.ratioDivisor && effectiveItem.ratioDivisor > 0 ? effectiveItem.ratioDivisor : 10;
       const unitWord = effectiveItem.unitLabel || 'unit';
@@ -440,7 +694,7 @@ export function calculateQuoteFinancials(
   }
 
   let paymentOptionAdjustment = 0;
-  let effectiveTaxHandling: TaxHandling = quote.taxHandling;
+  let effectiveTaxHandling: TaxHandling = selectedPackage?.taxHandling ?? quote.taxHandling;
   if (quote.paymentOptions && quote.paymentOptions.length > 0) {
     const activeOpt =
       quote.paymentOptions.find((o) => o.id === quote.selectedPaymentOptionId) ??
@@ -472,17 +726,26 @@ export function calculateQuoteFinancials(
 
   const hstIncluded = effectiveTaxHandling === 'included';
   const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
+  const effectiveTaxPercentValue =
+    selectedPackage?.taxPercent !== undefined ? selectedPackage.taxPercent : quote.taxPercent;
   const explicitTaxRate =
-    quote.taxPercent !== undefined && Number.isFinite(quote.taxPercent)
-      ? quote.taxPercent / 100
+    effectiveTaxPercentValue !== undefined && Number.isFinite(effectiveTaxPercentValue)
+      ? effectiveTaxPercentValue / 100
       : ONTARIO_HST_RATE;
-  const hasExplicitTaxLineItem = quote.lineItems.some((li) =>
+  const hasExplicitTaxLineItem = activeItems.some((li) =>
     /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
   );
+  const taxNotStated = !hasExplicitTaxLineItem && effectiveTaxHandling === 'unspecified';
   const taxRate =
-    hasExplicitTaxLineItem || effectiveTaxHandling === 'included' || effectiveTaxHandling === 'tax_exempt'
+    hasExplicitTaxLineItem ||
+    effectiveTaxHandling === 'included' ||
+    effectiveTaxHandling === 'tax_exempt' ||
+    effectiveTaxHandling === 'unspecified'
       ? 0
       : explicitTaxRate;
+  const taxStatusLabel = hasExplicitTaxLineItem
+    ? 'Tax listed in line items'
+    : getTaxStatusLabel(effectiveTaxHandling, taxRate);
 
   // Evaluate optional add-ons using their preserved pricing models (per_person, hourly, guest_ratio, percentage, flat)
   let selectedAddOnsPreTax = 0;
@@ -587,8 +850,15 @@ export function calculateQuoteFinancials(
     ) / 100
   );
 
-  // Gratuity calculation (prevent duplicate application; support structured bases)
-  const hasExplicitGratuityLineItem = quote.lineItems.some(
+  // Gratuity calculation (prevent duplicate application; support package-specific overrides & structured bases)
+  const effectiveGratuityStatus = selectedPackage?.gratuityStatus ?? quote.gratuityStatus;
+  const effectiveGratuityPercent =
+    selectedPackage?.gratuityPercent !== undefined
+      ? selectedPackage.gratuityPercent
+      : quote.gratuityPercent;
+  const effectiveGratuityBasis = selectedPackage?.gratuityBasis ?? quote.gratuityBasis;
+
+  const hasExplicitGratuityLineItem = activeItems.some(
     (li) =>
       !isDuplicateGratuityPercentageItem(li, quote) &&
       /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
@@ -599,20 +869,20 @@ export function calculateQuoteFinancials(
 
   if (!hasExplicitGratuityLineItem) {
     if (
-      quote.gratuityStatus === 'excluded' &&
-      (quote.gratuityPercent === undefined || quote.gratuityPercent === null)
+      effectiveGratuityStatus === 'excluded' &&
+      (effectiveGratuityPercent === undefined || effectiveGratuityPercent === null)
     ) {
       gratuityUnresolved = true;
       gratuityBasisLabel = 'percentage unknown';
     } else if (
-      quote.gratuityPercent !== undefined &&
-      quote.gratuityPercent !== null &&
-      quote.gratuityPercent > 0 &&
-      quote.gratuityStatus !== 'included'
+      effectiveGratuityPercent !== undefined &&
+      effectiveGratuityPercent !== null &&
+      effectiveGratuityPercent > 0 &&
+      effectiveGratuityStatus !== 'included'
     ) {
-      const basisType = quote.gratuityBasis ?? 'entire_subtotal';
+      const basisType = effectiveGratuityBasis ?? 'entire_subtotal';
       if (basisType === 'entire_subtotal') {
-        gratuityAmount = Math.round(preTaxTotal * (quote.gratuityPercent / 100) * 100) / 100;
+        gratuityAmount = Math.round(preTaxTotal * (effectiveGratuityPercent / 100) * 100) / 100;
         gratuityBasisLabel = 'applicable subtotal';
       } else {
         const basis = resolvePercentageBasis(basisType, resolvedBaseItems);
@@ -620,7 +890,7 @@ export function calculateQuoteFinancials(
           gratuityUnresolved = true;
           gratuityBasisLabel = basis.label;
         } else {
-          gratuityAmount = Math.round(basis.amount * (quote.gratuityPercent / 100) * 100) / 100;
+          gratuityAmount = Math.round(basis.amount * (effectiveGratuityPercent / 100) * 100) / 100;
           gratuityBasisLabel = basis.label;
         }
       }
@@ -631,15 +901,22 @@ export function calculateQuoteFinancials(
   const taxAmount = Math.round(taxableBase * taxRate * 100) / 100;
   const estimatedAllInTotal = Math.round((taxableBase + taxAmount) * 100) / 100;
 
+  const effectiveMaxCap = selectedPackage?.maxCapacity ?? quote.maxCapacity;
   const capacityExceeded =
-    quote.maxCapacity !== undefined &&
+    effectiveMaxCap !== undefined &&
     primaryEventGuests !== null &&
-    primaryEventGuests > quote.maxCapacity;
+    primaryEventGuests > effectiveMaxCap;
 
   const unresolvedConflictsCount = quote.conflicts.filter((c) => !c.resolvedOptionId).length;
   const isCurrencyUnknown = quote.currency === 'UNKNOWN';
+  const legacyReviewReasons = detectLegacyQuoteReviewReasons(quote);
 
   const blockingReasons: string[] = [];
+  if (unresolvedPackageSelection) {
+    blockingReasons.push(
+      'Select one package option before approving this quote, or Save as Draft to keep all options.'
+    );
+  }
   if (isCurrencyUnknown) {
     blockingReasons.push('Confirm currency (CAD or USD) before approving.');
   }
@@ -720,6 +997,8 @@ export function calculateQuoteFinancials(
     taxAmount,
     hstAssumed,
     hstIncluded,
+    taxNotStated,
+    taxStatusLabel,
     effectiveTaxHandling,
     estimatedAllInTotal,
     effectiveGuestCountUsed,
@@ -727,11 +1006,14 @@ export function calculateQuoteFinancials(
     minGuestsApplied,
     appliedMinGuests,
     capacityExceeded,
+    unresolvedPackageSelection,
+    selectedPackageName: selectedPackage?.name,
+    legacyReviewReasons,
     unresolvedMandatoryFeesCount,
     unresolvedConflictsCount,
     unresolvedPercentageCount,
     negotiatedSavings,
-    isEstimateComplete: blockingReasons.length === 0 && !guestCountMissing,
+    isEstimateComplete: blockingReasons.length === 0 && !guestCountMissing && !taxNotStated,
     lineItemBreakdowns,
     blockingReasons,
     canApprove: blockingReasons.length === 0,
@@ -778,8 +1060,21 @@ export function getVendorBookingEligibility(
 
   if (activeQuote) {
     const calc = calculateQuoteFinancials(activeQuote, events, vendor.eventIds);
+    if (calc.unresolvedPackageSelection) {
+      blockingReasons.push('Select one package option before confirming a booking.');
+    }
     if (calc.isCurrencyUnknown) {
       blockingReasons.push('Confirm quote currency (CAD or USD) before booking.');
+    }
+    if (calc.taxNotStated) {
+      blockingReasons.push(
+        'Confirm tax handling before booking (tax is not stated on this quote).'
+      );
+    }
+    if (calc.legacyReviewReasons.length > 0) {
+      blockingReasons.push(
+        `Re-review this quote before booking: ${calc.legacyReviewReasons[0]}`
+      );
     }
     if (calc.unresolvedMandatoryFeesCount > 0) {
       blockingReasons.push(

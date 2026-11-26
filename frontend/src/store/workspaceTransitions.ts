@@ -1,8 +1,13 @@
-import { getVendorBookingEligibility } from '../engine/financialCalculator.ts';
+import {
+  calculateQuoteFinancials,
+  getVendorActiveQuote,
+  getVendorBookingEligibility,
+} from '../engine/financialCalculator.ts';
 import type {
   FollowUpTask,
   PaymentMilestone,
   Quote,
+  QuoteRevisionRecord,
   Vendor,
   WeddingEvent,
   WeddingWorkspace,
@@ -116,9 +121,9 @@ export function applyApproveQuote(
   vendorId: string | null,
   newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
   approvedQuote: Quote,
-  targetId: string
+  targetId: string,
+  revisionNote?: string
 ): { workspace: WeddingWorkspace; vendorName: string } {
-  const cleanQuote: Quote = { ...approvedQuote, approvalState: 'approved' };
   const existingVendor = vendorId
     ? ws.vendors.find((v) => v.id === vendorId)
     : undefined;
@@ -128,11 +133,56 @@ export function applyApproveQuote(
     existingVendor?.name ||
     'Vendor';
 
+  let cleanQuote: Quote = {
+    ...approvedQuote,
+    approvalState: 'approved',
+    legacyReviewAcknowledged: true,
+  };
+
   let nextVendors: Vendor[];
   if (existingVendor && vendorId) {
     nextVendors = ws.vendors.map((v) => {
       if (v.id !== vendorId) return v;
-      const otherQuotes = v.quotes.filter((q) => q.id !== cleanQuote.id);
+      const previousActive = getVendorActiveQuote(v);
+      const isEditingExistingApproved =
+        previousActive !== undefined && previousActive.approvalState === 'approved';
+
+      // Preserve prior approved quote versions in v.quotes[] (never destructively overwrite)
+      const alreadyExists = v.quotes.some((q) => q.id === cleanQuote.id);
+      if (alreadyExists && isEditingExistingApproved) {
+        cleanQuote = {
+          ...cleanQuote,
+          id: `${cleanQuote.id}-rev-${Date.now()}`,
+        };
+      }
+
+      if (isEditingExistingApproved && previousActive) {
+        const prevCalc = calculateQuoteFinancials(previousActive, ws.events, v.eventIds);
+        const nextCalc = calculateQuoteFinancials(
+          cleanQuote,
+          ws.events,
+          newVendorPayload?.eventIds ?? v.draftVendorMetadata?.eventIds ?? v.eventIds
+        );
+        const revRecord: QuoteRevisionRecord = {
+          id: `rev-${Date.now()}`,
+          date: new Date().toISOString().slice(0, 10),
+          summary: revisionNote?.trim() || 'Manual quote edit',
+          previousPreTaxTotal: prevCalc.preTaxTotal,
+          newPreTaxTotal: nextCalc.preTaxTotal,
+          note:
+            revisionNote?.trim() ||
+            `Updated quote from ${prevCalc.currencyLabel} $${prevCalc.preTaxTotal.toLocaleString('en-CA')} to $${nextCalc.preTaxTotal.toLocaleString('en-CA')} pre-tax.`,
+        };
+        cleanQuote = {
+          ...cleanQuote,
+          revisions: [...(previousActive.revisions ?? []), revRecord],
+        };
+      }
+
+      const preservedQuotes = alreadyExists && !isEditingExistingApproved
+        ? v.quotes.filter((q) => q.id !== cleanQuote.id)
+        : v.quotes;
+
       const effectiveMeta = newVendorPayload ?? v.draftVendorMetadata;
       const updatedCategory = effectiveMeta ? effectiveMeta.category : v.category;
       const updatedEventIds = effectiveMeta ? [...effectiveMeta.eventIds] : v.eventIds;
@@ -152,9 +202,10 @@ export function applyApproveQuote(
               isDemoVenue: effectiveMeta.isDemoVenue ?? v.isDemoVenue,
             }
           : {}),
+        // Never silently alter booked status, bookedContractTotal, or paid milestones
         isPreferred: v.status === 'Booked' ? v.isPreferred : v.isPreferred && !hasComp,
         status: v.status === 'Booked' ? 'Booked' : 'Quoted',
-        quotes: [...otherQuotes, cleanQuote],
+        quotes: [...preservedQuotes, cleanQuote],
         activeQuoteId: cleanQuote.id,
         draftQuote: undefined,
         draftVendorMetadata: undefined,

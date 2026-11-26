@@ -9,17 +9,23 @@ import {
   Image as ImageIcon,
   Loader2,
   MessageSquare,
+  Plus,
   RefreshCw,
   Save,
   Sparkles,
   Tag,
+  Trash2,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import {
   calculateQuoteFinancials,
   CATEGORY_META,
   formatCurrency,
   formatShortCad,
+  getEffectiveQuoteDeliveryTerms,
+  getEffectiveQuoteInclusions,
+  getVendorActiveQuote,
   resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import {
@@ -40,6 +46,7 @@ import {
   VendorCategory,
 } from '../types/vowly';
 import { DemoDataNote } from './DemoLabel';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface QuoteImportModalProps {
   isOpen: boolean;
@@ -47,6 +54,7 @@ interface QuoteImportModalProps {
   initialPresetId?: string;
   initialVendorId?: string;
   resumeDraftForVendorId?: string;
+  editApprovedForVendorId?: string;
   onCompleteForOnboarding?: (payload: {
     vendorName: string;
     category: VendorCategory;
@@ -70,6 +78,7 @@ const LOADING_MESSAGES = [
 const PRICING_MODEL_LABELS: Record<LineItemPricingModel, string> = {
   flat: 'Fixed price',
   per_person: 'Per guest',
+  per_extra_guest: 'Per extra guest (above threshold)',
   hourly: 'Hourly rate',
   guest_ratio: 'Ratio-based staffing / units',
   percentage: 'Percentage charge',
@@ -122,6 +131,7 @@ export function QuoteImportModal({
   initialPresetId,
   initialVendorId,
   resumeDraftForVendorId,
+  editApprovedForVendorId,
   onCompleteForOnboarding,
 }: QuoteImportModalProps) {
   const { activeWorkspace, saveDraftQuote, approveQuote } = useWorkspace();
@@ -157,6 +167,12 @@ export function QuoteImportModal({
   const [gratuityPercentInput, setGratuityPercentInput] = useState('');
   const [showLineItemEditor, setShowLineItemEditor] = useState(false);
   const [showVendorDetails, setShowVendorDetails] = useState(false);
+  const [vendorNamePromptOpen, setVendorNamePromptOpen] = useState(false);
+  const [revisionNote, setRevisionNote] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [newInclusionText, setNewInclusionText] = useState('');
+  const [newDeliveryTermText, setNewDeliveryTermText] = useState('');
+  const [editingBookedVendor, setEditingBookedVendor] = useState(false);
   const [onboardingEventName, setOnboardingEventName] = useState('');
   const [onboardingPlannedGuests, setOnboardingPlannedGuests] = useState('');
   const [extractionMetaLabel, setExtractionMetaLabel] = useState<string | null>(null);
@@ -181,7 +197,40 @@ export function QuoteImportModal({
     setExtractionMetaLabel(null);
     setShowLineItemEditor(false);
     setShowVendorDetails(false);
+    setVendorNamePromptOpen(false);
+    setRevisionNote('');
+    setLightboxOpen(false);
+    setNewInclusionText('');
+    setNewDeliveryTermText('');
+    setEditingBookedVendor(false);
     isExtractingRef.current = false;
+
+    if (editApprovedForVendorId) {
+      const existingVendor = activeWorkspace.vendors.find(
+        (v) => v.id === editApprovedForVendorId
+      );
+      const active = existingVendor ? getVendorActiveQuote(existingVendor) : undefined;
+      if (existingVendor && active) {
+        setLinkedVendorId(existingVendor.id);
+        setVendorName(existingVendor.name);
+        setVendorCategory(existingVendor.category);
+        setVendorLocation(existingVendor.location);
+        setIsDemoVenue(Boolean(existingVendor.isDemoVenue));
+        setSelectedEventIds(existingVendor.eventIds);
+        setEditingBookedVendor(existingVendor.status === 'Booked');
+        const cloned = structuredClone(active);
+        setDraftQuote(cloned);
+        setGratuityPercentInput(
+          cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
+            ? String(cloned.gratuityPercent)
+            : ''
+        );
+        setShowLineItemEditor(true);
+        setStep('review');
+        setMobilePane('extracted');
+        return;
+      }
+    }
 
     if (resumeDraftForVendorId) {
       const existingVendor = activeWorkspace.vendors.find(
@@ -189,12 +238,17 @@ export function QuoteImportModal({
       );
       if (existingVendor?.draftQuote) {
         const staged = existingVendor.draftVendorMetadata;
+        const resolvedName = staged?.name ?? existingVendor.name;
         setLinkedVendorId(existingVendor.id);
-        setVendorName(staged?.name ?? existingVendor.name);
+        setVendorName(resolvedName);
+        setVendorNamePromptOpen(
+          !resolvedName.trim() || GENERIC_VENDOR_NAMES.has(resolvedName.trim().toLowerCase())
+        );
         setVendorCategory(staged?.category ?? existingVendor.category);
         setVendorLocation(staged?.location ?? existingVendor.location);
         setIsDemoVenue(Boolean(staged?.isDemoVenue ?? existingVendor.isDemoVenue));
         setSelectedEventIds(staged?.eventIds ?? existingVendor.eventIds);
+        setEditingBookedVendor(existingVendor.status === 'Booked');
         const cloned = structuredClone(existingVendor.draftQuote);
         setDraftQuote(cloned);
         setGratuityPercentInput(
@@ -231,7 +285,7 @@ export function QuoteImportModal({
     setSourceType('pasted_message');
     setSourceChannel('WhatsApp / Email message');
     setRawText('');
-  }, [isOpen, initialPresetId, initialVendorId, resumeDraftForVendorId]);
+  }, [isOpen, initialPresetId, initialVendorId, resumeDraftForVendorId, editApprovedForVendorId]);
 
   const onboardingEventsPreview = useMemo(() => {
     if (!onCompleteForOnboarding) return activeWorkspace.events;
@@ -365,6 +419,10 @@ export function QuoteImportModal({
       });
 
       setVendorName(result.suggestedVendorName);
+      const suggestedClean = result.suggestedVendorName.trim().toLowerCase();
+      setVendorNamePromptOpen(
+        !suggestedClean || GENERIC_VENDOR_NAMES.has(suggestedClean)
+      );
       setVendorCategory(result.suggestedCategory);
       setVendorLocation(result.suggestedLocation);
       setIsDemoVenue(result.isDemoVenue);
@@ -507,7 +565,12 @@ export function QuoteImportModal({
     if (asDraft) {
       saveDraftQuote(linkedVendorId, newVendorPayload, draftQuote);
     } else {
-      approveQuote(linkedVendorId, newVendorPayload, draftQuote);
+      approveQuote(
+        linkedVendorId,
+        newVendorPayload,
+        draftQuote,
+        editApprovedForVendorId ? (revisionNote.trim() || 'Manual quote edit') : undefined
+      );
     }
     onClose();
   };
@@ -541,7 +604,8 @@ export function QuoteImportModal({
   };
 
   const needsAttentionCount =
-    (isVendorNameValid ? 0 : 1) +
+    (isVendorNameValid && !vendorNamePromptOpen ? 0 : 1) +
+    (calc?.unresolvedPackageSelection ? 1 : 0) +
     (calc?.isCurrencyUnknown ? 1 : 0) +
     (calc?.gratuityUnresolved ? 1 : 0) +
     (calc?.unresolvedMandatoryFeesCount ?? 0) +
@@ -885,11 +949,22 @@ export function QuoteImportModal({
                       </span>
                     </div>
                     {draftQuote.attachmentPreview.mimeType.startsWith('image/') ? (
-                      <img
-                        src={draftQuote.attachmentPreview.dataUrl}
-                        alt={draftQuote.attachmentPreview.fileName}
-                        className="w-full max-h-72 object-contain rounded-lg border border-[#E5DED2] bg-white"
-                      />
+                      <div className="space-y-1.5">
+                        <img
+                          src={draftQuote.attachmentPreview.dataUrl}
+                          alt={draftQuote.attachmentPreview.fileName}
+                          onClick={() => setLightboxOpen(true)}
+                          className="w-full max-h-72 object-contain rounded-lg border border-[#E5DED2] bg-white cursor-zoom-in"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setLightboxOpen(true)}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#486755] hover:underline cursor-pointer"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                          Enlarge source image
+                        </button>
+                      </div>
                     ) : (
                       <div className="flex items-center gap-2 text-xs text-[#6B655C] py-3 px-2 bg-white rounded-lg border border-[#E5DED2]">
                         <FileText className="w-4 h-4 text-[#486755]" />
@@ -942,6 +1017,29 @@ export function QuoteImportModal({
                   mobilePane === 'extracted' ? 'block' : 'hidden lg:block'
                 }`}
               >
+                {editingBookedVendor && (
+                  <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/60 p-3 text-xs text-[#92400E]">
+                    <strong>Booked vendor safeguard:</strong> Saving edits creates a new quote
+                    revision and preserves prior versions. Your confirmed booking total and paid
+                    milestones will not be changed automatically.
+                  </div>
+                )}
+
+                {editApprovedForVendorId && (
+                  <div className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-3 space-y-1.5">
+                    <label className="block text-xs font-semibold text-[#22201D]">
+                      Revision note (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={revisionNote}
+                      onChange={(e) => setRevisionNote(e.target.value)}
+                      placeholder="e.g. Confirmed Imperial package & 13% HST with vendor"
+                      className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
+                    />
+                  </div>
+                )}
+
                 {unlinkedNotice && (
                   <div className="rounded-xl bg-[#EEF4FB] border border-[#B5D3EE] p-3 text-xs text-[#214869]">
                     {unlinkedNotice}
@@ -1015,22 +1113,81 @@ export function QuoteImportModal({
                       Needs your attention ({needsAttentionCount})
                     </div>
 
-                    {/* Missing Vendor Name */}
-                    {!isVendorNameValid && (
-                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-1.5">
+                    {/* Missing Vendor Name (stays mounted while typing until confirmed) */}
+                    {(!isVendorNameValid || vendorNamePromptOpen) && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
                         <label className="block text-xs font-semibold text-[#22201D]">
                           Who is this quote from?
                         </label>
                         <p className="text-[11px] text-[#6B655C]">
                           The vendor name wasn’t stated in the quote. Enter it so we don’t save a placeholder name.
                         </p>
-                        <input
-                          type="text"
-                          value={vendorName}
-                          onChange={(e) => setVendorName(e.target.value)}
-                          placeholder="e.g. Grand Palace Banquet Hall"
-                          className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
-                        />
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={vendorName}
+                            onChange={(e) => setVendorName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && isVendorNameValid) {
+                                setVendorNamePromptOpen(false);
+                              }
+                            }}
+                            placeholder="e.g. Grand Palace Banquet Hall"
+                            className="flex-1 rounded-lg border border-[#E5DED2] px-3 py-2 text-xs font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
+                          />
+                          {isVendorNameValid && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorNamePromptOpen(false)}
+                              className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer whitespace-nowrap"
+                            >
+                              Done
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Mutually Exclusive Package Selection Required */}
+                    {calc.unresolvedPackageSelection && draftQuote.packages && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Choose one package option
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          This quote includes multiple package tiers. Select one package to calculate your estimate (all options are preserved for future comparison), or Save as Draft.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {draftQuote.packages.map((pkg) => (
+                            <button
+                              key={pkg.id}
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  selectedPackageId: pkg.id,
+                                  minGuests: pkg.minGuests ?? q.minGuests,
+                                  maxCapacity: pkg.maxCapacity ?? q.maxCapacity,
+                                }))
+                              }
+                              className="text-left rounded-xl border border-[#E5DED2] bg-[#FAF8F4] hover:border-[#486755] hover:bg-[#EAF5EE] p-3 space-y-1 cursor-pointer transition-colors"
+                            >
+                              <div className="text-xs font-semibold text-[#22201D]">
+                                {pkg.name}
+                              </div>
+                              <div className="font-num text-sm font-semibold text-[#1F3A2B]">
+                                {formatShortCad(pkg.unitPrice)}
+                                {pkg.pricingModel === 'per_person' ? '/person' : ' flat'}
+                              </div>
+                              <div className="text-[11px] text-[#6B655C]">
+                                {pkg.minGuests ? `Min ${pkg.minGuests} guests` : 'No minimum stated'}
+                                {pkg.extraGuestRate
+                                  ? ` · +$${pkg.extraGuestRate}/extra guest`
+                                  : ''}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )}
 
@@ -1291,6 +1448,66 @@ export function QuoteImportModal({
                   </div>
                 )}
 
+                {/* 2B. PACKAGE OPTION SWITCHER (always visible when multiple packages exist) */}
+                {draftQuote.packages && draftQuote.packages.length >= 2 && (
+                  <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-semibold text-[#22201D]">
+                        Package options ({draftQuote.packages.length} preserved)
+                      </h4>
+                      <span className="text-[11px] text-[#6B655C]">
+                        Mutually exclusive — only selected package is counted
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {draftQuote.packages.map((pkg) => {
+                        const selected = draftQuote.selectedPackageId === pkg.id;
+                        return (
+                          <button
+                            key={pkg.id}
+                            type="button"
+                            onClick={() =>
+                              updateQuote((q) => ({
+                                ...q,
+                                selectedPackageId: pkg.id,
+                                minGuests: pkg.minGuests ?? q.minGuests,
+                                maxCapacity: pkg.maxCapacity ?? q.maxCapacity,
+                              }))
+                            }
+                            className={`text-left rounded-xl border p-3 space-y-1 cursor-pointer transition-colors ${
+                              selected
+                                ? 'bg-[#E7F1EA] border-[#486755]'
+                                : 'bg-[#FAF8F4] border-[#E5DED2] hover:border-[#486755]/60'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-[#22201D]">
+                                {pkg.name}
+                              </span>
+                              {selected && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#486755] text-white">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-num text-sm font-semibold text-[#1F3A2B]">
+                              {formatShortCad(pkg.unitPrice)}
+                              {pkg.pricingModel === 'per_person' ? '/person' : ' flat'}
+                            </div>
+                            <div className="text-[11px] text-[#6B655C]">
+                              {pkg.minGuests ? `Min ${pkg.minGuests} guests` : 'No minimum stated'}
+                              {pkg.extraGuestRate ? ` · +$${pkg.extraGuestRate}/extra guest` : ''}
+                              {pkg.inclusions.length > 0
+                                ? ` · ${pkg.inclusions.length} inclusions`
+                                : ''}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {/* 3. PRICE & COST BREAKDOWN (Plain language + expandable editor) */}
                 <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1311,39 +1528,86 @@ export function QuoteImportModal({
                     </button>
                   </div>
 
-                  {/* Clean Readable Breakdown */}
-                  <div className="divide-y divide-[#F0EAE0] text-xs">
-                    {calc.lineItemBreakdowns.map((row) => (
-                      <div
-                        key={row.id}
-                        className="py-2 flex items-start justify-between gap-3"
-                      >
-                        <div>
-                          <div className="font-medium text-[#22201D] flex items-center gap-1.5 flex-wrap">
-                            <span>{row.label}</span>
-                            {row.isThirdParty && (
-                              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#EAE2F7] text-[#42306B]">
-                                Third-party{row.thirdPartyProvider ? ` · ${row.thirdPartyProvider}` : ''}
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-[11px] text-[#6B655C] mt-0.5">
-                            {row.formulaText}
-                          </div>
-                          {row.negotiatedSavings && row.negotiatedOriginalAmount && (
-                            <div className="text-[11px] font-medium text-[#234733] mt-0.5">
-                              Normally {formatShortCad(row.negotiatedOriginalAmount)} · You save{' '}
-                              {formatShortCad(row.negotiatedSavings)}
+                    {/* Clean Readable Breakdown */}
+                    <div className="divide-y divide-[#F0EAE0] text-xs">
+                      {calc.lineItemBreakdowns.map((row) => {
+                        const matchingOvertimeItem = draftQuote.lineItems.find(
+                          (li) => li.id === row.id && li.isConditionalOvertime
+                        );
+                        return (
+                          <div
+                            key={row.id}
+                            className="py-2 flex items-start justify-between gap-3"
+                          >
+                            <div>
+                              <div className="font-medium text-[#22201D] flex items-center gap-1.5 flex-wrap">
+                                <span>{row.label}</span>
+                                {row.isThirdParty && (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#EAE2F7] text-[#42306B]">
+                                    Third-party{row.thirdPartyProvider ? ` · ${row.thirdPartyProvider}` : ''}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-[#6B655C] mt-0.5">
+                                {row.formulaText}
+                              </div>
+                              {matchingOvertimeItem && (
+                                <div className="mt-1.5 inline-flex items-center gap-2 text-[11px] text-[#22201D]">
+                                  <span className="text-[#6B655C]">Extra hours:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === matchingOvertimeItem.id
+                                            ? { ...li, quantity: Math.max(0, (li.quantity ?? 0) - 1) }
+                                            : li
+                                        ),
+                                      }))
+                                    }
+                                    className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
+                                    aria-label="Decrease extra hours"
+                                  >
+                                    −
+                                  </button>
+                                  <span className="font-num font-semibold min-w-[1.5rem] text-center">
+                                    {matchingOvertimeItem.quantity ?? 0}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === matchingOvertimeItem.id
+                                            ? { ...li, quantity: (li.quantity ?? 0) + 1 }
+                                            : li
+                                        ),
+                                      }))
+                                    }
+                                    className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
+                                    aria-label="Increase extra hours"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )}
+                              {row.negotiatedSavings && row.negotiatedOriginalAmount && (
+                                <div className="text-[11px] font-medium text-[#234733] mt-0.5">
+                                  Normally {formatShortCad(row.negotiatedOriginalAmount)} · You save{' '}
+                                  {formatShortCad(row.negotiatedSavings)}
+                                </div>
+                              )}
                             </div>
-                          )}
-                        </div>
-                        <div className="font-num font-semibold text-[#22201D] whitespace-nowrap">
-                          {row.amount !== null
-                            ? formatCurrency(row.amount, calc.currencyLabel, { decimals: 2 })
-                            : 'Needs basis'}
-                        </div>
-                      </div>
-                    ))}
+                            <div className="font-num font-semibold text-[#22201D] whitespace-nowrap">
+                              {row.amount !== null
+                                ? formatCurrency(row.amount, calc.currencyLabel, { decimals: 2 })
+                                : 'Needs basis'}
+                            </div>
+                          </div>
+                        );
+                      })}
 
                     {calc.gratuityAmount > 0 && (
                       <div className="py-2 flex items-center justify-between text-[#6B655C]">
@@ -1359,19 +1623,55 @@ export function QuoteImportModal({
                       </div>
                     )}
 
-                    <div className="py-2 flex items-center justify-between text-[#6B655C]">
-                      <span>
-                        {calc.hstIncluded
-                          ? 'Tax / HST (included)'
-                          : calc.taxRate > 0
-                            ? `Tax / HST (${Math.round(calc.taxRate * 100)}%)`
-                            : 'Tax (0% / not stated)'}
-                      </span>
-                      <span className="font-num font-medium text-[#22201D]">
-                        {formatCurrency(calc.taxAmount, calc.currencyLabel, {
-                          decimals: 2,
-                        })}
-                      </span>
+                    <div className="py-2 space-y-2">
+                      <div className="flex items-center justify-between text-[#6B655C]">
+                        <span>{calc.taxStatusLabel}</span>
+                        <span className="font-num font-medium text-[#22201D]">
+                          {formatCurrency(calc.taxAmount, calc.currencyLabel, {
+                            decimals: 2,
+                          })}
+                        </span>
+                      </div>
+                      {calc.taxNotStated && (
+                        <div className="rounded-lg bg-[#FFFBEB] border border-[#F59E0B]/50 p-2.5 space-y-1.5">
+                          <div className="text-[11px] text-[#92400E]">
+                            Tax not stated — excluded from estimate. You can approve for your projected budget now, but tax must be confirmed before booking.
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  taxHandling: 'unspecified_ontario_assumed',
+                                  taxPercent: q.taxPercent ?? 13,
+                                }))
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Estimate 13% HST
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({ ...q, taxHandling: 'included' }))
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Tax included
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({ ...q, taxHandling: 'tax_exempt' }))
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Confirmed no tax charged
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1418,10 +1718,13 @@ export function QuoteImportModal({
                           >
                             <option value="excluded_plus_hst">Excluded — add tax/HST</option>
                             <option value="unspecified_ontario_assumed">
-                              Unspecified — estimate 13% HST
+                              Estimated jurisdiction tax (13% HST)
                             </option>
                             <option value="included">Tax already included</option>
-                            <option value="tax_exempt">Tax exempt / 0%</option>
+                            <option value="tax_exempt">Confirmed no tax charged (0%)</option>
+                            <option value="unspecified">
+                              Tax not stated — confirm later (0%)
+                            </option>
                           </select>
                         </div>
                       </div>
@@ -1590,8 +1893,117 @@ export function QuoteImportModal({
                               )}
                             </div>
                           )}
+                          {/* Extra-guest threshold, minGuests, or quantity editing + Delete */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6B655C]">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {item.pricingModel === 'per_person' && (
+                                <label className="inline-flex items-center gap-1.5">
+                                  <span>Min guests:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={item.minGuests ?? ''}
+                                    placeholder="None"
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === item.id
+                                            ? { ...li, minGuests: Number.isNaN(val) ? undefined : val }
+                                            : li
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                  />
+                                </label>
+                              )}
+                              {item.pricingModel === 'per_extra_guest' && (
+                                <label className="inline-flex items-center gap-1.5">
+                                  <span>Guests above:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={item.guestThreshold ?? ''}
+                                    placeholder="e.g. 150"
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === item.id
+                                            ? { ...li, guestThreshold: Number.isNaN(val) ? 0 : val }
+                                            : li
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                  />
+                                </label>
+                              )}
+                              {item.pricingModel === 'hourly' && (
+                                <label className="inline-flex items-center gap-1.5">
+                                  <span>Hours:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={item.quantity ?? (item.isConditionalOvertime ? 0 : 1)}
+                                    onChange={(e) => {
+                                      const val = parseFloat(e.target.value);
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === item.id
+                                            ? { ...li, quantity: Number.isNaN(val) ? 0 : val }
+                                            : li
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                  />
+                                </label>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  lineItems: q.lineItems.filter((li) => li.id !== item.id),
+                                }))
+                              }
+                              className="inline-flex items-center gap-1 text-[11px] text-[#991B1B] hover:underline cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Remove
+                            </button>
+                          </div>
                         </div>
                       ))}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateQuote((q) => ({
+                            ...q,
+                            lineItems: [
+                              ...q.lineItems,
+                              {
+                                id: `li-manual-${Date.now()}`,
+                                label: 'New line item',
+                                pricingModel: 'flat',
+                                unitPrice: 0,
+                                eventId: selectedEventIds[0],
+                              },
+                            ],
+                          }))
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-[#486755] text-[#486755] hover:bg-[#EAF5EE] cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add line item
+                      </button>
                     </div>
                   )}
                 </div>
@@ -1638,15 +2050,17 @@ export function QuoteImportModal({
                   </div>
                 )}
 
-                {/* 4. WHAT'S INCLUDED */}
-                {(draftQuote.inclusions.length > 0 ||
+                {/* 4. WHAT'S INCLUDED & DELIVERY TERMS */}
+                {(getEffectiveQuoteInclusions(draftQuote).length > 0 ||
+                  getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 ||
                   draftQuote.serviceDurationHours ||
+                  showLineItemEditor ||
                   (draftQuote.exclusions && draftQuote.exclusions.length > 0) ||
                   (draftQuote.restrictions && draftQuote.restrictions.length > 0)) && (
                   <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <h4 className="text-xs font-semibold text-[#22201D]">
-                        What’s included
+                        What’s included{calc.selectedPackageName ? ` · ${calc.selectedPackageName}` : ''}
                       </h4>
                       {draftQuote.serviceDurationHours && (
                         <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#DFEFE4] text-[#234733]">
@@ -1654,16 +2068,102 @@ export function QuoteImportModal({
                         </span>
                       )}
                     </div>
-                    {draftQuote.inclusions.length > 0 && (
+                    {getEffectiveQuoteInclusions(draftQuote).length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
-                        {draftQuote.inclusions.map((inc, idx) => (
+                        {getEffectiveQuoteInclusions(draftQuote).map((inc, idx) => (
                           <span
                             key={idx}
-                            className="text-xs px-2.5 py-1 rounded-lg bg-[#FAF8F4] border border-[#E5DED2] text-[#22201D]"
+                            className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-[#FAF8F4] border border-[#E5DED2] text-[#22201D]"
                           >
                             {inc}
+                            {showLineItemEditor && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateQuote((q) => ({
+                                    ...q,
+                                    inclusions: q.inclusions.filter((item) => item !== inc),
+                                    packages: q.packages?.map((p) =>
+                                      p.id === q.selectedPackageId
+                                        ? { ...p, inclusions: p.inclusions.filter((item) => item !== inc) }
+                                        : p
+                                    ),
+                                  }))
+                                }
+                                className="text-[#6B655C] hover:text-[#991B1B] cursor-pointer"
+                                aria-label={`Remove inclusion ${inc}`}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
                           </span>
                         ))}
+                      </div>
+                    )}
+                    {showLineItemEditor && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={newInclusionText}
+                          onChange={(e) => setNewInclusionText(e.target.value)}
+                          placeholder="Add package inclusion..."
+                          className="flex-1 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const val = newInclusionText.trim();
+                            if (!val) return;
+                            updateQuote((q) => ({
+                              ...q,
+                              inclusions: [...q.inclusions, val],
+                            }));
+                            setNewInclusionText('');
+                          }}
+                          className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#FAF8F4] border border-[#E5DED2] hover:bg-[#F3EFE8] cursor-pointer"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+                    {(getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 || showLineItemEditor) && (
+                      <div className="pt-1 space-y-1.5">
+                        <div className="text-[11px] font-semibold text-[#22201D]">
+                          Delivery &amp; turnaround
+                        </div>
+                        {getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 && (
+                          <ul className="list-disc pl-4 text-xs text-[#22201D] space-y-0.5">
+                            {getEffectiveQuoteDeliveryTerms(draftQuote).map((term, idx) => (
+                              <li key={idx}>{term}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {showLineItemEditor && (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={newDeliveryTermText}
+                              onChange={(e) => setNewDeliveryTermText(e.target.value)}
+                              placeholder="Add delivery term (e.g. Online gallery in 6–8 weeks)..."
+                              className="flex-1 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = newDeliveryTermText.trim();
+                                if (!val) return;
+                                updateQuote((q) => ({
+                                  ...q,
+                                  deliveryTerms: [...(q.deliveryTerms ?? []), val],
+                                }));
+                                setNewDeliveryTermText('');
+                              }}
+                              className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#FAF8F4] border border-[#E5DED2] hover:bg-[#F3EFE8] cursor-pointer"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                     {draftQuote.exclusions && draftQuote.exclusions.length > 0 && (
@@ -1691,9 +2191,23 @@ export function QuoteImportModal({
                       Deposits default to unpaid until confirmed
                     </span>
                   </div>
-                  <p className="text-xs text-[#22201D]">
-                    {draftQuote.paymentTermsSummary}
-                  </p>
+                  {showLineItemEditor ? (
+                    <textarea
+                      rows={2}
+                      value={draftQuote.paymentTermsSummary}
+                      onChange={(e) =>
+                        updateQuote((q) => ({
+                          ...q,
+                          paymentTermsSummary: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-lg border border-[#E5DED2] bg-[#FAF8F4] px-2.5 py-1.5 text-xs text-[#22201D]"
+                    />
+                  ) : (
+                    <p className="text-xs text-[#22201D]">
+                      {draftQuote.paymentTermsSummary}
+                    </p>
+                  )}
                   {draftQuote.paymentMilestones &&
                     draftQuote.paymentMilestones.length > 0 && (
                       <div className="space-y-1 pt-1">
@@ -1878,13 +2392,23 @@ export function QuoteImportModal({
                   }`}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Approve Quote
+                  {editApprovedForVendorId ? 'Approve Changes' : 'Approve Quote'}
                 </button>
               </div>
             </div>
           </>
         )}
       </div>
+
+      {draftQuote?.attachmentPreview &&
+        draftQuote.attachmentPreview.mimeType.startsWith('image/') && (
+          <ImageLightboxModal
+            isOpen={lightboxOpen}
+            onClose={() => setLightboxOpen(false)}
+            imageUrl={draftQuote.attachmentPreview.dataUrl}
+            fileName={draftQuote.attachmentPreview.fileName}
+          />
+        )}
     </div>
   );
 }

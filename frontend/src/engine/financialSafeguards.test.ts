@@ -6,11 +6,15 @@ import {
   calculateQuoteFinancials,
   calculateWorkspaceFinancials,
   DEFAULT_DEPOSIT_ALREADY_PAID,
+  detectLegacyQuoteReviewReasons,
+  getEffectiveQuoteDeliveryTerms,
+  getEffectiveQuoteInclusions,
   getVendorBookingEligibility,
   resolveRelativeDeadlineDate,
 } from './financialCalculator.ts';
 import {
   BackendQuoteExtractor,
+  formatStructuredInclusion,
   mapBackendExtractionToFrontendResult,
 } from '../services/quoteExtractor.ts';
 import {
@@ -759,4 +763,252 @@ test('Codex P2 fixes: per-person optional add-ons, conditional overtime defaulti
   const dupCalc = calculateQuoteFinancials(dupServiceQuote.quote, ws.events, [], 130);
   assert.equal(dupCalc.preTaxTotal, 5810);
   assert.equal(dupCalc.gratuityAmount, 871.5);
+});
+
+test('UAT Multi-package venue parity, package-specific inclusions, and approval/booking gates', () => {
+  const ws = createDemoWorkspace();
+  const mapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-multi-pkg',
+        draftQuote: {
+          vendorName: 'Palace Banquet Hall',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          gratuityStatus: 'excluded',
+          gratuityPercent: 10,
+          gratuityBasis: 'entire_subtotal',
+          selectedPackageId: null,
+          packages: [
+            {
+              id: 'royal-package',
+              name: 'Royal Package',
+              pricingType: 'per_person',
+              amount: 55,
+              minGuests: 150,
+              isFoodItem: true,
+              inclusions: [
+                { name: 'Appetizers', quantity: 4, unit: 'appetizers' },
+                { name: 'Main dishes', quantity: 3, unit: 'main dishes' },
+              ],
+              sourceExcerpt: 'Royal Package $55/person min 150',
+            },
+            {
+              id: 'imperial-package',
+              name: 'Imperial Package',
+              pricingType: 'per_person',
+              amount: 65,
+              minGuests: 100,
+              isFoodItem: true,
+              inclusions: [
+                { name: 'Appetizers', quantity: 6, unit: 'appetizers' },
+                { name: 'Deluxe dessert table' },
+              ],
+              sourceExcerpt: 'Imperial Package $65/person min 100',
+            },
+          ],
+          lineItems: [
+            {
+              label: 'Extra guest pricing',
+              pricingType: 'per_person',
+              amount: 55,
+              chargeType: 'conditional',
+              sourceExcerpt: 'Extra guests $55/person',
+            },
+          ],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Multi-package brochure' }
+  );
+
+  // Unselected: cannot approve, packages NOT summed
+  const unselectedCalc = calculateQuoteFinancials(mapped.quote, ws.events, [], 175);
+  assert.equal(unselectedCalc.unresolvedPackageSelection, true);
+  assert.equal(unselectedCalc.canApprove, false);
+  assert.equal(unselectedCalc.preTaxTotal, 0);
+
+  // Select Royal: $9,625 pre-tax, $11,963.88 all-in (exact parity with backend), Royal inclusions shown
+  const royalQuote: Quote = { ...mapped.quote, selectedPackageId: 'royal-package' };
+  const royalCalc = calculateQuoteFinancials(royalQuote, ws.events, [], 175);
+  assert.equal(royalCalc.unresolvedPackageSelection, false);
+  assert.equal(royalCalc.canApprove, true);
+  assert.equal(royalCalc.preTaxTotal, 9625);
+  assert.equal(royalCalc.gratuityAmount, 962.5);
+  assert.equal(royalCalc.taxAmount, 1376.38);
+  assert.equal(royalCalc.estimatedAllInTotal, 11963.88);
+  assert.deepEqual(getEffectiveQuoteInclusions(royalQuote), ['4 Appetizers', '3 Main dishes']);
+
+  // Switch to Imperial: $11,375 pre-tax, Imperial inclusions shown, Royal still preserved in packages[]
+  const imperialQuote: Quote = { ...mapped.quote, selectedPackageId: 'imperial-package' };
+  const imperialCalc = calculateQuoteFinancials(imperialQuote, ws.events, [], 175);
+  assert.equal(imperialCalc.preTaxTotal, 11375);
+  assert.equal(imperialQuote.packages?.length, 2);
+  assert.deepEqual(getEffectiveQuoteInclusions(imperialQuote), [
+    '6 Appetizers',
+    'Deluxe dessert table',
+  ]);
+});
+
+test('UAT Photography conditional overtime ($900 + $250/hr), unknown tax booking gate, inclusion hygiene & deliveryTerms', () => {
+  const ws = createDemoWorkspace();
+  const mapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-hsr-photo',
+        draftQuote: {
+          vendorName: null,
+          category: 'photographer',
+          events: ['Wedding'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'unknown',
+          gratuityStatus: 'unknown',
+          lineItems: [
+            {
+              label: 'Photography package (5 hours)',
+              pricingType: 'flat',
+              amount: 900,
+              chargeType: 'mandatory',
+              sourceExcerpt: '$900 package includes 5 hours',
+            },
+            {
+              label: 'Additional hourly coverage',
+              pricingType: 'per_hour',
+              amount: 250,
+              hours: 1,
+              chargeType: 'conditional',
+              sourceExcerpt: '$250/hour for additional hours',
+            },
+          ],
+          inclusions: [
+            { name: '2 photographers', quantity: 2 },
+            { name: 'Second photographer', quantity: 5, unit: 'hours' },
+            { name: 'Online gallery (photography_coverage)', unit: 'deliverables' },
+          ],
+          deliveryTerms: ['Sneak peeks in 48 hours', 'Online gallery delivered in 6-8 weeks'],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Instagram DM', rawText: 'Photo quote' }
+  );
+
+  // 1. Conditional overtime defaults to 0 extra hours ($900 subtotal, NOT $1,150)
+  const calc = calculateQuoteFinancials(mapped.quote, ws.events, []);
+  assert.equal(calc.preTaxTotal, 900);
+  assert.equal(mapped.quote.taxHandling, 'unspecified');
+  assert.equal(calc.taxNotStated, true);
+  assert.equal(calc.taxStatusLabel, 'Tax not stated — excluded from estimate.');
+  // Allowed for projected budget approval, clearly labeled incomplete, BLOCKED from booking!
+  assert.equal(calc.canApprove, true);
+  assert.equal(calc.isEstimateComplete, false);
+
+  const vendorWithUnknownTax: Vendor = {
+    id: 'v-photo-unknown-tax',
+    name: 'HSR Photography',
+    category: 'photography',
+    eventIds: [],
+    location: '',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    status: 'Quoted',
+    isPreferred: true,
+    notes: '',
+    quotes: [{ ...mapped.quote, approvalState: 'approved' }],
+    activeQuoteId: mapped.quote.id,
+  };
+  const eligibility = getVendorBookingEligibility(vendorWithUnknownTax, ws.events);
+  assert.equal(eligibility.canBook, false);
+  assert.ok(eligibility.blockingReasons.some((r) => /confirm tax handling before booking/i.test(r)));
+
+  // 2. Inclusion hygiene & deliveryTerms
+  assert.equal(formatStructuredInclusion({ name: '2 photographers', quantity: 2 }), '2 photographers');
+  assert.equal(
+    formatStructuredInclusion({ name: 'Second photographer', quantity: 5, unit: 'hours' }),
+    'Second photographer (5 hours coverage)'
+  );
+  assert.equal(
+    formatStructuredInclusion({ name: 'Second photographer', quantity: 1, unit: 'photographer', durationHours: 5 }),
+    'Second photographer (5 hours coverage)'
+  );
+  assert.equal(
+    formatStructuredInclusion({ name: 'Online gallery (photography_coverage)', unit: 'deliverables' }),
+    'Online gallery'
+  );
+  assert.deepEqual(getEffectiveQuoteDeliveryTerms(mapped.quote), [
+    'Sneak peeks in 48 hours',
+    'Online gallery delivered in 6-8 weeks',
+  ]);
+});
+
+test('UAT Legacy saved quotes with known calculation bugs are flagged and blocked from booking, while manual edits preserve history & booked totals', () => {
+  const ws = createDemoWorkspace();
+  const legacyBuggyQuote = makeCleanQuote({
+    id: 'q-legacy-buggy',
+    legacyReviewAcknowledged: false,
+    taxHandling: 'tax_exempt',
+    sourceText: 'Royal Package $55/person min 150. Imperial Package $65/person min 100.',
+    lineItems: [
+      { id: 'l1', label: 'Royal Package', pricingModel: 'per_person', unitPrice: 55, minGuests: 150 },
+      { id: 'l2', label: 'Imperial Package', pricingModel: 'per_person', unitPrice: 65, minGuests: 100 },
+    ],
+  });
+
+  const legacyReasons = detectLegacyQuoteReviewReasons(legacyBuggyQuote);
+  assert.ok(legacyReasons.length >= 2); // Summed packages + unstated tax_exempt
+
+  const legacyVendor: Vendor = {
+    id: 'v-legacy-1',
+    name: 'Legacy Venue',
+    category: 'venue',
+    eventIds: [ws.events[0].id],
+    location: 'GTA',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    status: 'Quoted',
+    isPreferred: false,
+    notes: '',
+    quotes: [legacyBuggyQuote],
+    activeQuoteId: legacyBuggyQuote.id,
+  };
+  const legacyEligibility = getVendorBookingEligibility(legacyVendor, ws.events);
+  assert.equal(legacyEligibility.canBook, false);
+  assert.ok(legacyEligibility.blockingReasons.some((r) => /re-review/i.test(r)));
+
+  // Manual edit of an approved quote preserves prior version, adds QuoteRevisionRecord, and never alters bookedContractTotal
+  const bookedVendor: Vendor = {
+    ...legacyVendor,
+    id: 'v-booked-edit',
+    status: 'Booked',
+    bookedContractTotal: 15000,
+    quotes: [makeCleanQuote({ id: 'q-v1', legacyReviewAcknowledged: true })],
+    activeQuoteId: 'q-v1',
+  };
+  const wsWithBooked = { ...ws, vendors: [bookedVendor, ...ws.vendors] };
+  const editedQuote: Quote = {
+    ...bookedVendor.quotes[0],
+    lineItems: [{ id: 'li-1', label: 'Updated package', pricingModel: 'flat', unitPrice: 12000 }],
+  };
+  const approvedRes = applyApproveQuote(
+    wsWithBooked,
+    bookedVendor.id,
+    null,
+    editedQuote,
+    bookedVendor.id,
+    'Corrected line item after phone call'
+  );
+  const updatedVendor = approvedRes.workspace.vendors.find((v) => v.id === bookedVendor.id)!;
+  assert.equal(updatedVendor.quotes.length, 2); // Prior approved version preserved
+  assert.equal(updatedVendor.bookedContractTotal, 15000); // Booked total untouched
+  const activeAfterEdit = updatedVendor.quotes.find((q) => q.id === updatedVendor.activeQuoteId)!;
+  assert.equal(activeAfterEdit.revisions?.length, 1);
+  assert.equal(activeAfterEdit.revisions?.[0].summary, 'Corrected line item after phone call');
 });

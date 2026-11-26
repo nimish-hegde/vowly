@@ -30,12 +30,14 @@ const VALID_TAX_STATUS = new Set<TaxOrGratuityStatus>(['included', 'excluded', '
 const VALID_PRICING_TYPES = new Set<PricingType>([
   'flat',
   'per_person',
+  'per_extra_guest',
   'per_hour',
   'per_guest_ratio',
   'percentage',
   'included',
   'unknown',
 ]);
+const VALID_PACKAGE_PRICING_TYPES = new Set(['flat', 'per_person', 'unknown']);
 const VALID_PERCENTAGE_BASES = new Set<PercentageBasis>([
   'specific_line_items',
   'food_subtotal',
@@ -172,6 +174,7 @@ export function validateExtractedQuote(
         }
       }
       checkOptionalNumber(entry, 'minGuests', path, schemaErrors);
+      checkOptionalNumber(entry, 'guestThreshold', path, schemaErrors);
       checkOptionalNumber(entry, 'ratioGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'hours', path, schemaErrors);
       checkOptionalNumber(entry, 'percentageRate', path, schemaErrors);
@@ -255,6 +258,79 @@ export function validateExtractedQuote(
         );
       }
     });
+  }
+
+  // Validate optional packages (mutually exclusive tiers)
+  if (raw.packages !== undefined && raw.packages !== null) {
+    if (!Array.isArray(raw.packages)) {
+      schemaErrors.push('packages must be an array when present');
+    } else {
+      raw.packages.forEach((pkg, idx) => {
+        const path = `packages[${idx}]`;
+        if (!isObject(pkg)) {
+          schemaErrors.push(`${path} must be an object`);
+          return;
+        }
+        if (typeof pkg.id !== 'string' || pkg.id.trim() === '') {
+          schemaErrors.push(`${path}.id must be a non-empty string`);
+        }
+        if (typeof pkg.name !== 'string' || pkg.name.trim() === '') {
+          schemaErrors.push(`${path}.name must be a non-empty string`);
+        }
+        if (!VALID_PACKAGE_PRICING_TYPES.has(String(pkg.pricingType))) {
+          schemaErrors.push(`${path}.pricingType is invalid (got ${String(pkg.pricingType)})`);
+        }
+        if (pkg.amount !== null && !isFiniteNumber(pkg.amount)) {
+          schemaErrors.push(`${path}.amount must be a number or null`);
+        }
+        if (pkg.pricingType === 'unknown' && pkg.amount !== null) {
+          schemaErrors.push(`${path}.amount must be null when pricingType is "unknown"`);
+        }
+        checkOptionalNumber(pkg, 'minGuests', path, schemaErrors);
+        checkOptionalNumber(pkg, 'includedGuests', path, schemaErrors);
+        checkOptionalNumber(pkg, 'extraGuestRate', path, schemaErrors);
+        checkOptionalNumber(pkg, 'maxCapacity', path, schemaErrors);
+        checkOptionalNumber(pkg, 'hours', path, schemaErrors);
+        checkOptionalNumber(pkg, 'taxPercent', path, schemaErrors);
+        checkOptionalNumber(pkg, 'gratuityPercent', path, schemaErrors);
+        if (
+          pkg.taxStatus !== undefined &&
+          pkg.taxStatus !== null &&
+          !VALID_TAX_STATUS.has(pkg.taxStatus as TaxOrGratuityStatus)
+        ) {
+          schemaErrors.push(`${path}.taxStatus is invalid (got ${String(pkg.taxStatus)})`);
+        }
+        if (
+          pkg.gratuityStatus !== undefined &&
+          pkg.gratuityStatus !== null &&
+          !VALID_TAX_STATUS.has(pkg.gratuityStatus as TaxOrGratuityStatus)
+        ) {
+          schemaErrors.push(
+            `${path}.gratuityStatus is invalid (got ${String(pkg.gratuityStatus)})`,
+          );
+        }
+        if (typeof pkg.sourceExcerpt !== 'string' || pkg.sourceExcerpt.trim() === '') {
+          if (hasAttachments && typeof pkg.pageReference === 'string' && pkg.pageReference.trim() !== '') {
+            sourceErrors.push(
+              `Package "${String(pkg.name)}" has page reference (${pkg.pageReference}) but no visible source snippet — verify against uploaded document`,
+            );
+          } else {
+            schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+          }
+        } else if (rawNorm && !rawNorm.includes(normalizeText(pkg.sourceExcerpt))) {
+          sourceErrors.push(
+            `Unsupported package "${String(pkg.name)}" — sourceExcerpt not found verbatim in raw message`,
+          );
+        }
+      });
+    }
+  }
+
+  // Validate optional deliveryTerms
+  if (raw.deliveryTerms !== undefined && raw.deliveryTerms !== null) {
+    if (!Array.isArray(raw.deliveryTerms) || !raw.deliveryTerms.every((d) => typeof d === 'string')) {
+      schemaErrors.push('deliveryTerms must be an array of strings when present');
+    }
   }
 
   // Validate openQuestions (required array, even when empty)

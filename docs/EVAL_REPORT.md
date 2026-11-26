@@ -304,3 +304,52 @@ Tested real `inlineData` attachments (`rawMessage: ""`) against live `gemini-3.5
 - Backend offline mock evals (`npm run eval -- --provider mock`): **63/63 passing**
 - Frontend safeguard & parity tests (`cd frontend && npm test`): **10/10 passing**
 - Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)
+
+
+---
+
+## 12. v0.5 Real-World UAT Remediation Benchmark (66 Cases, Live Gemini)
+
+Following manual UAT on PR #13, four real-world failure groups were fixed across extraction, schema, normalization, deterministic calculation, frontend mapping, and UI:
+1. **Mutually exclusive packages & package-scoped terms** (`packages[]`, `selectedPackageId`, package-scoped inclusions/tax/gratuity/delivery/fees, approval & booking blockers until one package is chosen).
+2. **Extra-guest pricing vs. repeated per-person rates** (`per_extra_guest` with `guestThreshold` + redundant extra-guest deduplication so guests are never double-counted).
+3. **Conditional overtime hours** (`$900` 5-hr package + `$250/hr` additional rate defaults to `$900` with `0` extra hours even when `hours: 1` is emitted or duration appears only in labels/inclusions).
+4. **Inclusion hygiene, `deliveryTerms`, honest unknown tax (`'unspecified'`), legacy quote re-review flags, manual editing of approved quotes with revision history, stable vendor-name input, and source image lightbox.**
+
+### Live Evaluation Results (66 Cases — `gemini-3.5-flash-lite`)
+
+- **Provider / Model:** `gemini` | Configured: `gemini-flash-lite-latest` | Resolved: `gemini-3.5-flash-lite`
+- **Dataset:** 66 cases (`23 dev` incl. 3 new anonymized UAT cases, `6 regression`, `25 held-out`, `12 held-out-v2` — locked holdout splits unchanged)
+- **End-to-end success:** **66/66 (100.0%)** | **Extraction accuracy:** **66/66 (100.0%)**
+- **API availability:** 66/66 (100.0%) | **Schema validity:** 66/66 (100.0%) | **Parse errors:** 0
+- **Critical financial errors:** **0** | **Unsupported currency guesses:** **0** | **Release blockers:** **0**
+- **Latency:** `2,798 ms` avg incl. retries (`1,796 ms` excl. retries) | **Total retries:** 8 (HTTP 429)
+- **Token usage & cost:** `196,141` input / `27,506` output tokens | Est. paid cost: **$0.03062** (~**$0.000464** per successful extraction; `$0` on free tier)
+
+| Split | E2E Pass | Accuracy | Fin. Errors | Blockers | Avg Latency (excl. retries) | Est. Paid Cost |
+|---|---:|---:|---:|---:|---:|---:|
+| `dev` (23 cases) | 23/23 (100.0%) | 100.0% | 0 | 0 | 1,661 ms | $0.01090 |
+| `regression` (6 cases) | 6/6 (100.0%) | 100.0% | 0 | 0 | 1,597 ms | $0.00280 |
+| `held-out` (25 cases) | 25/25 (100.0%) | 100.0% | 0 | 0 | 1,711 ms | $0.01126 |
+| `held-out-v2` (12 cases) | 12/12 (100.0%) | 100.0% | 0 | 0 | 2,332 ms | $0.00565 |
+| **Total (66 cases)** | **66/66 (100.0%)** | **100.0%** | **0** | **0** | **1,796 ms** | **$0.03062** |
+
+### New Anonymized UAT Dev Cases (3/3 Live Pass)
+
+| Case ID | Scenario | Live Result | Verified Outcome |
+|---|---|---|---|
+| `dev-uat-multi-package-venue` | Royal (`$55/pp` min 150) vs. Imperial (`$65/pp` min 100) + repeated extra-guest text | **PASS** | Extracts 2 packages with 3 inclusions each; blocks approval when unselected (`knownSubtotal: 0`); Royal @ 175 = `$9,625` (`$11,963.88` all-in); Imperial @ 175 = `$11,375` (`$14,139.13` all-in). |
+| `dev-uat-photo-overtime-default-zero` | `$900` (5 hrs) + `$250/hr` additional hours, unknown tax | **PASS** | Subtotal `$900` with `0` extra hours; `taxStatus: "unknown"` mapped to `'unspecified'`. |
+| `dev-uat-photo-second-shooter-delivery` | `$3,500` package + 2nd photographer 5 hrs + turnaround terms | **PASS** | Lead & second photographer durations structured cleanly; `deliveryTerms` extracted without schema leakage. |
+
+### Intermediate Failure Analysis & Fix
+
+- **Run 1 (`60/66`):** Adding `packages` to `GEMINI_RESPONSE_SCHEMA` caused two deterministic bugs: (a) stray `packageId` strings on single-package `lineItems` were filtered out when `packages` was empty (5 cases), and (b) a single-package entry placed in both `packages[0]` and `lineItems[0]` doubled the venue subtotal (1 case).
+- **Fix:** Normalized single-element `packages[]` cleanly into `lineItems[]` with deduplication and stripped stray `packageId` when `packages.length < 2` in `src/extractor.ts`, `src/calculator.ts`, and `frontend/src/engine/financialCalculator.ts`. Re-run achieved **66/66 (100.0%)** with `0` financial errors.
+
+### Offline Verification
+
+- Backend unit tests (`npm test`): **50/50 pass**
+- Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
+- Frontend safeguard & parity tests (`cd frontend && npm test`): **13/13 pass**
+- Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)

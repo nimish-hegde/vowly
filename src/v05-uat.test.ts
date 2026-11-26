@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { calculateQuoteTotal, resolveRelativeDeadlineDate } from './calculator.ts';
 import { extractQuote, normalizeProviderResponse, validateAttachments } from './extractor.ts';
-import { createReviewSession, getApprovalBlockers } from './review.ts';
+import { createReviewSession, getApprovalBlockers, selectPackage } from './review.ts';
 import type { ExtractedQuote } from './types.ts';
 import { validateExtractedQuote } from './validator.ts';
 
@@ -405,4 +405,148 @@ test('deduplicates duplicate service-charge percentage line item when gratuityPe
   const calc = calculateQuoteTotal(dupQuote, { guestCount: 130 });
   assert.equal(calc.knownSubtotal, 5810);
   assert.equal(calc.gratuityAmount, 871.5);
+});
+
+test('UAT Multi-package venue: mutually exclusive packages never sum, block approval until selected, and prevent redundant extra-guest double-counting', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Palace Banquet Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'excluded',
+    taxPercent: 13,
+    gratuityStatus: 'excluded',
+    gratuityPercent: 10,
+    gratuityBasis: 'entire_subtotal',
+    selectedPackageId: null,
+    packages: [
+      {
+        id: 'royal-package',
+        name: 'Royal Package',
+        pricingType: 'per_person',
+        amount: 55,
+        minGuests: 150,
+        isFoodItem: true,
+        inclusions: [{ name: 'Appetizers', quantity: 4, unit: 'appetizers' }],
+        sourceExcerpt: 'Royal Package is $55/person (min 150)',
+      },
+      {
+        id: 'imperial-package',
+        name: 'Imperial Package',
+        pricingType: 'per_person',
+        amount: 65,
+        minGuests: 100,
+        isFoodItem: true,
+        inclusions: [{ name: 'Appetizers', quantity: 6, unit: 'appetizers' }],
+        sourceExcerpt: 'Imperial Package is $65/person (min 100)',
+      },
+    ],
+    // Even if an extraction mistakenly includes a repeated $55/person extra-guest line, it must not double-count
+    lineItems: [
+      {
+        label: 'Extra guest pricing',
+        pricingType: 'per_person',
+        amount: 55,
+        chargeType: 'conditional',
+        sourceExcerpt: 'Additional guests $55/person',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  // Unselected: packages must NOT be summed and approval must be blocked
+  const session = createReviewSession('rev-multi-pkg', quote, { guestCount: 175 });
+  assert.equal(session.calculation.unresolvedPackageSelection, true);
+  assert.equal(session.calculation.isEstimateComplete, false);
+  assert.ok(getApprovalBlockers(session).some((b) => /select one package/i.test(b)));
+
+  // Selecting Royal at 175 guests: 175 * $55 = $9,625 (NOT $38,066.88!)
+  selectPackage(session, 'royal-package');
+  assert.equal(session.calculation.unresolvedPackageSelection, false);
+  assert.equal(session.calculation.knownSubtotal, 9625);
+  assert.equal(session.calculation.gratuityAmount, 962.5);
+  assert.equal(session.calculation.taxAmount, 1376.38);
+  assert.equal(session.calculation.knownAllInTotal, 11963.88);
+  assert.equal(getApprovalBlockers(session).length, 0);
+
+  // Royal at 120 guests applies 150-guest minimum ($8,250)
+  const royalMinCalc = calculateQuoteTotal(session.draftQuote, { guestCount: 120 });
+  assert.equal(royalMinCalc.knownSubtotal, 8250);
+  assert.equal(royalMinCalc.minGuestsApplied, true);
+
+  // Imperial at 175 guests: 175 * $65 = $11,375
+  const imperialCalc = calculateQuoteTotal(quote, { guestCount: 175, selectedPackageId: 'imperial-package' });
+  assert.equal(imperialCalc.knownSubtotal, 11375);
+});
+
+test('UAT Genuine incremental per_extra_guest pricing bills only guests above threshold', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'Garden Estate',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'included',
+    gratuityStatus: 'included',
+    lineItems: [
+      {
+        label: 'Base reception package (up to 150 guests)',
+        pricingType: 'flat',
+        amount: 8250,
+        chargeType: 'mandatory',
+        sourceExcerpt: '$8,250 for up to 150 guests',
+      },
+      {
+        label: 'Extra guest fee above 150',
+        pricingType: 'per_extra_guest',
+        amount: 55,
+        guestThreshold: 150,
+        chargeType: 'conditional',
+        sourceExcerpt: '$55 per extra guest above 150',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  assert.equal(calculateQuoteTotal(quote, { guestCount: 175 }).knownSubtotal, 9625); // 8250 + 25*55
+  assert.equal(calculateQuoteTotal(quote, { guestCount: 140 }).knownSubtotal, 8250); // 8250 + 0
+});
+
+test('UAT Photography conditional overtime: $900 (5 hrs) + $250/hr defaults to $900 even when hours: 1 or hours only in label/inclusions', () => {
+  const quote: ExtractedQuote = {
+    vendorName: null,
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Wedding photography package (5 hours)',
+        pricingType: 'flat',
+        amount: 900,
+        chargeType: 'mandatory',
+        sourceExcerpt: '$900 package includes 5 hours',
+      },
+      {
+        label: 'Additional hourly coverage',
+        pricingType: 'per_hour',
+        amount: 250,
+        hours: 1, // Model frequently emits 1 for "$250 per additional hour"
+        chargeType: 'conditional',
+        sourceExcerpt: 'Additional hours are $250/hour',
+      },
+    ],
+    openQuestions: [],
+  };
+
+  const defaultCalc = calculateQuoteTotal(quote);
+  assert.equal(defaultCalc.knownSubtotal, 900);
+  assert.equal(defaultCalc.taxNotStated, true);
+  assert.equal(defaultCalc.isEstimateComplete, false);
+
+  const extendedCalc = calculateQuoteTotal(quote, { hours: 7 });
+  assert.equal(extendedCalc.knownSubtotal, 1400); // $900 + 2 * $250
 });

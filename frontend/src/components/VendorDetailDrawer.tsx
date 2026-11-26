@@ -8,9 +8,11 @@ import {
   Layers,
   Mail,
   MapPin,
+  Pencil,
   Phone,
   Users,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import {
   calculateQuoteFinancials,
@@ -18,6 +20,8 @@ import {
   formatCurrency,
   formatShortCad,
   formatSignedCad,
+  getEffectiveQuoteDeliveryTerms,
+  getEffectiveQuoteInclusions,
   getVendorActiveQuote,
   getVendorBookingEligibility,
 } from '../engine/financialCalculator';
@@ -25,12 +29,14 @@ import { useWorkspace } from '../store/workspaceStore';
 import { VendorStatus } from '../types/vowly';
 import { PASTEL_TONES } from '../utils/pastelStyles';
 import { DemoDataNote, StatusText } from './DemoLabel';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface VendorDetailDrawerProps {
   vendorId: string | null;
   onClose: () => void;
   onOpenQuoteImport: (presetId?: string, vendorId?: string) => void;
   onResumeDraft: (vendorId: string) => void;
+  onEditApprovedQuote: (vendorId: string) => void;
   onOpenBooking: (vendorId: string) => void;
 }
 
@@ -48,6 +54,7 @@ export function VendorDetailDrawer({
   onClose,
   onOpenQuoteImport,
   onResumeDraft,
+  onEditApprovedQuote,
   onOpenBooking,
 }: VendorDetailDrawerProps) {
   const {
@@ -64,6 +71,7 @@ export function VendorDetailDrawer({
   // Collapsed by default: inclusions, evidence, history
   const [showInclusions, setShowInclusions] = useState(false);
   const [showEvidence, setShowEvidence] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
 
   // Track last total for subtle change highlight and signed delta
@@ -286,8 +294,11 @@ export function VendorDetailDrawer({
           <div className="flex items-center gap-2">
             {calc && (
               <span className="text-[11px] text-[#6B655C] hidden sm:inline">
-                HST {calc.hstAssumed ? '13% est.' : '13%'} ·{' '}
-                {formatShortCad(calc.taxAmount)}
+                {calc.taxNotStated
+                  ? 'Tax not stated · excluded'
+                  : calc.taxRate > 0
+                    ? `Tax ${Math.round(calc.taxRate * 100)}%${calc.hstAssumed ? ' est.' : ''} · ${formatShortCad(calc.taxAmount)}`
+                    : calc.taxStatusLabel}
               </span>
             )}
             {vendor.status !== 'Booked' && activeQuote && (
@@ -353,10 +364,54 @@ export function VendorDetailDrawer({
               </div>
             )}
 
-          {calc?.capacityExceeded && activeQuote?.maxCapacity && (
+          {calc && calc.legacyReviewReasons.length > 0 && activeQuote && (
+            <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/70 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-[#92400E] mt-0.5 shrink-0" />
+                <div>
+                  <div className="text-xs font-semibold text-[#92400E]">
+                    Re-review required before booking
+                  </div>
+                  <ul className="list-disc pl-4 text-xs text-[#92400E]/90 mt-1 space-y-0.5">
+                    {calc.legacyReviewReasons.map((reason, idx) => (
+                      <li key={idx}>{reason}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onEditApprovedQuote(vendor.id)}
+                className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-[#92400E] text-white hover:bg-[#78350F] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Review &amp; edit quote
+              </button>
+            </div>
+          )}
+
+          {calc && calc.taxNotStated && activeQuote && (
+            <div className="rounded-xl bg-[#FFFBEB] border border-[#F59E0B]/60 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-start gap-2 text-xs text-[#92400E]">
+                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                <div>
+                  <span className="font-semibold">Incomplete estimate:</span> Tax not stated —
+                  excluded from estimate. Confirm tax handling before booking.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onEditApprovedQuote(vendor.id)}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-[#F59E0B] bg-white text-[#92400E] hover:bg-[#FEF3C7] whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                Set tax handling
+              </button>
+            </div>
+          )}
+
+          {calc?.capacityExceeded && activeQuote && (activeQuote.maxCapacity || calc.selectedPackageName) && (
             <div className="rounded-xl bg-[#FEE2E2] border border-[#FCA5A5] p-3.5 flex items-center gap-2 text-xs font-semibold text-[#991B1B]">
               <AlertTriangle className="w-4 h-4 shrink-0" />
-              Saved guest count exceeds {activeQuote.maxCapacity} max capacity.
+              Saved guest count exceeds {activeQuote.maxCapacity ?? 'package'} max capacity.
             </div>
           )}
 
@@ -478,6 +533,14 @@ export function VendorDetailDrawer({
                   )}
                   <button
                     type="button"
+                    onClick={() => onEditApprovedQuote(vendor.id)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E5DED2] bg-white text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit quote
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onOpenQuoteImport(undefined, vendor.id)}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E5DED2] bg-white text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
                   >
@@ -500,30 +563,23 @@ export function VendorDetailDrawer({
                   </div>
 
                   <div className="divide-y divide-[#F0EAE0] border-t border-[#F0EAE0]">
-                    {activeQuote.lineItems.map((li) => (
+                    {calc.lineItemBreakdowns.map((row) => (
                       <div
-                        key={li.id}
+                        key={row.id}
                         className="py-2.5 flex items-center justify-between gap-4 text-xs"
                       >
                         <div>
                           <div className="font-medium text-[#22201D]">
-                            {li.label}
+                            {row.label}
                           </div>
                           <div className="text-[11px] text-[#6B655C]">
-                            {li.pricingModel === 'per_person'
-                              ? `$${li.unitPrice}/guest${
-                                  li.minGuests ? ` · ${li.minGuests} min` : ''
-                                }`
-                              : li.pricingModel === 'guest_ratio'
-                                ? `$${li.unitPrice} per ${li.ratioDivisor ?? 10} guests`
-                                : li.pricingModel === 'hourly'
-                                  ? `$${li.unitPrice}/hr × ${li.quantity ?? 1} hrs`
-                                  : 'Fixed fee'}
+                            {row.formulaText}
                           </div>
                         </div>
-                        <div className="font-num font-semibold text-[#22201D]">
-                          {formatShortCad(li.unitPrice)}
-                          {li.pricingModel === 'per_person' ? '/pp' : ''}
+                        <div className="font-num font-semibold text-[#22201D] whitespace-nowrap">
+                          {row.amount !== null
+                            ? formatCurrency(row.amount, calc.currencyLabel, { decimals: 2 })
+                            : 'Needs basis'}
                         </div>
                       </div>
                     ))}
@@ -611,7 +667,7 @@ export function VendorDetailDrawer({
                   className="w-full px-4 py-3 flex items-center justify-between text-xs font-semibold text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
                 >
                   <span>
-                    Package inclusions & terms ({activeQuote.inclusions.length})
+                    Package inclusions &amp; terms ({getEffectiveQuoteInclusions(activeQuote).length})
                   </span>
                   {showInclusions ? (
                     <ChevronDown className="w-4 h-4 text-[#6B655C]" />
@@ -621,11 +677,24 @@ export function VendorDetailDrawer({
                 </button>
                 {showInclusions && (
                   <div className="px-4 pb-4 pt-1 border-t border-[#F0EAE0] space-y-3 text-xs text-[#6B655C]">
+                    {calc?.selectedPackageName && (
+                      <div className="text-[11px] font-semibold text-[#234733]">
+                        Selected package: {calc.selectedPackageName}
+                      </div>
+                    )}
                     <ul className="list-disc pl-4 space-y-1">
-                      {activeQuote.inclusions.map((inc, idx) => (
+                      {getEffectiveQuoteInclusions(activeQuote).map((inc, idx) => (
                         <li key={idx}>{inc}</li>
                       ))}
                     </ul>
+                    {getEffectiveQuoteDeliveryTerms(activeQuote).length > 0 && (
+                      <div>
+                        <span className="font-semibold text-[#22201D]">
+                          Delivery &amp; turnaround:{' '}
+                        </span>
+                        {getEffectiveQuoteDeliveryTerms(activeQuote).join('; ')}
+                      </div>
+                    )}
                     <div>
                       <span className="font-semibold text-[#22201D]">
                         Payment terms:{' '}
@@ -655,6 +724,28 @@ export function VendorDetailDrawer({
                 </button>
                 {showEvidence && (
                   <div className="px-4 pb-4 pt-2 border-t border-[#F0EAE0] space-y-2 text-xs">
+                    {activeQuote.attachmentPreview &&
+                      activeQuote.attachmentPreview.mimeType.startsWith('image/') && (
+                        <div className="rounded-lg bg-[#FAF8F4] border border-[#E5DED2] p-2 space-y-1.5">
+                          <div className="flex items-center justify-between text-[11px] text-[#6B655C]">
+                            <span className="truncate">{activeQuote.attachmentPreview.fileName}</span>
+                            <button
+                              type="button"
+                              onClick={() => setLightboxOpen(true)}
+                              className="inline-flex items-center gap-1 font-medium text-[#486755] hover:underline cursor-pointer shrink-0"
+                            >
+                              <ZoomIn className="w-3.5 h-3.5" />
+                              Enlarge image
+                            </button>
+                          </div>
+                          <img
+                            src={activeQuote.attachmentPreview.dataUrl}
+                            alt={activeQuote.attachmentPreview.fileName}
+                            onClick={() => setLightboxOpen(true)}
+                            className="w-full max-h-56 object-contain rounded border border-[#E5DED2] bg-white cursor-zoom-in"
+                          />
+                        </div>
+                      )}
                     <pre className="whitespace-pre-wrap font-sans bg-[#FAF8F4] border border-[#E5DED2] rounded-lg p-3 text-[#22201D] leading-relaxed">
                       {activeQuote.sourceText}
                     </pre>
@@ -740,6 +831,16 @@ export function VendorDetailDrawer({
           </div>
         </div>
       </div>
+
+      {activeQuote?.attachmentPreview &&
+        activeQuote.attachmentPreview.mimeType.startsWith('image/') && (
+          <ImageLightboxModal
+            isOpen={lightboxOpen}
+            onClose={() => setLightboxOpen(false)}
+            imageUrl={activeQuote.attachmentPreview.dataUrl}
+            fileName={activeQuote.attachmentPreview.fileName}
+          />
+        )}
     </div>
   );
 }

@@ -13,6 +13,7 @@ export type TaxHandling =
   | 'included'
   | 'excluded_plus_hst'
   | 'unspecified_ontario_assumed'
+  | 'unspecified'
   | 'tax_exempt';
 
 export type VendorCategory =
@@ -70,6 +71,7 @@ export interface WeddingEvent {
 export type LineItemPricingModel =
   | 'flat'
   | 'per_person'
+  | 'per_extra_guest'
   | 'hourly'
   | 'guest_ratio'
   | 'percentage';
@@ -86,7 +88,35 @@ export interface StructuredInclusion {
   name: string;
   quantity?: number;
   unit?: string;
+  durationHours?: number;
+  packageId?: string;
   sourceExcerpt?: string;
+}
+
+export interface QuotePackageOption {
+  id: string;
+  name: string;
+  pricingModel: 'flat' | 'per_person';
+  unitPrice: number;
+  minGuests?: number;
+  includedGuests?: number;
+  extraGuestRate?: number;
+  maxCapacity?: number;
+  hours?: number;
+  isFoodItem?: boolean;
+  fees?: QuoteLineItem[];
+  taxHandling?: TaxHandling;
+  taxPercent?: number;
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  inclusions: string[];
+  structuredInclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  paymentTermsSummary?: string;
+  paymentMilestones?: QuotePaymentMilestone[];
+  evidenceId?: string;
+  pageReference?: string;
 }
 
 export interface QuotePaymentMilestone {
@@ -125,6 +155,8 @@ export interface QuoteLineItem {
   isFoodItem?: boolean;
   eventId?: string; // binds per_person or guest_ratio to a specific event
   minGuests?: number; // minimum guest floor if per_person
+  guestThreshold?: number; // included guest threshold for per_extra_guest
+  packageId?: string; // optional package option scope
   evidenceId?: string;
   pageReference?: string;
   note?: string;
@@ -230,6 +262,8 @@ export interface Quote {
   serviceDurationHours?: number;
   minGuests?: number;
   maxCapacity?: number;
+  packages?: QuotePackageOption[];
+  selectedPackageId?: string | null;
   lineItems: QuoteLineItem[];
   addOns: QuoteAddOn[];
   unconfirmedFees: QuoteUnconfirmedFee[];
@@ -238,8 +272,10 @@ export interface Quote {
   selectedPaymentOptionId?: string;
   inclusions: string[];
   structuredInclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
   exclusions?: string[];
   restrictions?: string[];
+  legacyReviewAcknowledged?: boolean;
   cateringAndBarSummary?: string;
   avAndStaffingSummary?: string;
   paymentTermsSummary: string;

@@ -354,9 +354,13 @@ export function VendorsView({
                               {vendor.status === 'Booked'
                                 ? 'Booked total'
                                 : calc
-                                  ? calc.hstAssumed
-                                    ? 'Est. incl. 13% HST'
-                                    : 'Incl. HST'
+                                  ? calc.taxNotStated
+                                    ? 'Incomplete · Tax not stated'
+                                    : calc.effectiveTaxHandling === 'tax_exempt'
+                                      ? 'Confirmed no tax'
+                                      : calc.hstAssumed
+                                        ? 'Est. incl. 13% HST'
+                                        : 'Incl. HST / tax'
                                   : 'Unpriced'}
                             </div>
                           </div>

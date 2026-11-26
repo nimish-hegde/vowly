@@ -756,6 +756,8 @@ interface BackendLineItem {
   pricingType: string;
   amount: number | null;
   minGuests?: number;
+  guestThreshold?: number;
+  packageId?: string;
   ratioGuests?: number;
   unitLabel?: string;
   hours?: number;
@@ -779,6 +781,36 @@ interface BackendLineItem {
   pageReference?: string;
 }
 
+interface BackendPackageOption {
+  id: string;
+  name: string;
+  pricingType: 'flat' | 'per_person' | 'unknown';
+  amount: number | null;
+  minGuests?: number;
+  includedGuests?: number;
+  extraGuestRate?: number;
+  maxCapacity?: number;
+  hours?: number;
+  isFoodItem?: boolean;
+  fees?: BackendLineItem[];
+  taxStatus?: 'included' | 'excluded' | 'unknown';
+  taxPercent?: number | null;
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  inclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  paymentTerms?: {
+    depositAmount?: number;
+    depositPercent?: number;
+    methodRule: string;
+    scheduleNotes?: string;
+    milestones?: QuotePaymentMilestone[];
+  };
+  sourceExcerpt: string;
+  pageReference?: string;
+}
+
 interface BackendExtractedQuote {
   vendorName: string | null;
   vendorLocation?: string | null;
@@ -794,8 +826,11 @@ interface BackendExtractedQuote {
   gratuityPercent?: number | null;
   gratuityBasis?: PercentageBasis;
   serviceDurationHours?: number;
+  packages?: BackendPackageOption[];
+  selectedPackageId?: string | null;
   lineItems: BackendLineItem[];
   inclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
   exclusions?: string[];
   restrictions?: string[];
   venueDetails?: {
@@ -860,21 +895,161 @@ function mapBackendCategory(cat: string): VendorCategory {
   }
 }
 
-function formatStructuredInclusion(inc: StructuredInclusion): string {
-  if (inc.quantity !== undefined && inc.unit) {
-    return `${inc.quantity} ${inc.unit}${inc.name && !inc.name.toLowerCase().includes(inc.unit.toLowerCase()) ? ` (${inc.name})` : ''}`;
+const INTERNAL_SCHEMA_TOKENS = new Set([
+  'deliverables',
+  'deliverable',
+  'team',
+  'included',
+  'mandatory',
+  'conditional',
+  'optional',
+  'flat',
+  'per_person',
+  'per_extra_guest',
+  'per_hour',
+  'per_guest_ratio',
+  'percentage',
+  'unknown',
+  'other',
+  'none',
+  'n/a',
+  'item',
+  'items',
+  'unit',
+  'units',
+]);
+
+const ROLE_OR_STATION_PATTERN =
+  /\b(photographer|videographer|cinematographer|shooter|assistant|dj|mc|bartender|server|coordinator|planner|booth|station)\b/i;
+
+function isInternalSchemaToken(value: string | undefined): boolean {
+  if (!value) return true;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 30) return true;
+  const lower = trimmed.toLowerCase();
+  if (INTERNAL_SCHEMA_TOKENS.has(lower)) return true;
+  // Detect snake_case or internal identifier tokens (e.g., "photography_coverage")
+  if (trimmed.includes('_')) return true;
+  return false;
+}
+
+function cleanInclusionName(name: string): string {
+  // Strip parenthetical internal schema tags like "(photography_coverage)" or trailing "[deliverables]"
+  return name
+    .replace(/\s*\(([a-z0-9]+_[a-z0-9_]+|deliverables|included|mandatory|conditional|optional|flat|team)\)/gi, '')
+    .replace(/\s*\[([a-z0-9]+_[a-z0-9_]+|deliverables|included|mandatory|conditional|optional|flat|team)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function singularStem(word: string): string {
+  const lower = word.toLowerCase().trim();
+  if (lower === 'hrs' || lower === 'hr' || lower === 'hours' || lower === 'hour') return 'hour';
+  if (lower.endsWith('ies') && lower.length > 4) return `${lower.slice(0, -3)}y`;
+  if (lower.endsWith('s') && lower.length > 3) return lower.slice(0, -1);
+  return lower;
+}
+
+export function formatStructuredInclusion(inc: StructuredInclusion): string {
+  const cleanName = cleanInclusionName(inc.name);
+  const rawUnit = inc.unit && !isInternalSchemaToken(inc.unit) ? inc.unit.trim() : undefined;
+  const qty = inc.quantity !== undefined && Number.isFinite(inc.quantity) ? inc.quantity : undefined;
+  const durationHours =
+    inc.durationHours !== undefined && Number.isFinite(inc.durationHours) && inc.durationHours > 0
+      ? inc.durationHours
+      : undefined;
+
+  if (!cleanName) {
+    if (qty !== undefined && rawUnit) return `${qty} ${rawUnit}`;
+    return '';
   }
-  if (inc.quantity !== undefined) {
-    return `${inc.quantity} ${inc.name}`;
+
+  // Case 1: explicit durationHours on a role or service (e.g., "Second photographer (5 hours coverage)")
+  if (durationHours !== undefined) {
+    const durationLabel = `${durationHours} hour${durationHours === 1 ? '' : 's'} coverage`;
+    const nameAlreadyHasHours = new RegExp(`\\b${durationHours}\\s*(?:hours?|hrs?)\\b`, 'i').test(cleanName);
+    const base =
+      qty !== undefined &&
+      qty > 1 &&
+      !new RegExp(`^${qty}\\b`).test(cleanName)
+        ? `${qty} ${cleanName}`
+        : cleanName;
+    return nameAlreadyHasHours ? base : `${base} (${durationLabel})`;
   }
-  return inc.name;
+
+  // Case 2: quantity + unit where unit is hours on a role/station name (e.g., { name: "Second photographer", quantity: 5, unit: "hours" })
+  if (
+    qty !== undefined &&
+    rawUnit &&
+    /^(hours?|hrs?)$/i.test(rawUnit) &&
+    ROLE_OR_STATION_PATTERN.test(cleanName) &&
+    !/\b(hours?|hrs?)\b/i.test(cleanName)
+  ) {
+    return `${cleanName} (${qty} hour${qty === 1 ? '' : 's'} coverage)`;
+  }
+
+  // Case 3: name already starts with or embeds the exact quantity (prevent "2 2 photographers" or "5 hours (5 hours coverage)")
+  if (qty !== undefined) {
+    const startsWithQty = new RegExp(`^${qty}\\b`).test(cleanName);
+    const embedsQtyAndUnit =
+      rawUnit !== undefined &&
+      new RegExp(`\\b${qty}\\s*[-–]?\\s*${singularStem(rawUnit)}s?\\b`, 'i').test(cleanName);
+    if (startsWithQty || embedsQtyAndUnit) {
+      return cleanName;
+    }
+  }
+
+  if (qty !== undefined && rawUnit) {
+    const nameLower = cleanName.toLowerCase();
+    const unitStem = singularStem(rawUnit);
+    if (nameLower.includes(unitStem)) {
+      return `${qty} ${cleanName}`;
+    }
+    return `${qty} ${rawUnit} (${cleanName})`;
+  }
+
+  if (qty !== undefined) {
+    return `${qty} ${cleanName}`;
+  }
+
+  return cleanName;
+}
+
+const WORD_TO_HOURS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+function parseHoursFromText(text: string): number | undefined {
+  const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
+  if (numMatch) {
+    const val = Number(numMatch[1]);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  const wordMatch = text.match(
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:-|\s)?(?:hours?|hrs?)\b/i
+  );
+  if (wordMatch) {
+    return WORD_TO_HOURS[wordMatch[1].toLowerCase()];
+  }
+  return undefined;
 }
 
 const OVERTIME_PATTERN =
   /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
 
 function findIncludedHoursFromBackendQuote(bq: BackendExtractedQuote, excludeIdx: number): number | undefined {
-  let hasSiblingFlat = false;
+  let hasSiblingFlat = Boolean(bq.packages?.some((p) => p.pricingType === 'flat'));
   for (let i = 0; i < bq.lineItems.length; i++) {
     if (i === excludeIdx) continue;
     const sibling = bq.lineItems[i];
@@ -890,15 +1065,50 @@ function findIncludedHoursFromBackendQuote(bq: BackendExtractedQuote, excludeIdx
   if (hasSiblingFlat && bq.serviceDurationHours && bq.serviceDurationHours > 0) {
     return bq.serviceDurationHours;
   }
+  for (let i = 0; i < bq.lineItems.length; i++) {
+    if (i === excludeIdx) continue;
+    const sibling = bq.lineItems[i];
+    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      const fromLabel = parseHoursFromText(sibling.label);
+      if (fromLabel !== undefined) return fromLabel;
+      const fromExcerpt = parseHoursFromText(sibling.sourceExcerpt);
+      if (fromExcerpt !== undefined) return fromExcerpt;
+    }
+  }
+  if (hasSiblingFlat && bq.inclusions) {
+    for (const inc of bq.inclusions) {
+      if (
+        inc.quantity !== undefined &&
+        inc.quantity > 0 &&
+        inc.unit &&
+        /\b(hours?|hrs?)\b/i.test(inc.unit) &&
+        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
+      ) {
+        return inc.quantity;
+      }
+      const fromInc = parseHoursFromText(inc.name);
+      if (fromInc !== undefined && !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)) {
+        return fromInc;
+      }
+    }
+  }
   return undefined;
 }
 
 function mapPricingTypeToModel(pricingType: string): LineItemPricingModel {
   if (pricingType === 'per_person') return 'per_person';
+  if (pricingType === 'per_extra_guest') return 'per_extra_guest';
   if (pricingType === 'per_hour') return 'hourly';
   if (pricingType === 'per_guest_ratio') return 'guest_ratio';
   if (pricingType === 'percentage') return 'percentage';
   return 'flat';
+}
+
+function mapBackendTaxStatus(status: 'included' | 'excluded' | 'unknown' | undefined): TaxHandling {
+  if (status === 'included') return 'included';
+  if (status === 'excluded') return 'excluded_plus_hst';
+  return 'unspecified';
 }
 
 export function mapBackendExtractionToFrontendResult(
@@ -980,7 +1190,7 @@ export function mapBackendExtractionToFrontendResult(
     const isConditionalOvertime =
       pricingModel === 'hourly' &&
       includedPackageHours !== undefined &&
-      !(item.hours !== undefined && item.hours > 0) &&
+      !(item.hours !== undefined && item.hours > 1) &&
       ((bq.photographerDetails?.extraHourRate !== undefined &&
         Math.abs(item.amount - bq.photographerDetails.extraHourRate) < 0.01) ||
         OVERTIME_PATTERN.test(item.label) ||
@@ -1010,6 +1220,8 @@ export function mapBackendExtractionToFrontendResult(
       thirdPartyProvider: item.thirdPartyProvider,
       isFoodItem: item.isFoodItem,
       minGuests: item.minGuests ?? bq.venueDetails?.minGuests,
+      guestThreshold: item.guestThreshold,
+      packageId: item.packageId,
       eventId: input.targetEventIds?.[0],
       evidenceId: evId,
       pageReference: item.pageReference,
@@ -1053,24 +1265,88 @@ export function mapBackendExtractionToFrontendResult(
 
   const structuredInclusions = bq.inclusions ?? [];
   for (const inc of structuredInclusions) {
-    inclusionStrings.push(formatStructuredInclusion(inc));
+    const formatted = formatStructuredInclusion(inc);
+    if (formatted) {
+      inclusionStrings.push(formatted);
+    }
     if (inc.sourceExcerpt) {
       addEvidence(inc.sourceExcerpt, inc.name);
     }
   }
 
+  // Map mutually exclusive package options (when >= 2 tiers exist)
+  const packages =
+    bq.packages && bq.packages.length > 0
+      ? bq.packages.map((pkg, pkgIdx) => {
+          const pkgEvId = addEvidence(pkg.sourceExcerpt, pkg.name, pkg.pageReference);
+          const pkgInclusionStrings = (pkg.inclusions ?? [])
+            .map((inc) => {
+              if (inc.sourceExcerpt) addEvidence(inc.sourceExcerpt, inc.name);
+              return formatStructuredInclusion(inc);
+            })
+            .filter(Boolean);
+          const pkgFees: QuoteLineItem[] = (pkg.fees ?? [])
+            .filter((f) => f.amount !== null && f.pricingType !== 'unknown' && f.pricingType !== 'included')
+            .map((f, fIdx) => {
+              const fModel = mapPricingTypeToModel(f.pricingType);
+              return {
+                id: `pkg-${pkgIdx}-fee-${fIdx}-${Date.now()}`,
+                label: f.label,
+                pricingModel: fModel,
+                unitPrice: fModel === 'percentage' ? (f.percentageRate ?? f.amount!) : f.amount!,
+                minGuests: f.minGuests ?? pkg.minGuests,
+                guestThreshold: f.guestThreshold,
+                ratioDivisor: f.ratioGuests,
+                unitLabel: f.unitLabel,
+                isFoodItem: f.isFoodItem,
+                packageId: pkg.id,
+                eventId: input.targetEventIds?.[0],
+                evidenceId: addEvidence(f.sourceExcerpt, f.label, f.pageReference),
+                pageReference: f.pageReference,
+              };
+            });
+          const pkgPayParts: string[] = [];
+          if (pkg.paymentTerms?.depositAmount) {
+            pkgPayParts.push(`$${pkg.paymentTerms.depositAmount.toLocaleString('en-CA')} deposit`);
+          } else if (pkg.paymentTerms?.depositPercent) {
+            pkgPayParts.push(`${pkg.paymentTerms.depositPercent}% deposit`);
+          }
+          if (pkg.paymentTerms?.scheduleNotes) {
+            pkgPayParts.push(pkg.paymentTerms.scheduleNotes);
+          }
+          return {
+            id: pkg.id || `pkg-${pkgIdx + 1}`,
+            name: pkg.name,
+            pricingModel: (pkg.pricingType === 'per_person' ? 'per_person' : 'flat') as 'flat' | 'per_person',
+            unitPrice: pkg.amount ?? 0,
+            minGuests: pkg.minGuests,
+            includedGuests: pkg.includedGuests,
+            extraGuestRate: pkg.extraGuestRate,
+            maxCapacity: pkg.maxCapacity,
+            hours: pkg.hours,
+            isFoodItem: pkg.isFoodItem,
+            fees: pkgFees.length > 0 ? pkgFees : undefined,
+            taxHandling: pkg.taxStatus ? mapBackendTaxStatus(pkg.taxStatus) : undefined,
+            taxPercent: pkg.taxPercent ?? undefined,
+            gratuityStatus: pkg.gratuityStatus,
+            gratuityPercent: pkg.gratuityPercent ?? undefined,
+            gratuityBasis: pkg.gratuityBasis,
+            inclusions: Array.from(new Set(pkgInclusionStrings)),
+            structuredInclusions: pkg.inclusions,
+            deliveryTerms: pkg.deliveryTerms,
+            paymentTermsSummary: pkgPayParts.length > 0 ? pkgPayParts.join(' · ') : undefined,
+            paymentMilestones: pkg.paymentTerms?.milestones,
+            evidenceId: pkgEvId,
+            pageReference: pkg.pageReference,
+          };
+        })
+      : undefined;
+
   for (const q of bq.openQuestions) {
     addEvidence(q.sourceExcerpt, 'Needs attention', q.pageReference);
   }
 
-  let taxHandling: TaxHandling = 'excluded_plus_hst';
-  if (bq.taxStatus === 'included') {
-    taxHandling = 'included';
-  } else if (bq.taxStatus === 'excluded') {
-    taxHandling = 'excluded_plus_hst';
-  } else {
-    taxHandling = 'tax_exempt';
-  }
+  const taxHandling: TaxHandling = mapBackendTaxStatus(bq.taxStatus);
 
   const rawVendorName = (bq.vendorName ?? '').trim();
   const vendorNameMissing = rawVendorName.length === 0;
@@ -1122,14 +1398,21 @@ export function mapBackendExtractionToFrontendResult(
       bq.serviceDurationHours ?? bq.photographerDetails?.hoursIncluded,
     minGuests: bq.venueDetails?.minGuests,
     maxCapacity: bq.venueDetails?.maxCapacity,
+    packages,
+    selectedPackageId:
+      packages && packages.length === 1
+        ? packages[0].id
+        : (bq.selectedPackageId ?? null),
     lineItems,
     addOns,
     unconfirmedFees,
     conflicts,
-    inclusions: Array.from(new Set(inclusionStrings)),
+    inclusions: Array.from(new Set(inclusionStrings.filter(Boolean))),
     structuredInclusions,
+    deliveryTerms: bq.deliveryTerms ?? [],
     exclusions: bq.exclusions ?? [],
     restrictions: bq.restrictions ?? [],
+    legacyReviewAcknowledged: true,
     paymentTermsSummary:
       paymentParts.join(' · ') || 'Confirm deposit and payment schedule with vendor.',
     paymentMilestones: bq.paymentTerms?.milestones ?? [],
