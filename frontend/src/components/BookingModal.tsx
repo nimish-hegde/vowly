@@ -4,10 +4,10 @@ import {
   buildBookingMilestones,
   calculateQuoteFinancials,
   DEFAULT_DEPOSIT_ALREADY_PAID,
+  deriveBookingScheduleDefaults,
   formatCurrency,
   getVendorActiveQuote,
   getVendorBookingEligibility,
-  resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
 import { DemoDataNote } from './DemoLabel';
@@ -38,65 +38,56 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
   const [depositAlreadyPaid, setDepositAlreadyPaid] = useState<boolean>(
     DEFAULT_DEPOSIT_ALREADY_PAID
   );
-  const [depositDate, setDepositDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
+  const [depositHasKnownDate, setDepositHasKnownDate] = useState<boolean>(false);
+  const [depositDate, setDepositDate] = useState<string>('');
+  const [depositRelativeLabel, setDepositRelativeLabel] = useState<string>(
+    'Due upon signing / date TBD'
   );
-  const [balanceHasKnownDate, setBalanceHasKnownDate] = useState<boolean>(true);
-  const [balanceDueDate, setBalanceDueDate] = useState<string>('2027-07-15');
+  const [balanceHasKnownDate, setBalanceHasKnownDate] = useState<boolean>(false);
+  const [balanceDueDate, setBalanceDueDate] = useState<string>('');
   const [balanceRelativeLabel, setBalanceRelativeLabel] = useState<string>(
-    '30 days prior to event (date TBD)'
+    'Balance due date TBD'
   );
   const [depositPayer, setDepositPayer] = useState<string>('Unassigned');
   const [balancePayer, setBalancePayer] = useState<string>('Unassigned');
+
+  const existingPaidAmount = vendor
+    ? activeWorkspace.payments
+        .filter((p) => p.vendorId === vendor.id && p.status === 'Paid')
+        .reduce((sum, p) => sum + p.amount, 0)
+    : 0;
 
   useEffect(() => {
     if (!vendor) return;
     const defaultTotal =
       vendor.bookedContractTotal ?? calc?.estimatedAllInTotal ?? 0;
-    const defaultDeposit =
-      activeQuote?.depositAmount ??
-      (activeQuote?.depositPercent
-        ? Math.round(defaultTotal * (activeQuote.depositPercent / 100))
-        : Math.round(defaultTotal * 0.25));
+    const schedule = deriveBookingScheduleDefaults(
+      activeQuote,
+      activeWorkspace.events,
+      vendor.eventIds,
+      defaultTotal
+    );
 
     setContractTotal(defaultTotal > 0 ? String(Math.round(defaultTotal * 100) / 100) : '');
-    setDepositAmount(defaultDeposit > 0 ? String(defaultDeposit) : '');
+    setDepositAmount(schedule.depositAmount > 0 ? String(schedule.depositAmount) : '');
     setDepositAlreadyPaid(DEFAULT_DEPOSIT_ALREADY_PAID);
-    setDepositDate('2026-11-24');
+    setDepositHasKnownDate(schedule.depositHasKnownDate);
+    setDepositDate(schedule.depositDate);
+    setDepositRelativeLabel(schedule.depositRelativeLabel);
+    setBalanceHasKnownDate(schedule.balanceHasKnownDate);
+    setBalanceDueDate(schedule.balanceDueDate);
+    setBalanceRelativeLabel(schedule.balanceRelativeLabel);
     setDepositPayer(activeWorkspace.coupleNames || 'Unassigned');
     setBalancePayer('Unassigned');
-
-    // Check if primary event has a concrete date and compute relative balance deadline
-    const primaryEvent = activeWorkspace.events.find((e) =>
-      vendor.eventIds.includes(e.id)
-    );
-    const relativeMilestone = activeQuote?.paymentMilestones?.find(
-      (m) => m.relativeDaysBeforeEvent !== undefined
-    );
-    const relativeDays = relativeMilestone?.relativeDaysBeforeEvent ?? 30;
-    const computedDue = resolveRelativeDeadlineDate(primaryEvent?.date, relativeDays);
-
-    if (primaryEvent && !primaryEvent.date) {
-      setBalanceHasKnownDate(false);
-      setBalanceRelativeLabel(
-        relativeMilestone?.relativeDeadlineText ??
-          `${relativeDays} days prior to ${primaryEvent.name} (date TBD)`
-      );
-    } else if (computedDue) {
-      setBalanceHasKnownDate(true);
-      setBalanceDueDate(computedDue);
-    } else {
-      setBalanceHasKnownDate(true);
-      setBalanceDueDate('2027-07-15');
-    }
   }, [vendor?.id]);
 
   if (!vendor) return null;
 
   const canBook = eligibility?.canBook ?? false;
   const totalNum = parseFloat(contractTotal) || 0;
-  const depositNum = Math.min(totalNum, Math.max(0, parseFloat(depositAmount) || 0));
-  const remainingNum = Math.max(0, Math.round((totalNum - depositNum) * 100) / 100);
+  const schedulableTotal = Math.max(0, Math.round((totalNum - existingPaidAmount) * 100) / 100);
+  const depositNum = Math.min(schedulableTotal, Math.max(0, parseFloat(depositAmount) || 0));
+  const remainingNum = Math.max(0, Math.round((schedulableTotal - depositNum) * 100) / 100);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -104,9 +95,12 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
 
     const milestones = buildBookingMilestones({
       contractTotal: totalNum,
+      existingPaidAmount,
       depositAmount: depositNum,
       depositAlreadyPaid,
+      depositHasKnownDate: depositAlreadyPaid ? true : depositHasKnownDate,
       depositDate,
+      depositRelativeLabel,
       depositPayer,
       coupleNames: activeWorkspace.coupleNames,
       balanceHasKnownDate,
@@ -220,15 +214,36 @@ export function BookingModal({ vendorId, onClose }: BookingModalProps) {
             </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-[11px] text-[#6B655C] mb-1">
-                  {depositAlreadyPaid ? 'Date deposit paid' : 'Deposit due date'}
-                </label>
-                <input
-                  type="date"
-                  value={depositDate}
-                  onChange={(e) => setDepositDate(e.target.value)}
-                  className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] text-[#6B655C]">
+                    {depositAlreadyPaid ? 'Date deposit paid' : 'Deposit due date'}
+                  </label>
+                  {!depositAlreadyPaid && (
+                    <button
+                      type="button"
+                      onClick={() => setDepositHasKnownDate((v) => !v)}
+                      className="text-[10px] font-medium text-[#486755] hover:underline cursor-pointer"
+                    >
+                      {depositHasKnownDate ? 'Use relative / TBD' : 'Set exact date'}
+                    </button>
+                  )}
+                </div>
+                {depositAlreadyPaid || depositHasKnownDate ? (
+                  <input
+                    type="date"
+                    value={depositDate}
+                    onChange={(e) => setDepositDate(e.target.value)}
+                    className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={depositRelativeLabel}
+                    onChange={(e) => setDepositRelativeLabel(e.target.value)}
+                    placeholder="e.g. Due upon signing"
+                    className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
+                  />
+                )}
               </div>
               <div>
                 <label className="block text-[11px] text-[#6B655C] mb-1">

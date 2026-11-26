@@ -83,3 +83,23 @@ Record significant product, architecture, and model decisions here as they are m
   - Live (`gemini-3.5-flash-lite`): **66/66 (100.0%)** (`23/23 dev`, `6/6 regression`, `25/25 held-out`, `12/12 held-out-v2`), **0 critical financial errors**, **0 release blockers**, avg latency `1,796 ms` excl. retries (`2,798 ms` incl. 8 HTTP-429 retries), est. paid cost `$0.03062` (`$0.000464` / successful extraction).
 - **Trade-offs:** Keeping `packages.items` lean in `GEMINI_RESPONSE_SCHEMA` (routing package-specific fees via `lineItems[].packageId`) avoided schema bloat and kept `gemini-3.5-flash-lite` latency under `1.8s` excl. retries.
 - **Decision:** **Pending fresh Codex review, manual UAT, and explicit PM approval on PR #13 (do not merge yet).**
+
+
+### D-006 — Final PR #13 Targeted Remediation (Codex Parity Findings, Conditional Hourly & Payment Schedule Propagation)
+
+- **Hypothesis:** Unifying backend-to-frontend line-item/package-fee mapping, extending conditional overtime detection (`hourly` + `inclusions[].durationHours` + manual toggle), propagating explicit quote payment dates into `BookingModal` without hardcoded fallbacks, and reinforcing unstated-tax grounding will close all remaining PR #13 release blockers from Codex review and founder manual UAT.
+- **Changes:**
+  - Shared `mapBackendItem` helper in `frontend/src/services/quoteExtractor.ts` preserving unknown mandatory package fees (`unconfirmedFees` with `packageId`), unknown package prices (`unitPrice: null`, `unresolvedPackagePrice: true`), and full hourly/percentage calculation parameters on package fees.
+  - Package-aware tax editing (`updateEffectiveTaxHandling`) and manual `"Conditional rate (0 hrs default)"` toggle in `QuoteImportModal.tsx`; `OVERTIME_PATTERN` + `durationHours` parity in `src/calculator.ts` and `quoteExtractor.ts`.
+  - `normalizeIsoDate` and `deriveBookingScheduleDefaults` in `financialCalculator.ts` wired into `BookingModal.tsx` (explicit date -> relative deadline -> unresolved; zero hardcoded fallback dates; preserves existing `Paid` milestones in `applyConfirmBooking`).
+  - Strengthened `SYSTEM_PROMPT` Rule 5 in `src/extractor.ts` to keep unmentioned tax as `unknown`.
+- **Verification Results:**
+  - Offline: `51/51` backend tests, `66/66` mock evals, `15/15` frontend tests, `0` TS errors, clean Vite build.
+  - Live Gemini (`gemini-3.5-flash-lite`, 66 cases): **66/66 (100.0%)**, `0` critical financial errors, `0` release blockers, `1,775 ms` avg latency excl. retries (`2,859 ms` incl. retries), est. paid cost `$0.03101` (`$0.000470`/extraction).
+  - Browser E2E UAT: Passed both HSR Photography (`$900` subtotal, unknown-tax booking block, `2027-08-13` balance due date) and Multi-Package Venue (Royal vs. Imperial isolation & package-scoped inclusions).
+- **Deferred to Next Milestone (`v0.6` Non-Blocking Usability Improvements):**
+  - Multi-installment (>2 milestones) custom payment schedule builder inside `BookingModal`.
+  - Post-event actual overtime reconciliation workflow.
+  - Side-by-side multi-package comparison inside `VendorComparisonView`.
+  - Inline editing of package-specific fees/overrides without leaving the package card.
+- **Decision:** **Ready for fresh Codex review and PM final approval on PR #13 (do not merge yet).**

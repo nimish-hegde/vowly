@@ -96,8 +96,8 @@ export interface StructuredInclusion {
 export interface QuotePackageOption {
   id: string;
   name: string;
-  pricingModel: 'flat' | 'per_person';
-  unitPrice: number;
+  pricingModel: 'flat' | 'per_person' | 'unknown';
+  unitPrice: number | null;
   minGuests?: number;
   includedGuests?: number;
   extraGuestRate?: number;
@@ -173,6 +173,7 @@ export interface QuoteAddOn {
   unitLabel?: string;
   minGuests?: number;
   eventId?: string;
+  packageId?: string;
   percentageBasis?: PercentageBasis;
   percentageTargetLabels?: string[];
   customBasisAmount?: number;
@@ -187,6 +188,7 @@ export interface QuoteUnconfirmedFee {
   mandatory: boolean;
   status: 'unconfirmed' | 'confirmed_amount' | 'waived_or_included';
   confirmedAmount?: number;
+  packageId?: string;
   evidenceId?: string;
 }
 

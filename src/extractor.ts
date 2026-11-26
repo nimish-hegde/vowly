@@ -102,6 +102,7 @@ Follow these rules strictly:
 5. Never invent a price, tax rate, gratuity rate, or currency:
    - If the source only uses "$" without explicitly stating CAD, CA$, USD, or US$, set "currency" to "UNKNOWN". Never guess currency from city names, taxes like HST, or venue names.
    - Never infer tax treatment from payment method (for example, cash does NOT imply tax-free).
+   - If the quote does NOT explicitly mention tax, HST, GST, PST, VAT, "tax included", or "no tax / tax-exempt", you MUST set "taxStatus": "unknown" and omit "taxPercent". NEVER assume "included" when tax is unstated.
    - Extract "taxPercent" (e.g., 13 for "13% HST") and "gratuityPercent" (e.g., 10 for "10% gratuity", 15 for "15% service charge") ONLY when stated. Set "gratuityBasis" ("food_subtotal", "entire_subtotal", "specific_line_items", or "unknown") when gratuity or a percentage service charge is mentioned.
    - Keep taxes (HST/GST/PST), gratuities, AND percentage service charges (e.g., "plus 15% service charge", "10% gratuity") ONLY in top-level "taxStatus"/"taxPercent" and "gratuityStatus"/"gratuityPercent"/"gratuityBasis". NEVER also add them as a separate "lineItems" entry. If gratuity is stated as extra/excluded without a percentage (e.g., "plus 13% HST and gratuity"), set "gratuityStatus": "excluded", "gratuityPercent": null, and add an "openQuestions" entry with "reason": "missing_price" asking for the gratuity percentage.
 6. Extract EVERY distinct stated charge, surcharge, third-party fee, or additional cost:

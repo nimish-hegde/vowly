@@ -550,3 +550,38 @@ test('UAT Photography conditional overtime: $900 (5 hrs) + $250/hr defaults to $
   const extendedCalc = calculateQuoteTotal(quote, { hours: 7 });
   assert.equal(extendedCalc.knownSubtotal, 1400); // $900 + 2 * $250
 });
+
+test('UAT Conditional hourly pricing ("Additional Hourly Pricing: $250/hr") with durationHours in inclusions defaults to $900', () => {
+  const quote: ExtractedQuote = {
+    vendorName: 'HSR Photography',
+    category: 'photographer',
+    events: ['Wedding'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    gratuityStatus: 'unknown',
+    lineItems: [
+      {
+        label: 'Wedding photography package',
+        pricingType: 'flat',
+        amount: 900,
+        chargeType: 'mandatory',
+        sourceExcerpt: '$900 package',
+      },
+      {
+        label: 'Additional Hourly Pricing',
+        pricingType: 'per_hour',
+        amount: 250,
+        chargeType: 'conditional',
+        sourceExcerpt: 'Additional Hourly Pricing: $250/hr',
+      },
+    ],
+    inclusions: [{ name: 'Wedding coverage', durationHours: 5 }],
+    openQuestions: [],
+  };
+
+  const calc = calculateQuoteTotal(quote);
+  assert.equal(calc.knownSubtotal, 900);
+  assert.equal(calc.taxNotStated, true);
+  assert.equal(calc.isEstimateComplete, false);
+});

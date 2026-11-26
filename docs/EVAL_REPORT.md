@@ -353,3 +353,38 @@ Following manual UAT on PR #13, four real-world failure groups were fixed across
 - Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
 - Frontend safeguard & parity tests (`cd frontend && npm test`): **13/13 pass**
 - Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)
+
+
+---
+
+## 13. PR #13 Final Targeted Remediation Benchmark (Post-Codex & Founder UAT)
+
+Following Codex review on `eda6c4d` and founder manual UAT, four release blockers were resolved without expanding scope:
+1. **Codex Package Parity Findings (4/4 resolved):** Unified `mapBackendItem` mapping across ordinary `lineItems` and package-scoped `fees` so mandatory TBD package fees are preserved as package-scoped `unconfirmedFees`, unknown package prices stay `unitPrice: null` (`unresolvedPackagePrice: true`, blocking approval/booking), all hourly/percentage fee calculation parameters are preserved, and tax edits update the selected package's effective tax override.
+2. **Conditional Hourly Pricing (`"Additional Hourly Pricing: $250/hr"`):** Extended `OVERTIME_PATTERN` (`hourly`) and `findIncludedPackageHours` (`inclusions[].durationHours`) across backend and frontend, plus added a manual `"Conditional rate (0 hrs default)"` toggle in Quote Review.
+3. **Payment Schedule Propagation (`BookingModal`):** Replaced hardcoded deposit/balance dates and assumed 30-day offsets with `deriveBookingScheduleDefaults`, strictly prioritizing explicit extracted calendar dates (`August 13, 2027` -> `2027-08-13`), then extracted relative deadlines, then unresolved/TBD, while reconciling to the booked contract total and preserving existing `Paid` milestones.
+4. **Tax Grounding:** Reinforced `SYSTEM_PROMPT` Rule 5 so unmentioned tax always remains `taxStatus: "unknown"` (`'unspecified'`) and blocks booking until resolved.
+
+### Final Live Evaluation Results (66 Cases — `gemini-3.5-flash-lite`)
+
+- **Provider / Model:** `gemini` | Configured: `gemini-flash-lite-latest` | Resolved: `gemini-3.5-flash-lite`
+- **End-to-end success:** **66/66 (100.0%)** (`23/23 dev`, `6/6 regression`, `25/25 held-out`, `12/12 held-out-v2`)
+- **API availability:** 66/66 (100.0%) | **Schema validity:** 66/66 (100.0%) | **Parse errors:** 0
+- **Critical financial errors:** **0** | **Unsupported currency guesses:** **0** | **Release blockers:** **0**
+- **Latency:** `2,859 ms` avg incl. retries (`1,775 ms` excl. retries) | **Total retries:** 12 (HTTP 429)
+- **Token usage & cost:** `200,101` input / `27,488` output tokens | Est. paid cost: **$0.03101** (~**$0.000470** per successful extraction; `$0` on free tier)
+
+### Offline & Browser E2E UAT Verification
+
+- Backend unit tests (`npm test`): **51/51 pass**
+- Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
+- Frontend tests (`cd frontend && npm test`): **15/15 pass** | `npm run lint`: **0 errors** | `npm run build`: **Pass**
+- Browser E2E UAT (`http://localhost:3000/`, live Gemini on `:3001`):
+  - **HSR Photography:** Extracted `CAD $900.00` (`0` overtime hrs for `"Additional Hourly Pricing: $250/hr"`), showed `"Tax not stated — excluded from estimate."`, blocked booking in Vendor Drawer until resolved via `"Edit quote"`, and populated `BookingModal` with `$900` contract total, `$200` deposit (`Due upon signing / date TBD`, unpaid by default), and `$700` balance due `2027-08-13`.
+  - **Multi-Package Venue (`Palace Banquet Hall`):** Preserved both `Royal Package` and `Imperial Package`, blocked approval when unselected (`CAD $0.00`), and switched totals & package-scoped inclusions cleanly on selection.
+
+### Remaining Known Limitations (Non-Blocking for PR #13)
+
+- Free-tier Gemini API bursts can trigger HTTP 429 retries (12 retries across 66 sequential cases; all recovered cleanly via exponential backoff).
+- On some multi-package brochures mentioning gratuity without explicit basis wording, Gemini conservatively flags gratuity basis as needing user confirmation (safe fail-closed behavior; user confirms in 1 click).
+- Post-event actual overtime reconciliation and multi-installment (>2 milestone) custom schedule editing in `BookingModal` are deferred to the next milestone.

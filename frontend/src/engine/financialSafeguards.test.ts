@@ -6,10 +6,12 @@ import {
   calculateQuoteFinancials,
   calculateWorkspaceFinancials,
   DEFAULT_DEPOSIT_ALREADY_PAID,
+  deriveBookingScheduleDefaults,
   detectLegacyQuoteReviewReasons,
   getEffectiveQuoteDeliveryTerms,
   getEffectiveQuoteInclusions,
   getVendorBookingEligibility,
+  normalizeIsoDate,
   resolveRelativeDeadlineDate,
 } from './financialCalculator.ts';
 import {
@@ -1011,4 +1013,194 @@ test('UAT Legacy saved quotes with known calculation bugs are flagged and blocke
   const activeAfterEdit = updatedVendor.quotes.find((q) => q.id === updatedVendor.activeQuoteId)!;
   assert.equal(activeAfterEdit.revisions?.length, 1);
   assert.equal(activeAfterEdit.revisions?.[0].summary, 'Corrected line item after phone call');
+});
+
+test('Codex P1/P2 fixes: package unknown fees, unknown package base price, package fee parameters, and package tax override', () => {
+  const ws = createDemoWorkspace();
+  const mapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-codex-pkg',
+        draftQuote: {
+          vendorName: 'Emerald Hall',
+          category: 'venue',
+          events: ['Reception'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          gratuityStatus: 'included',
+          selectedPackageId: null,
+          packages: [
+            {
+              id: 'pkg-tbd-fee',
+              name: 'Standard Package',
+              pricingType: 'flat',
+              amount: 1000,
+              taxStatus: 'unknown',
+              fees: [
+                {
+                  label: 'Mandatory setup fee',
+                  pricingType: 'unknown',
+                  amount: null,
+                  chargeType: 'mandatory',
+                  sourceExcerpt: 'Setup fee TBD',
+                },
+                {
+                  label: 'Lighting technician',
+                  pricingType: 'per_hour',
+                  amount: 100,
+                  hours: 4,
+                  chargeType: 'mandatory',
+                  sourceExcerpt: '4 hours at $100/hr',
+                },
+                {
+                  label: 'Admin surcharge',
+                  pricingType: 'percentage',
+                  amount: 10,
+                  percentageRate: 10,
+                  percentageBasis: 'entire_subtotal',
+                  chargeType: 'mandatory',
+                  sourceExcerpt: '10% admin surcharge on subtotal',
+                },
+              ],
+              sourceExcerpt: 'Standard Package $1,000',
+            },
+            {
+              id: 'pkg-unknown-price',
+              name: 'Custom Luxury Package',
+              pricingType: 'unknown',
+              amount: null,
+              sourceExcerpt: 'Custom Luxury Package pricing on request',
+            },
+          ],
+          lineItems: [],
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Email', rawText: 'Package brochure' }
+  );
+
+  // 1. Selecting Standard Package preserves mandatory TBD fee (blocks approval), preserves 4h*$100=$400 + 10%=$140 -> $1,540
+  const stdQuote: Quote = { ...mapped.quote, selectedPackageId: 'pkg-tbd-fee' };
+  const stdCalc = calculateQuoteFinancials(stdQuote, ws.events, []);
+  assert.equal(stdCalc.unresolvedMandatoryFeesCount, 1);
+  assert.equal(stdCalc.canApprove, false);
+  assert.equal(stdCalc.preTaxTotal, 1540); // $1,000 + $400 + 10% of $1,400 ($140)
+  assert.equal(stdCalc.taxNotStated, true); // package-level taxStatus: 'unknown'
+
+  // Updating selected package tax override clears taxNotStated
+  const taxResolvedQuote: Quote = {
+    ...stdQuote,
+    taxHandling: 'excluded_plus_hst',
+    packages: stdQuote.packages?.map((p) =>
+      p.id === 'pkg-tbd-fee' ? { ...p, taxHandling: 'excluded_plus_hst' } : p
+    ),
+  };
+  const taxResolvedCalc = calculateQuoteFinancials(taxResolvedQuote, ws.events, []);
+  assert.equal(taxResolvedCalc.taxNotStated, false);
+  assert.equal(taxResolvedCalc.taxRate, 0.13);
+
+  // 2. Selecting Custom Luxury Package preserves unknown price (NOT $0 complete/approvable)
+  const unkQuote: Quote = { ...mapped.quote, selectedPackageId: 'pkg-unknown-price' };
+  const unkCalc = calculateQuoteFinancials(unkQuote, ws.events, []);
+  assert.equal(unkCalc.unresolvedPackagePrice, true);
+  assert.equal(unkCalc.canApprove, false);
+  assert.equal(unkCalc.isEstimateComplete, false);
+  assert.equal(unkCalc.unresolvedMandatoryFeesCount, 0); // Standard Package's TBD fee does not bleed into Custom Luxury
+});
+
+test('UAT HSR Photography: "Additional Hourly Pricing: $250/hr" defaults to $900 and BookingModal schedule uses explicit August 13, 2027 date', () => {
+  const ws = createDemoWorkspace();
+  const mapped = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 's-hsr-real',
+        draftQuote: {
+          vendorName: 'HSR Photography',
+          category: 'photographer',
+          events: ['Engagement'],
+          quoteKind: 'initial',
+          currency: 'CAD',
+          taxStatus: 'unknown',
+          gratuityStatus: 'unknown',
+          lineItems: [
+            {
+              label: 'Photography Package',
+              pricingType: 'flat',
+              amount: 900,
+              chargeType: 'mandatory',
+              sourceExcerpt: '$900 package',
+            },
+            {
+              label: 'Additional Hourly Pricing',
+              pricingType: 'per_hour',
+              amount: 250,
+              chargeType: 'conditional',
+              sourceExcerpt: 'Additional Hourly Pricing: $250/hr',
+            },
+          ],
+          inclusions: [{ name: 'Wedding coverage', durationHours: 5 }],
+          paymentTerms: {
+            depositAmount: 200,
+            methodRule: 'etransfer',
+            scheduleNotes: '$200 deposit due upon signing, $700 balance due August 13, 2027',
+            milestones: [
+              { label: 'Deposit', amount: 200, relativeDeadlineText: 'Due upon signing' },
+              { label: 'Remaining balance', amount: 700, dueDate: 'August 13, 2027' },
+            ],
+          },
+          openQuestions: [],
+        },
+      },
+    },
+    { sourceType: 'screenshot', sourceChannel: 'Screenshot', rawText: 'HSR Photography screenshot' }
+  );
+
+  // Conditional "Additional Hourly Pricing: $250/hr" defaults to 0 hrs -> $900 subtotal
+  const calc = calculateQuoteFinancials(mapped.quote, ws.events, []);
+  assert.equal(calc.preTaxTotal, 900);
+  assert.equal(mapped.quote.lineItems[1].isConditionalOvertime, true);
+  assert.equal(mapped.quote.lineItems[1].quantity, 0);
+
+  // Explicit date parsing + Booking schedule propagation (NEVER July 14, 2027 or hardcoded dates)
+  assert.equal(normalizeIsoDate('August 13, 2027'), '2027-08-13');
+  const schedule = deriveBookingScheduleDefaults(mapped.quote, ws.events, [ws.events[0].id], 900);
+  assert.equal(schedule.depositAmount, 200);
+  assert.equal(schedule.depositHasKnownDate, false);
+  assert.equal(schedule.depositRelativeLabel, 'Due upon signing');
+  assert.equal(schedule.balanceHasKnownDate, true);
+  assert.equal(schedule.balanceDueDate, '2027-08-13');
+
+  // Reconciles $200 + $700 = $900 and defaults to unpaid
+  const milestones = buildBookingMilestones({
+    contractTotal: 900,
+    depositAmount: schedule.depositAmount,
+    depositHasKnownDate: schedule.depositHasKnownDate,
+    depositDate: schedule.depositDate,
+    depositRelativeLabel: schedule.depositRelativeLabel,
+    depositPayer: 'Meera & Kabir',
+    coupleNames: 'Meera & Kabir',
+    balanceHasKnownDate: schedule.balanceHasKnownDate,
+    balanceDueDate: schedule.balanceDueDate,
+    balanceRelativeLabel: schedule.balanceRelativeLabel,
+    balancePayer: 'Unassigned',
+  });
+  assert.equal(milestones.length, 2);
+  assert.equal(milestones[0].amount + milestones[1].amount, 900);
+  assert.notEqual(milestones[0].status, 'Paid');
+  assert.equal(milestones[1].dueDate, '2027-08-13');
+
+  // Quote with no stated dates leaves both deadlines unresolved (no hardcoded 2026-11-24 or 2027-07-15)
+  const noDatesSchedule = deriveBookingScheduleDefaults(
+    makeCleanQuote({ paymentMilestones: [], depositAmount: undefined, depositPercent: undefined }),
+    ws.events,
+    [ws.events[0].id],
+    1000
+  );
+  assert.equal(noDatesSchedule.depositHasKnownDate, false);
+  assert.equal(noDatesSchedule.depositDate, '');
+  assert.equal(noDatesSchedule.balanceHasKnownDate, false);
+  assert.equal(noDatesSchedule.balanceDueDate, '');
 });

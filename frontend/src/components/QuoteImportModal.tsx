@@ -173,6 +173,8 @@ export function QuoteImportModal({
   const [newInclusionText, setNewInclusionText] = useState('');
   const [newDeliveryTermText, setNewDeliveryTermText] = useState('');
   const [editingBookedVendor, setEditingBookedVendor] = useState(false);
+  const [pkgPriceInput, setPkgPriceInput] = useState('');
+  const [pkgPriceModel, setPkgPriceModel] = useState<'flat' | 'per_person'>('flat');
   const [onboardingEventName, setOnboardingEventName] = useState('');
   const [onboardingPlannedGuests, setOnboardingPlannedGuests] = useState('');
   const [extractionMetaLabel, setExtractionMetaLabel] = useState<string | null>(null);
@@ -519,6 +521,27 @@ export function QuoteImportModal({
     setDraftQuote((prev) => (prev ? updater(prev) : prev));
   };
 
+  const updateEffectiveTaxHandling = (nextTax: TaxHandling, nextPercent?: number) => {
+    updateQuote((q) => {
+      const updatedPackages = q.packages?.map((pkg) => {
+        if (q.selectedPackageId && pkg.id === q.selectedPackageId && pkg.taxHandling !== undefined) {
+          return {
+            ...pkg,
+            taxHandling: nextTax,
+            taxPercent: nextPercent !== undefined ? nextPercent : pkg.taxPercent,
+          };
+        }
+        return pkg;
+      });
+      return {
+        ...q,
+        taxHandling: nextTax,
+        taxPercent: nextPercent !== undefined ? nextPercent : q.taxPercent,
+        packages: updatedPackages,
+      };
+    });
+  };
+
   const handleSave = (asDraft: boolean) => {
     if (!draftQuote) return;
     if (!asDraft && !canApproveWithVendor) return;
@@ -606,6 +629,7 @@ export function QuoteImportModal({
   const needsAttentionCount =
     (isVendorNameValid && !vendorNamePromptOpen ? 0 : 1) +
     (calc?.unresolvedPackageSelection ? 1 : 0) +
+    (calc?.unresolvedPackagePrice ? 1 : 0) +
     (calc?.isCurrencyUnknown ? 1 : 0) +
     (calc?.gratuityUnresolved ? 1 : 0) +
     (calc?.unresolvedMandatoryFeesCount ?? 0) +
@@ -1176,8 +1200,9 @@ export function QuoteImportModal({
                                 {pkg.name}
                               </div>
                               <div className="font-num text-sm font-semibold text-[#1F3A2B]">
-                                {formatShortCad(pkg.unitPrice)}
-                                {pkg.pricingModel === 'per_person' ? '/person' : ' flat'}
+                                {pkg.unitPrice !== null
+                                  ? `${formatShortCad(pkg.unitPrice)}${pkg.pricingModel === 'per_person' ? '/person' : ' flat'}`
+                                  : 'Price TBD'}
                               </div>
                               <div className="text-[11px] text-[#6B655C]">
                                 {pkg.minGuests ? `Min ${pkg.minGuests} guests` : 'No minimum stated'}
@@ -1335,8 +1360,60 @@ export function QuoteImportModal({
                       </div>
                     ))}
 
-                    {/* Unconfirmed Mandatory Fees */}
-                    {draftQuote.unconfirmedFees.map((fee) => (
+                    {/* Unresolved Selected Package Base Price */}
+                    {calc.unresolvedPackagePrice && draftQuote.selectedPackageId && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Confirm base price for {calc.selectedPackageName ?? 'selected package'}
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          This package’s price wasn’t stated in the quote. Enter the confirmed price to approve, or Save as Draft.
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={pkgPriceModel}
+                            onChange={(e) => setPkgPriceModel(e.target.value as 'flat' | 'per_person')}
+                            className="rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 text-xs"
+                          >
+                            <option value="flat">Fixed price</option>
+                            <option value="per_person">Per guest</option>
+                          </select>
+                          <input
+                            type="number"
+                            placeholder="Confirmed amount"
+                            value={pkgPriceInput}
+                            onChange={(e) => setPkgPriceInput(e.target.value)}
+                            className="w-36 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 font-num text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const parsed = parseFloat(pkgPriceInput);
+                              if (Number.isNaN(parsed) || parsed < 0) return;
+                              updateQuote((q) => ({
+                                ...q,
+                                packages: q.packages?.map((p) =>
+                                  p.id === q.selectedPackageId
+                                    ? { ...p, pricingModel: pkgPriceModel, unitPrice: parsed }
+                                    : p
+                                ),
+                              }));
+                              setPkgPriceInput('');
+                            }}
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#486755] text-white cursor-pointer"
+                          >
+                            Confirm package price
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Unconfirmed Mandatory Fees (quote-wide + selected package) */}
+                    {draftQuote.unconfirmedFees
+                      .filter(
+                        (fee) => !fee.packageId || fee.packageId === draftQuote.selectedPackageId
+                      )
+                      .map((fee) => (
                       <div
                         key={fee.id}
                         onClick={() =>
@@ -1641,11 +1718,10 @@ export function QuoteImportModal({
                             <button
                               type="button"
                               onClick={() =>
-                                updateQuote((q) => ({
-                                  ...q,
-                                  taxHandling: 'unspecified_ontario_assumed',
-                                  taxPercent: q.taxPercent ?? 13,
-                                }))
+                                updateEffectiveTaxHandling(
+                                  'unspecified_ontario_assumed',
+                                  draftQuote.taxPercent ?? 13
+                                )
                               }
                               className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
                             >
@@ -1653,18 +1729,14 @@ export function QuoteImportModal({
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
-                                updateQuote((q) => ({ ...q, taxHandling: 'included' }))
-                              }
+                              onClick={() => updateEffectiveTaxHandling('included')}
                               className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
                             >
                               Tax included
                             </button>
                             <button
                               type="button"
-                              onClick={() =>
-                                updateQuote((q) => ({ ...q, taxHandling: 'tax_exempt' }))
-                              }
+                              onClick={() => updateEffectiveTaxHandling('tax_exempt')}
                               className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
                             >
                               Confirmed no tax charged
@@ -1707,12 +1779,9 @@ export function QuoteImportModal({
                             Tax handling
                           </label>
                           <select
-                            value={draftQuote.taxHandling}
+                            value={calc.effectiveTaxHandling}
                             onChange={(e) =>
-                              updateQuote((q) => ({
-                                ...q,
-                                taxHandling: e.target.value as TaxHandling,
-                              }))
+                              updateEffectiveTaxHandling(e.target.value as TaxHandling)
                             }
                             className="w-full rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
                           >
@@ -1943,26 +2012,55 @@ export function QuoteImportModal({
                                 </label>
                               )}
                               {item.pricingModel === 'hourly' && (
-                                <label className="inline-flex items-center gap-1.5">
-                                  <span>Hours:</span>
-                                  <input
-                                    type="number"
-                                    min="0"
-                                    value={item.quantity ?? (item.isConditionalOvertime ? 0 : 1)}
-                                    onChange={(e) => {
-                                      const val = parseFloat(e.target.value);
-                                      updateQuote((q) => ({
-                                        ...q,
-                                        lineItems: q.lineItems.map((li) =>
-                                          li.id === item.id
-                                            ? { ...li, quantity: Number.isNaN(val) ? 0 : val }
-                                            : li
-                                        ),
-                                      }));
-                                    }}
-                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
-                                  />
-                                </label>
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <label className="inline-flex items-center gap-1.5">
+                                    <span>Planned hours:</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={item.quantity ?? (item.isConditionalOvertime ? 0 : 1)}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        updateQuote((q) => ({
+                                          ...q,
+                                          lineItems: q.lineItems.map((li) =>
+                                            li.id === item.id
+                                              ? { ...li, quantity: Number.isNaN(val) ? 0 : val }
+                                              : li
+                                          ),
+                                        }));
+                                      }}
+                                      className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                    />
+                                  </label>
+                                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-[#22201D]">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(item.isConditionalOvertime)}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        updateQuote((q) => ({
+                                          ...q,
+                                          lineItems: q.lineItems.map((li) =>
+                                            li.id === item.id
+                                              ? {
+                                                  ...li,
+                                                  isConditionalOvertime: checked || undefined,
+                                                  quantity: checked
+                                                    ? 0
+                                                    : li.quantity && li.quantity > 0
+                                                      ? li.quantity
+                                                      : 1,
+                                                }
+                                              : li
+                                          ),
+                                        }));
+                                      }}
+                                      className="accent-[#486755]"
+                                    />
+                                    <span>Conditional rate (0 hrs default)</span>
+                                  </label>
+                                </div>
                               )}
                             </div>
                             <button

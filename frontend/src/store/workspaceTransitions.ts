@@ -319,6 +319,10 @@ export function applyConfirmBooking(
         ? linkedEvents[0].name
         : `Shared (${linkedEvents.length} events)`;
 
+  const existingPaidForVendor = ws.payments.filter(
+    (p) => p.vendorId === input.vendorId && p.status === 'Paid'
+  );
+
   const createdMilestones: PaymentMilestone[] = input.milestones.map((m, idx) => ({
     ...m,
     id: `pay-${input.vendorId}-${ts}-${idx}`,
@@ -357,6 +361,7 @@ export function applyConfirmBooking(
       }),
       payments: [
         ...ws.payments.filter((p) => p.vendorId !== input.vendorId),
+        ...existingPaidForVendor,
         ...createdMilestones,
       ],
     },

@@ -69,6 +69,7 @@ export interface QuoteCalculationResult {
   appliedMinGuests: number | null;
   capacityExceeded: boolean;
   unresolvedPackageSelection: boolean;
+  unresolvedPackagePrice: boolean;
   selectedPackageName?: string;
   legacyReviewReasons: string[];
   unresolvedMandatoryFeesCount: number;
@@ -402,6 +403,7 @@ function isRedundantExtraGuestLineItem(
   if (
     selectedPackage &&
     selectedPackage.pricingModel === 'per_person' &&
+    selectedPackage.unitPrice !== null &&
     Math.abs(selectedPackage.unitPrice - item.unitPrice) < 0.01
   ) {
     return true;
@@ -411,6 +413,7 @@ function isRedundantExtraGuestLineItem(
     (quote.packages ?? []).some(
       (p) =>
         p.pricingModel === 'per_person' &&
+        p.unitPrice !== null &&
         Math.abs(p.unitPrice - item.unitPrice) < 0.01
     )
   ) {
@@ -534,37 +537,50 @@ export function calculateQuoteFinancials(
 
   const { hasMultiplePackages, selectedPackage } = getSelectedPackageOption(quote);
   const unresolvedPackageSelection = hasMultiplePackages && !selectedPackage;
+  const unresolvedPackagePrice = Boolean(
+    selectedPackage &&
+      (selectedPackage.pricingModel === 'unknown' || selectedPackage.unitPrice === null)
+  );
 
   const activeItems: QuoteLineItem[] = [];
   if (selectedPackage) {
-    activeItems.push({
-      id: `pkg-active-${selectedPackage.id}`,
-      label: selectedPackage.name,
-      pricingModel: selectedPackage.pricingModel,
-      unitPrice: selectedPackage.unitPrice,
-      minGuests: selectedPackage.minGuests,
-      isFoodItem: selectedPackage.isFoodItem,
-      eventId: vendorEventIds[0],
-      evidenceId: selectedPackage.evidenceId,
-      pageReference: selectedPackage.pageReference,
-    });
-
-    if (
-      selectedPackage.pricingModel === 'flat' &&
-      selectedPackage.extraGuestRate !== undefined &&
-      selectedPackage.extraGuestRate > 0 &&
-      (selectedPackage.includedGuests !== undefined || selectedPackage.minGuests !== undefined)
-    ) {
+    if (unresolvedPackagePrice) {
+      lineItemBreakdowns.push({
+        id: `pkg-active-${selectedPackage.id}`,
+        label: selectedPackage.name,
+        amount: null,
+        formulaText: 'Base package price unconfirmed (TBD)',
+      });
+    } else {
       activeItems.push({
-        id: `pkg-extra-${selectedPackage.id}`,
-        label: `${selectedPackage.name} extra guests`,
-        pricingModel: 'per_extra_guest',
-        unitPrice: selectedPackage.extraGuestRate,
-        guestThreshold: selectedPackage.includedGuests ?? selectedPackage.minGuests,
+        id: `pkg-active-${selectedPackage.id}`,
+        label: selectedPackage.name,
+        pricingModel: selectedPackage.pricingModel as 'flat' | 'per_person',
+        unitPrice: selectedPackage.unitPrice!,
+        minGuests: selectedPackage.minGuests,
         isFoodItem: selectedPackage.isFoodItem,
         eventId: vendorEventIds[0],
         evidenceId: selectedPackage.evidenceId,
+        pageReference: selectedPackage.pageReference,
       });
+
+      if (
+        selectedPackage.pricingModel === 'flat' &&
+        selectedPackage.extraGuestRate !== undefined &&
+        selectedPackage.extraGuestRate > 0 &&
+        (selectedPackage.includedGuests !== undefined || selectedPackage.minGuests !== undefined)
+      ) {
+        activeItems.push({
+          id: `pkg-extra-${selectedPackage.id}`,
+          label: `${selectedPackage.name} extra guests`,
+          pricingModel: 'per_extra_guest',
+          unitPrice: selectedPackage.extraGuestRate,
+          guestThreshold: selectedPackage.includedGuests ?? selectedPackage.minGuests,
+          isFoodItem: selectedPackage.isFoodItem,
+          eventId: vendorEventIds[0],
+          evidenceId: selectedPackage.evidenceId,
+        });
+      }
     }
 
     if (selectedPackage.fees && selectedPackage.fees.length > 0) {
@@ -583,6 +599,7 @@ export function calculateQuoteFinancials(
     if (
       selectedPackage &&
       !hasMultiplePackages &&
+      selectedPackage.unitPrice !== null &&
       li.pricingModel === selectedPackage.pricingModel &&
       Math.abs(li.unitPrice - selectedPackage.unitPrice) < 0.01
     ) {
@@ -704,9 +721,13 @@ export function calculateQuoteFinancials(
   }
 
   // Resolve confirmed extra fees BEFORE evaluating whole-subtotal percentage charges
+  // Only include fees that are quote-wide OR scoped to the currently selected package
   let confirmedExtraFeesPreTax = 0;
   let unresolvedMandatoryFeesCount = 0;
   for (const fee of quote.unconfirmedFees) {
+    if (fee.packageId && (!selectedPackage || fee.packageId !== selectedPackage.id)) {
+      continue;
+    }
     if (fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number') {
       confirmedExtraFeesPreTax += fee.confirmedAmount;
       resolvedBaseItems.push({
@@ -747,9 +768,12 @@ export function calculateQuoteFinancials(
     ? 'Tax listed in line items'
     : getTaxStatusLabel(effectiveTaxHandling, taxRate);
 
-  // Evaluate optional add-ons using their preserved pricing models (per_person, hourly, guest_ratio, percentage, flat)
+  // Evaluate optional add-ons using their preserved pricing models (filtered by selected package if scoped)
   let selectedAddOnsPreTax = 0;
-  const addOnImpacts = quote.addOns.map((addon) => {
+  const activeAddOns = quote.addOns.filter(
+    (a) => !a.packageId || (selectedPackage && a.packageId === selectedPackage.id)
+  );
+  const addOnImpacts = activeAddOns.map((addon) => {
     const model = addon.pricingModel ?? 'flat';
     let computedPreTax = addon.pricePreTax;
     if (model === 'percentage') {
@@ -917,6 +941,11 @@ export function calculateQuoteFinancials(
       'Select one package option before approving this quote, or Save as Draft to keep all options.'
     );
   }
+  if (unresolvedPackagePrice && selectedPackage) {
+    blockingReasons.push(
+      `Confirm the base price for "${selectedPackage.name}" before approving, or Save as Draft.`
+    );
+  }
   if (isCurrencyUnknown) {
     blockingReasons.push('Confirm currency (CAD or USD) before approving.');
   }
@@ -1007,6 +1036,7 @@ export function calculateQuoteFinancials(
     appliedMinGuests,
     capacityExceeded,
     unresolvedPackageSelection,
+    unresolvedPackagePrice,
     selectedPackageName: selectedPackage?.name,
     legacyReviewReasons,
     unresolvedMandatoryFeesCount,
@@ -1063,6 +1093,11 @@ export function getVendorBookingEligibility(
     if (calc.unresolvedPackageSelection) {
       blockingReasons.push('Select one package option before confirming a booking.');
     }
+    if (calc.unresolvedPackagePrice) {
+      blockingReasons.push(
+        `Confirm the base price for "${calc.selectedPackageName ?? 'selected package'}" before booking.`
+      );
+    }
     if (calc.isCurrencyUnknown) {
       blockingReasons.push('Confirm quote currency (CAD or USD) before booking.');
     }
@@ -1112,11 +1147,218 @@ export function getVendorBookingEligibility(
 
 export const DEFAULT_DEPOSIT_ALREADY_PAID = false;
 
+const MONTH_MAP: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+/**
+ * Parses an ISO date ("2027-08-13") or human-readable date ("August 13, 2027",
+ * "Aug 13, 2027", "13 August 2027") into a canonical YYYY-MM-DD string.
+ * Returns null if the input is empty or not a concrete calendar date.
+ */
+export function normalizeIsoDate(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  const slashMatch = trimmed.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (slashMatch) {
+    const y = Number(slashMatch[1]);
+    const m = Number(slashMatch[2]);
+    const d = Number(slashMatch[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  // "August 13, 2027" or "Aug 13 2027"
+  const mdyMatch = trimmed.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/);
+  if (mdyMatch) {
+    const m = MONTH_MAP[mdyMatch[1].toLowerCase()];
+    const d = Number(mdyMatch[2]);
+    const y = Number(mdyMatch[3]);
+    if (m && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  // "13 August 2027"
+  const dmyMatch = trimmed.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})$/);
+  if (dmyMatch) {
+    const d = Number(dmyMatch[1]);
+    const m = MONTH_MAP[dmyMatch[2].toLowerCase()];
+    const y = Number(dmyMatch[3]);
+    if (m && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
+export interface BookingScheduleDefaults {
+  depositAmount: number;
+  depositHasKnownDate: boolean;
+  depositDate: string;
+  depositRelativeLabel: string;
+  balanceHasKnownDate: boolean;
+  balanceDueDate: string;
+  balanceRelativeLabel: string;
+}
+
+/**
+ * Derives booking schedule defaults directly from the approved quote (or its
+ * selected package's payment terms), strictly prioritizing:
+ *   1) Explicit extracted calendar dates (e.g., "August 13, 2027" -> "2027-08-13"),
+ *   2) Explicit extracted relative deadlines resolved against the event date,
+ *   3) Unresolved / TBD (never fabricating hardcoded dates or assumed 30-day offsets).
+ */
+export function deriveBookingScheduleDefaults(
+  quote: Quote | undefined,
+  events: WeddingEvent[],
+  vendorEventIds: string[],
+  contractTotal: number
+): BookingScheduleDefaults {
+  const { selectedPackage } = quote ? getSelectedPackageOption(quote) : { selectedPackage: undefined };
+  const milestones =
+    selectedPackage?.paymentMilestones && selectedPackage.paymentMilestones.length > 0
+      ? selectedPackage.paymentMilestones
+      : quote?.paymentMilestones ?? [];
+
+  const primaryEvent = events.find((e) => vendorEventIds.includes(e.id));
+
+  const depositMilestone = milestones.find((m) =>
+    /\b(deposit|retainer|booking|signing|initial)\b/i.test(m.label)
+  );
+  const balanceMilestone = milestones.find(
+    (m) =>
+      m !== depositMilestone &&
+      /\b(balance|remaining|final|rest|due)\b/i.test(m.label)
+  ) ?? (milestones.length >= 2 ? milestones[milestones.length - 1] : undefined);
+
+  // Deposit amount: explicit milestone amount/percent -> quote depositAmount/depositPercent -> 0
+  let depositAmount = 0;
+  if (depositMilestone?.amount !== undefined && depositMilestone.amount > 0) {
+    depositAmount = depositMilestone.amount;
+  } else if (depositMilestone?.percent !== undefined && depositMilestone.percent > 0 && contractTotal > 0) {
+    depositAmount = Math.round(contractTotal * (depositMilestone.percent / 100) * 100) / 100;
+  } else if (quote?.depositAmount !== undefined && quote.depositAmount > 0) {
+    depositAmount = quote.depositAmount;
+  } else if (quote?.depositPercent !== undefined && quote.depositPercent > 0 && contractTotal > 0) {
+    depositAmount = Math.round(contractTotal * (quote.depositPercent / 100) * 100) / 100;
+  }
+  depositAmount = Math.min(Math.max(0, contractTotal), Math.max(0, depositAmount));
+
+  // Deposit due date: explicit dueDate -> relativeDaysBeforeEvent -> relativeDeadlineText -> unresolved
+  let depositHasKnownDate = false;
+  let depositDate = '';
+  let depositRelativeLabel = 'Due upon signing / date TBD';
+  const explicitDepositIso = normalizeIsoDate(depositMilestone?.dueDate);
+  if (explicitDepositIso) {
+    depositHasKnownDate = true;
+    depositDate = explicitDepositIso;
+    depositRelativeLabel = '';
+  } else if (depositMilestone?.relativeDaysBeforeEvent !== undefined) {
+    const computed = resolveRelativeDeadlineDate(
+      primaryEvent?.date,
+      depositMilestone.relativeDaysBeforeEvent
+    );
+    if (computed) {
+      depositHasKnownDate = true;
+      depositDate = computed;
+      depositRelativeLabel = '';
+    } else {
+      depositRelativeLabel =
+        depositMilestone.relativeDeadlineText ||
+        `${depositMilestone.relativeDaysBeforeEvent} days prior to ${primaryEvent?.name ?? 'event'} (date TBD)`;
+    }
+  } else if (depositMilestone?.relativeDeadlineText) {
+    depositRelativeLabel = depositMilestone.relativeDeadlineText;
+  } else if (depositMilestone?.dueDate && depositMilestone.dueDate.trim()) {
+    depositRelativeLabel = depositMilestone.dueDate.trim();
+  }
+
+  // Balance due date: explicit dueDate -> relativeDaysBeforeEvent -> relativeDeadlineText -> unresolved
+  let balanceHasKnownDate = false;
+  let balanceDueDate = '';
+  let balanceRelativeLabel = 'Balance due date TBD';
+  const explicitBalanceIso = normalizeIsoDate(balanceMilestone?.dueDate);
+  if (explicitBalanceIso) {
+    balanceHasKnownDate = true;
+    balanceDueDate = explicitBalanceIso;
+    balanceRelativeLabel = '';
+  } else if (balanceMilestone?.relativeDaysBeforeEvent !== undefined) {
+    const computed = resolveRelativeDeadlineDate(
+      primaryEvent?.date,
+      balanceMilestone.relativeDaysBeforeEvent
+    );
+    if (computed) {
+      balanceHasKnownDate = true;
+      balanceDueDate = computed;
+      balanceRelativeLabel = '';
+    } else {
+      balanceRelativeLabel =
+        balanceMilestone.relativeDeadlineText ||
+        `${balanceMilestone.relativeDaysBeforeEvent} days prior to ${primaryEvent?.name ?? 'event'} (date TBD)`;
+    }
+  } else if (balanceMilestone?.relativeDeadlineText) {
+    balanceRelativeLabel = balanceMilestone.relativeDeadlineText;
+  } else if (balanceMilestone?.dueDate && balanceMilestone.dueDate.trim()) {
+    balanceRelativeLabel = balanceMilestone.dueDate.trim();
+  }
+
+  return {
+    depositAmount,
+    depositHasKnownDate,
+    depositDate,
+    depositRelativeLabel,
+    balanceHasKnownDate,
+    balanceDueDate,
+    balanceRelativeLabel,
+  };
+}
+
 export interface BuildBookingMilestonesInput {
   contractTotal: number;
+  existingPaidAmount?: number;
   depositAmount: number;
   depositAlreadyPaid?: boolean;
+  depositHasKnownDate?: boolean;
   depositDate: string;
+  depositRelativeLabel?: string;
   depositPayer: string;
   coupleNames: string;
   balanceHasKnownDate: boolean;
@@ -1130,10 +1372,13 @@ export function buildBookingMilestones(
 ): Array<
   Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
 > {
-  const totalNum = Math.max(0, input.contractTotal);
-  const depositNum = Math.min(totalNum, Math.max(0, input.depositAmount));
-  const remainingNum = Math.max(0, Math.round((totalNum - depositNum) * 100) / 100);
+  const alreadyPaid = Math.max(0, input.existingPaidAmount ?? 0);
+  const schedulableTotal = Math.max(0, Math.round((input.contractTotal - alreadyPaid) * 100) / 100);
+  const depositNum = Math.min(schedulableTotal, Math.max(0, input.depositAmount));
+  const remainingNum = Math.max(0, Math.round((schedulableTotal - depositNum) * 100) / 100);
   const depositPaid = input.depositAlreadyPaid ?? DEFAULT_DEPOSIT_ALREADY_PAID;
+  const depositKnownDate =
+    input.depositHasKnownDate !== undefined ? input.depositHasKnownDate : Boolean(input.depositDate);
 
   const milestones: Array<
     Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
@@ -1143,30 +1388,35 @@ export function buildBookingMilestones(
     milestones.push({
       label: 'Booking Deposit',
       amount: depositNum,
-      dueDate: input.depositDate || null,
-      status: depositPaid ? 'Paid' : 'Upcoming',
-      paidDate: depositPaid ? input.depositDate : undefined,
+      dueDate: depositKnownDate ? input.depositDate || null : null,
+      relativeDueLabel:
+        !depositPaid && !depositKnownDate
+          ? input.depositRelativeLabel || 'Due upon signing'
+          : undefined,
+      status: depositPaid ? 'Paid' : depositKnownDate && input.depositDate ? 'Upcoming' : 'Date TBD',
+      paidDate: depositPaid ? input.depositDate || new Date().toISOString().slice(0, 10) : undefined,
       payer: input.depositPayer,
       paidBy: depositPaid
         ? input.depositPayer === 'Unassigned'
           ? input.coupleNames
           : input.depositPayer
         : undefined,
-      reminderEnabled: !depositPaid && Boolean(input.depositDate),
+      reminderEnabled: !depositPaid && depositKnownDate && Boolean(input.depositDate),
     });
   }
 
   if (remainingNum > 0) {
+    const balanceKnown = input.balanceHasKnownDate && Boolean(input.balanceDueDate);
     milestones.push({
       label: 'Final Balance',
       amount: remainingNum,
-      dueDate: input.balanceHasKnownDate ? input.balanceDueDate || null : null,
-      relativeDueLabel: input.balanceHasKnownDate
+      dueDate: balanceKnown ? input.balanceDueDate : null,
+      relativeDueLabel: balanceKnown
         ? undefined
-        : input.balanceRelativeLabel,
-      status: input.balanceHasKnownDate ? 'Upcoming' : 'Date TBD',
+        : input.balanceRelativeLabel || 'Balance due date TBD',
+      status: balanceKnown ? 'Upcoming' : 'Date TBD',
       payer: input.balancePayer,
-      reminderEnabled: input.balanceHasKnownDate && Boolean(input.balanceDueDate),
+      reminderEnabled: balanceKnown,
     });
   }
 

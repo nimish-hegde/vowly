@@ -209,7 +209,7 @@ const WORD_TO_HOURS: Record<string, number> = {
 };
 
 const OVERTIME_PATTERN =
-  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hourly|hours?|hrs?)\b|\b(hourly|hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
 
 function parseHoursFromText(text: string): number | undefined {
   const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
@@ -347,6 +347,13 @@ function findIncludedPackageHours(
   if (hasSiblingFlat) {
     const allInclusions = [...(selectedPackage?.inclusions ?? []), ...(quote.inclusions ?? [])];
     for (const inc of allInclusions) {
+      if (
+        inc.durationHours !== undefined &&
+        inc.durationHours > 0 &&
+        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
+      ) {
+        return inc.durationHours;
+      }
       if (
         inc.quantity !== undefined &&
         inc.quantity > 0 &&

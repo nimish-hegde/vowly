@@ -1046,10 +1046,19 @@ function parseHoursFromText(text: string): number | undefined {
 }
 
 const OVERTIME_PATTERN =
-  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hourly|hours?|hrs?)\b|\b(hourly|hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
 
-function findIncludedHoursFromBackendQuote(bq: BackendExtractedQuote, excludeIdx: number): number | undefined {
-  let hasSiblingFlat = Boolean(bq.packages?.some((p) => p.pricingType === 'flat'));
+function findIncludedHoursFromBackendQuote(
+  bq: BackendExtractedQuote,
+  excludeIdx: number,
+  pkgContext?: BackendPackageOption
+): number | undefined {
+  if (pkgContext?.hours !== undefined && pkgContext.hours > 0) {
+    return pkgContext.hours;
+  }
+  let hasSiblingFlat = Boolean(
+    pkgContext?.pricingType === 'flat' || bq.packages?.some((p) => p.pricingType === 'flat')
+  );
   for (let i = 0; i < bq.lineItems.length; i++) {
     if (i === excludeIdx) continue;
     const sibling = bq.lineItems[i];
@@ -1076,8 +1085,16 @@ function findIncludedHoursFromBackendQuote(bq: BackendExtractedQuote, excludeIdx
       if (fromExcerpt !== undefined) return fromExcerpt;
     }
   }
-  if (hasSiblingFlat && bq.inclusions) {
-    for (const inc of bq.inclusions) {
+  if (hasSiblingFlat) {
+    const allIncs = [...(pkgContext?.inclusions ?? []), ...(bq.inclusions ?? [])];
+    for (const inc of allIncs) {
+      if (
+        inc.durationHours !== undefined &&
+        inc.durationHours > 0 &&
+        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
+      ) {
+        return inc.durationHours;
+      }
       if (
         inc.quantity !== undefined &&
         inc.quantity > 0 &&
@@ -1141,22 +1158,36 @@ export function mapBackendExtractionToFrontendResult(
   const conflicts: QuoteConflict[] = [];
   const inclusionStrings: string[] = [];
 
-  bq.lineItems.forEach((item, idx) => {
+  const mapBackendItem = (
+    item: BackendLineItem,
+    idPrefix: string,
+    idx: number,
+    options?: {
+      packageId?: string;
+      pkgContext?: BackendPackageOption;
+      targetLineItems: QuoteLineItem[];
+      targetInclusions: string[];
+    }
+  ) => {
+    const targetLineItems = options?.targetLineItems ?? lineItems;
+    const targetInclusions = options?.targetInclusions ?? inclusionStrings;
+    const scopedPackageId = options?.packageId ?? item.packageId;
     const evId = addEvidence(item.sourceExcerpt, item.label, item.pageReference);
     const isOptional = item.optionalAddon === true || item.chargeType === 'optional';
 
     if (item.pricingType === 'included') {
-      inclusionStrings.push(item.label);
+      targetInclusions.push(item.label);
       return;
     }
 
     if (item.pricingType === 'unknown' || item.amount === null) {
       unconfirmedFees.push({
-        id: `uf-${idx}-${Date.now()}`,
+        id: `uf-${idPrefix}-${idx}-${Date.now()}`,
         label: item.label,
         description: item.sourceExcerpt || 'Stated charge without a confirmed dollar amount.',
         mandatory: !isOptional,
         status: 'unconfirmed',
+        packageId: scopedPackageId,
         evidenceId: evId,
       });
       return;
@@ -1165,7 +1196,7 @@ export function mapBackendExtractionToFrontendResult(
     if (isOptional) {
       const addOnModel = mapPricingTypeToModel(item.pricingType);
       addOns.push({
-        id: `ao-${idx}-${Date.now()}`,
+        id: `ao-${idPrefix}-${idx}-${Date.now()}`,
         label: item.label,
         description: item.sourceExcerpt || 'Optional add-on',
         pricePreTax: addOnModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
@@ -1173,8 +1204,9 @@ export function mapBackendExtractionToFrontendResult(
         quantity: addOnModel === 'hourly' ? item.hours : undefined,
         ratioDivisor: item.ratioGuests,
         unitLabel: item.unitLabel,
-        minGuests: item.minGuests,
+        minGuests: item.minGuests ?? options?.pkgContext?.minGuests,
         eventId: input.targetEventIds?.[0],
+        packageId: scopedPackageId,
         percentageBasis: item.percentageBasis,
         percentageTargetLabels: item.percentageTargetLabels,
         customBasisAmount: item.customBasisAmount,
@@ -1186,7 +1218,13 @@ export function mapBackendExtractionToFrontendResult(
 
     const pricingModel = mapPricingTypeToModel(item.pricingType);
     const includedPackageHours =
-      pricingModel === 'hourly' ? findIncludedHoursFromBackendQuote(bq, idx) : undefined;
+      pricingModel === 'hourly'
+        ? findIncludedHoursFromBackendQuote(
+            bq,
+            options?.pkgContext ? -1 : idx,
+            options?.pkgContext
+          )
+        : undefined;
     const isConditionalOvertime =
       pricingModel === 'hourly' &&
       includedPackageHours !== undefined &&
@@ -1196,8 +1234,8 @@ export function mapBackendExtractionToFrontendResult(
         OVERTIME_PATTERN.test(item.label) ||
         OVERTIME_PATTERN.test(item.sourceExcerpt));
 
-    const liId = `li-${idx}-${Date.now()}`;
-    lineItems.push({
+    const liId = `li-${idPrefix}-${idx}-${Date.now()}`;
+    targetLineItems.push({
       id: liId,
       label: item.label,
       pricingModel,
@@ -1219,22 +1257,22 @@ export function mapBackendExtractionToFrontendResult(
       isThirdParty: item.isThirdParty,
       thirdPartyProvider: item.thirdPartyProvider,
       isFoodItem: item.isFoodItem,
-      minGuests: item.minGuests ?? bq.venueDetails?.minGuests,
+      minGuests: item.minGuests ?? options?.pkgContext?.minGuests ?? bq.venueDetails?.minGuests,
       guestThreshold: item.guestThreshold,
-      packageId: item.packageId,
+      packageId: scopedPackageId,
       eventId: input.targetEventIds?.[0],
       evidenceId: evId,
       pageReference: item.pageReference,
     });
 
     if (item.conflictingOptions && item.conflictingOptions.length > 0) {
-      const options: QuoteConflict['options'] = [];
+      const optionsList: QuoteConflict['options'] = [];
       const hasPrimary = item.conflictingOptions.some(
         (o) => Math.abs(o.amount - item.amount!) < 0.01
       );
       if (!hasPrimary) {
-        options.push({
-          id: `opt-${idx}-primary`,
+        optionsList.push({
+          id: `opt-${idPrefix}-${idx}-primary`,
           label: `$${item.amount.toLocaleString('en-CA')} (Primary quote)`,
           sourceLabel: 'Primary quote',
           amount: item.amount,
@@ -1243,24 +1281,28 @@ export function mapBackendExtractionToFrontendResult(
       }
       item.conflictingOptions.forEach((opt, optIdx) => {
         const optEvId = addEvidence(opt.sourceExcerpt, opt.sourceLabel, item.pageReference);
-        options.push({
-          id: `opt-${idx}-${optIdx}`,
+        optionsList.push({
+          id: `opt-${idPrefix}-${idx}-${optIdx}`,
           label: `$${opt.amount.toLocaleString('en-CA')} (${opt.sourceLabel})`,
           sourceLabel: opt.sourceLabel,
           amount: opt.amount,
           evidenceId: optEvId,
         });
       });
-      if (options.length >= 2) {
+      if (optionsList.length >= 2) {
         conflicts.push({
-          id: `conf-${idx}-${Date.now()}`,
+          id: `conf-${idPrefix}-${idx}-${Date.now()}`,
           fieldLabel: item.label,
           description: `Conflicting prices found for ${item.label}. Select the confirmed price before approving.`,
           targetLineItemId: liId,
-          options,
+          options: optionsList,
         });
       }
     }
+  };
+
+  bq.lineItems.forEach((item, idx) => {
+    mapBackendItem(item, 'base', idx);
   });
 
   const structuredInclusions = bq.inclusions ?? [];
@@ -1274,10 +1316,11 @@ export function mapBackendExtractionToFrontendResult(
     }
   }
 
-  // Map mutually exclusive package options (when >= 2 tiers exist)
+  // Map mutually exclusive package options using the same shared line-item mapping strategy
   const packages =
     bq.packages && bq.packages.length > 0
       ? bq.packages.map((pkg, pkgIdx) => {
+          const pkgId = pkg.id || `pkg-${pkgIdx + 1}`;
           const pkgEvId = addEvidence(pkg.sourceExcerpt, pkg.name, pkg.pageReference);
           const pkgInclusionStrings = (pkg.inclusions ?? [])
             .map((inc) => {
@@ -1285,26 +1328,15 @@ export function mapBackendExtractionToFrontendResult(
               return formatStructuredInclusion(inc);
             })
             .filter(Boolean);
-          const pkgFees: QuoteLineItem[] = (pkg.fees ?? [])
-            .filter((f) => f.amount !== null && f.pricingType !== 'unknown' && f.pricingType !== 'included')
-            .map((f, fIdx) => {
-              const fModel = mapPricingTypeToModel(f.pricingType);
-              return {
-                id: `pkg-${pkgIdx}-fee-${fIdx}-${Date.now()}`,
-                label: f.label,
-                pricingModel: fModel,
-                unitPrice: fModel === 'percentage' ? (f.percentageRate ?? f.amount!) : f.amount!,
-                minGuests: f.minGuests ?? pkg.minGuests,
-                guestThreshold: f.guestThreshold,
-                ratioDivisor: f.ratioGuests,
-                unitLabel: f.unitLabel,
-                isFoodItem: f.isFoodItem,
-                packageId: pkg.id,
-                eventId: input.targetEventIds?.[0],
-                evidenceId: addEvidence(f.sourceExcerpt, f.label, f.pageReference),
-                pageReference: f.pageReference,
-              };
+          const pkgFees: QuoteLineItem[] = [];
+          (pkg.fees ?? []).forEach((fee, fIdx) => {
+            mapBackendItem(fee, `pkg${pkgIdx}`, fIdx, {
+              packageId: pkgId,
+              pkgContext: pkg,
+              targetLineItems: pkgFees,
+              targetInclusions: pkgInclusionStrings,
             });
+          });
           const pkgPayParts: string[] = [];
           if (pkg.paymentTerms?.depositAmount) {
             pkgPayParts.push(`$${pkg.paymentTerms.depositAmount.toLocaleString('en-CA')} deposit`);
@@ -1314,11 +1346,16 @@ export function mapBackendExtractionToFrontendResult(
           if (pkg.paymentTerms?.scheduleNotes) {
             pkgPayParts.push(pkg.paymentTerms.scheduleNotes);
           }
+          const isUnknownPrice = pkg.pricingType === 'unknown' || pkg.amount === null;
           return {
-            id: pkg.id || `pkg-${pkgIdx + 1}`,
+            id: pkgId,
             name: pkg.name,
-            pricingModel: (pkg.pricingType === 'per_person' ? 'per_person' : 'flat') as 'flat' | 'per_person',
-            unitPrice: pkg.amount ?? 0,
+            pricingModel: (isUnknownPrice
+              ? 'unknown'
+              : pkg.pricingType === 'per_person'
+                ? 'per_person'
+                : 'flat') as 'flat' | 'per_person' | 'unknown',
+            unitPrice: isUnknownPrice ? null : pkg.amount,
             minGuests: pkg.minGuests,
             includedGuests: pkg.includedGuests,
             extraGuestRate: pkg.extraGuestRate,
