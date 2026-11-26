@@ -246,3 +246,146 @@ node src/eval.ts --provider gemini --split held-out --show-raw
 node src/eval.ts --provider gemini --split held-out-v2 --show-raw
 npm run ui
 ```
+
+---
+
+## 11. `v0.5` Live Gemini Benchmark & Multimodal Extraction (`feat/v0.5-real-quote-import`)
+
+Following the `v0.5` multimodal, schema, and calculator updates (`PR #13`), we ran the expanded **63-case** text benchmark (`60` original cases + `3` new UAT dev cases) and **3 live multimodal file tests** (2 PNG screenshots + 1 PDF) on the Gemini free tier (`gemini-flash-lite-latest`, resolved to **`gemini-3.5-flash-lite`**).
+
+### 11.1 Initial `v0.5` live run & root-cause fixes (`55/63` → `63/63`)
+
+The first `v0.5` live run on `gemini-3.5-flash-lite` scored **55/63 (87.3%)** with **2 critical financial errors** and 6 non-blocker failures:
+1. **`dev-catering-per-person-addons` (Critical financial error: `$6,681.50` vs `$5,810`):** Adding `pricingType: "percentage"` caused Gemini to emit the `15% service charge` *both* as a `percentage` line item (`entire_subtotal`) and in `gratuityPercent: 15`, inflating `knownSubtotal`. **Fix:** Clarified in `src/extractor.ts` that percentage gratuities/service charges belong only in top-level `gratuityStatus`/`gratuityPercent`, and added deterministic deduplication in both `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts`. Also stripped spurious `originalAmount === amount` and `0` placeholder fields in `normalizeProviderResponse`.
+2. **`heldout-venue-sat-ratio-cap` (Critical financial error: `$18,950` vs `$16,100`):** Gemini copied `maxCapacity: 190` into `minGuests: 190` on a 160-guest quote. **Fix:** Added an explicit guard in `src/extractor.ts` Rule 8 never to copy `maxCapacity` into `minGuests`.
+3. **`dev-uat-case-a-missing-gratuity` & `dev-uat-case-c-complex-venue` (`category: "unknown"` vs `"venue"`):** Explicit `"banquet package"` and `"Maximum capacity is 200 guests"` cues were classified as `unknown` under Rule 4. **Fix:** Included `"banquet package"` and `"maximum capacity"` as explicit venue-space cues while keeping generic `"dinner/reception package"` quotes `unknown`.
+4. **Omitted `paymentTerms` (3 cases) & `openQuestions` (1 case):** Gemini omitted `paymentTerms` when only a payment method rule was present, and omitted `openQuestions` on `heldout-dj-relative-deadline-unknown-currency`. **Fix:** Added `'paymentTerms'` to `GEMINI_RESPONSE_SCHEMA.required` and strengthened Rule 10 for `UNKNOWN` currency and relative deadlines.
+
+### 11.2 Post-fix live 63-case results vs. `v0.3` baseline (`a391f49`)
+
+#### Original 60 cases comparison (`v0.3` `a391f49` vs. `v0.5` post-fix)
+
+| Metric | `v0.3` Final (`a391f49`, 60 cases) | `v0.5` Initial (60 orig. subset) | `v0.5` Post-Fix (60 orig. subset) |
+|---|---:|---:|---:|
+| End-to-end success | 59/60 (98.3%) | 54/60 (90.0%) | **60/60 (100.0%)** |
+| Regression split | 6/6 (100.0%) | 6/6 (100.0%) | **6/6 (100.0%)** |
+| Dev split (original 17) | 17/17 (100.0%) | 15/17 (88.2%) | **17/17 (100.0%)** |
+| Original held-out split | 25/25 (100.0%) | 22/25 (88.0%) | **25/25 (100.0%)** |
+| `held-out-v2` split | 11/12 (91.7%) | 11/12 (91.7%) | **12/12 (100.0%)** |
+| Critical financial errors | 0 | 2 | **0** |
+| Unsupported currency guesses | 0 | 0 | **0** |
+| Release blockers | 0 | 2 | **0** |
+
+#### Full 63-case summary & 3 new UAT cases (post-fix, `gemini-3.5-flash-lite`)
+
+- **All 63 cases:** **63/63 (100.0%)** e2e success · **63/63 (100.0%)** API availability · **63/63 (100.0%)** schema validity · **0** parse errors · **0** critical financial errors · **0** currency guesses · **0** release blockers.
+- **Latency & retries:** **2,417 ms** avg latency incl. retries (**1,749 ms** excl. retries) · **7** transient free-tier retries (`429`/`503`).
+- **Tokens & cost:** **146,170** prompt / **25,536** output tokens · **`$0.02483`** total estimated paid cost (**`$0.000394`** per successful extraction; `$0` on Gemini free tier).
+
+| New UAT Case (`eval-data/dev/cases.json`) | Initial Run | Post-Fix Run | Latency | Verified Result |
+|---|---|---|---|---|
+| `dev-uat-case-a-missing-gratuity` | Fail (`category: unknown`) | **PASS** | 1,343 ms | `$55/person` (150 min → `$8,250`), `13%` HST, `gratuityUnresolved: true`, `4` structured inclusions, `vendorName: null`, `currency: UNKNOWN` |
+| `dev-uat-case-b-negotiated-photo` | Pass | **PASS** | 1,613 ms | `$900` active (`$1,000` original → `$100` savings, `0` conflicts), `6` hrs, `$200` deposit, `quoteKind: initial` |
+| `dev-uat-case-c-complex-venue` | Fail (`category: unknown`) | **PASS** | 2,238 ms | At 175 guests: `$10,500` banquet + `$750` 3rd-party AV + `$750` bartenders (`3 × $250`) = **`$12,000`** subtotal, `10%` food-subtotal gratuity (`$1,050`), `13%` HST (`$1,696.50`), `30%` deposit + `30 days before the event` milestone |
+
+### 11.3 Live multimodal image (2 PNGs) & PDF extraction tests
+
+Tested real `inlineData` attachments (`rawMessage: ""`) against live `gemini-3.5-flash-lite` after the post-fix changes:
+
+| File (`mimeType`) | Latency | Tokens (in / out) | Est. Cost | Schema & Grounding | Verified Extraction & Deterministic Calculation |
+|---|---:|---:|---:|---|---|
+| `quote_venue.png` (`image/png`) | 3,226 ms | 3,372 / 811 | `$0.000662` | Valid · `pageReference: "Screenshot"` | `Sapphire Banquet Hall` (`venue`, `CAD`), `$72/person` (`$12,600` at 175) + `$250` bartenders 1:75 (`3 × $250 = $750`) = `$13,350`, `10%` food-subtotal gratuity (`$1,260`), `13%` HST (`$1,899.30`), `$16,509.30` all-in, `$4,000` deposit + `30 days before event` |
+| `quote_photo.png` (`image/png`) | 2,441 ms | 3,372 / 450 | `$0.000517` | Valid · `pageReference: "Screenshot"` | `Lumina Wedding Photography` (`photographer`, `CAD`), `$2,100` active / `$2,400` original (`$300` negotiated savings, `0` conflicts), `8` hrs, `2` photographers + deliverables, `$500` deposit |
+| `quote_decor.pdf` (`application/pdf`) | 1,568 ms | 2,814 / 362 | `$0.000426` | Valid · `pageReference: "Page 1"` | `Royal Mandap Decor` (`decor`, `CAD`), `$4,500` flat, unpriced `Lighting setup fee` in `unknownItems` (`isEstimateComplete: false`), `13%` HST (`$585`), `$1,000` deposit |
+
+### 11.4 Offline parity suite (post-fix)
+
+- Backend unit & UAT tests (`npm test`): **47/47 passing**
+- Backend offline mock evals (`npm run eval -- --provider mock`): **63/63 passing**
+- Frontend safeguard & parity tests (`cd frontend && npm test`): **10/10 passing**
+- Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)
+
+
+---
+
+## 12. v0.5 Real-World UAT Remediation Benchmark (66 Cases, Live Gemini)
+
+Following manual UAT on PR #13, four real-world failure groups were fixed across extraction, schema, normalization, deterministic calculation, frontend mapping, and UI:
+1. **Mutually exclusive packages & package-scoped terms** (`packages[]`, `selectedPackageId`, package-scoped inclusions/tax/gratuity/delivery/fees, approval & booking blockers until one package is chosen).
+2. **Extra-guest pricing vs. repeated per-person rates** (`per_extra_guest` with `guestThreshold` + redundant extra-guest deduplication so guests are never double-counted).
+3. **Conditional overtime hours** (`$900` 5-hr package + `$250/hr` additional rate defaults to `$900` with `0` extra hours even when `hours: 1` is emitted or duration appears only in labels/inclusions).
+4. **Inclusion hygiene, `deliveryTerms`, honest unknown tax (`'unspecified'`), legacy quote re-review flags, manual editing of approved quotes with revision history, stable vendor-name input, and source image lightbox.**
+
+### Live Evaluation Results (66 Cases — `gemini-3.5-flash-lite`)
+
+- **Provider / Model:** `gemini` | Configured: `gemini-flash-lite-latest` | Resolved: `gemini-3.5-flash-lite`
+- **Dataset:** 66 cases (`23 dev` incl. 3 new anonymized UAT cases, `6 regression`, `25 held-out`, `12 held-out-v2` — locked holdout splits unchanged)
+- **End-to-end success:** **66/66 (100.0%)** | **Extraction accuracy:** **66/66 (100.0%)**
+- **API availability:** 66/66 (100.0%) | **Schema validity:** 66/66 (100.0%) | **Parse errors:** 0
+- **Critical financial errors:** **0** | **Unsupported currency guesses:** **0** | **Release blockers:** **0**
+- **Latency:** `2,798 ms` avg incl. retries (`1,796 ms` excl. retries) | **Total retries:** 8 (HTTP 429)
+- **Token usage & cost:** `196,141` input / `27,506` output tokens | Est. paid cost: **$0.03062** (~**$0.000464** per successful extraction; `$0` on free tier)
+
+| Split | E2E Pass | Accuracy | Fin. Errors | Blockers | Avg Latency (excl. retries) | Est. Paid Cost |
+|---|---:|---:|---:|---:|---:|---:|
+| `dev` (23 cases) | 23/23 (100.0%) | 100.0% | 0 | 0 | 1,661 ms | $0.01090 |
+| `regression` (6 cases) | 6/6 (100.0%) | 100.0% | 0 | 0 | 1,597 ms | $0.00280 |
+| `held-out` (25 cases) | 25/25 (100.0%) | 100.0% | 0 | 0 | 1,711 ms | $0.01126 |
+| `held-out-v2` (12 cases) | 12/12 (100.0%) | 100.0% | 0 | 0 | 2,332 ms | $0.00565 |
+| **Total (66 cases)** | **66/66 (100.0%)** | **100.0%** | **0** | **0** | **1,796 ms** | **$0.03062** |
+
+### New Anonymized UAT Dev Cases (3/3 Live Pass)
+
+| Case ID | Scenario | Live Result | Verified Outcome |
+|---|---|---|---|
+| `dev-uat-multi-package-venue` | Royal (`$55/pp` min 150) vs. Imperial (`$65/pp` min 100) + repeated extra-guest text | **PASS** | Extracts 2 packages with 3 inclusions each; blocks approval when unselected (`knownSubtotal: 0`); Royal @ 175 = `$9,625` (`$11,963.88` all-in); Imperial @ 175 = `$11,375` (`$14,139.13` all-in). |
+| `dev-uat-photo-overtime-default-zero` | `$900` (5 hrs) + `$250/hr` additional hours, unknown tax | **PASS** | Subtotal `$900` with `0` extra hours; `taxStatus: "unknown"` mapped to `'unspecified'`. |
+| `dev-uat-photo-second-shooter-delivery` | `$3,500` package + 2nd photographer 5 hrs + turnaround terms | **PASS** | Lead & second photographer durations structured cleanly; `deliveryTerms` extracted without schema leakage. |
+
+### Intermediate Failure Analysis & Fix
+
+- **Run 1 (`60/66`):** Adding `packages` to `GEMINI_RESPONSE_SCHEMA` caused two deterministic bugs: (a) stray `packageId` strings on single-package `lineItems` were filtered out when `packages` was empty (5 cases), and (b) a single-package entry placed in both `packages[0]` and `lineItems[0]` doubled the venue subtotal (1 case).
+- **Fix:** Normalized single-element `packages[]` cleanly into `lineItems[]` with deduplication and stripped stray `packageId` when `packages.length < 2` in `src/extractor.ts`, `src/calculator.ts`, and `frontend/src/engine/financialCalculator.ts`. Re-run achieved **66/66 (100.0%)** with `0` financial errors.
+
+### Offline Verification
+
+- Backend unit tests (`npm test`): **50/50 pass**
+- Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
+- Frontend safeguard & parity tests (`cd frontend && npm test`): **13/13 pass**
+- Frontend type-check & production build (`cd frontend && npm run lint && npm run build`): **Pass** (0 errors)
+
+
+---
+
+## 13. PR #13 Final Targeted Remediation Benchmark (Post-Codex & Founder UAT)
+
+Following Codex review on `eda6c4d` and founder manual UAT, four release blockers were resolved without expanding scope:
+1. **Codex Package Parity Findings (4/4 resolved):** Unified `mapBackendItem` mapping across ordinary `lineItems` and package-scoped `fees` so mandatory TBD package fees are preserved as package-scoped `unconfirmedFees`, unknown package prices stay `unitPrice: null` (`unresolvedPackagePrice: true`, blocking approval/booking), all hourly/percentage fee calculation parameters are preserved, and tax edits update the selected package's effective tax override.
+2. **Conditional Hourly Pricing (`"Additional Hourly Pricing: $250/hr"`):** Extended `OVERTIME_PATTERN` (`hourly`) and `findIncludedPackageHours` (`inclusions[].durationHours`) across backend and frontend, plus added a manual `"Conditional rate (0 hrs default)"` toggle in Quote Review.
+3. **Payment Schedule Propagation (`BookingModal`):** Replaced hardcoded deposit/balance dates and assumed 30-day offsets with `deriveBookingScheduleDefaults`, strictly prioritizing explicit extracted calendar dates (`August 13, 2027` -> `2027-08-13`), then extracted relative deadlines, then unresolved/TBD, while reconciling to the booked contract total and preserving existing `Paid` milestones.
+4. **Tax Grounding:** Reinforced `SYSTEM_PROMPT` Rule 5 so unmentioned tax always remains `taxStatus: "unknown"` (`'unspecified'`) and blocks booking until resolved.
+
+### Final Live Evaluation Results (66 Cases — `gemini-3.5-flash-lite`)
+
+- **Provider / Model:** `gemini` | Configured: `gemini-flash-lite-latest` | Resolved: `gemini-3.5-flash-lite`
+- **End-to-end success:** **66/66 (100.0%)** (`23/23 dev`, `6/6 regression`, `25/25 held-out`, `12/12 held-out-v2`)
+- **API availability:** 66/66 (100.0%) | **Schema validity:** 66/66 (100.0%) | **Parse errors:** 0
+- **Critical financial errors:** **0** | **Unsupported currency guesses:** **0** | **Release blockers:** **0**
+- **Latency:** `2,859 ms` avg incl. retries (`1,775 ms` excl. retries) | **Total retries:** 12 (HTTP 429)
+- **Token usage & cost:** `200,101` input / `27,488` output tokens | Est. paid cost: **$0.03101** (~**$0.000470** per successful extraction; `$0` on free tier)
+
+### Offline & Browser E2E UAT Verification
+
+- Backend unit tests (`npm test`): **53/53 pass**
+- Offline mock evals (`npm run eval -- --provider mock`): **66/66 (100.0%) pass**
+- Frontend tests (`cd frontend && npm test`): **17/17 pass** | `npm run lint`: **0 errors** | `npm run build`: **Pass**
+- Targeted live Gemini checks (3 anonymized UAT cases): **3/3 pass** (extraction prompt/schema unchanged since 66/66 live benchmark)
+- Browser E2E UAT (`http://localhost:3000/`, live Gemini on `:3001`):
+  - **HSR Photography:** Extracted `CAD $900.00` (`0` overtime hrs for `"Additional Hourly Pricing: $250/hr"`), showed `"Tax not stated — excluded from estimate."`, blocked booking in Vendor Drawer until resolved via `"Edit quote"`, and populated `BookingModal` with `$900` contract total, `$200` deposit (`Due upon signing / date TBD`, unpaid by default), and `$700` balance due `2027-08-13`.
+  - **Multi-Package Venue (`Palace Banquet Hall`):** Preserved both `Royal Package` and `Imperial Package`, blocked approval when unselected (`CAD $0.00`), and switched totals & package-scoped inclusions cleanly on selection.
+
+### Remaining Known Limitations (Non-Blocking for PR #13)
+
+- Free-tier Gemini API bursts can trigger HTTP 429 retries (12 retries across 66 sequential cases; all recovered cleanly via exponential backoff).
+- On some multi-package brochures mentioning gratuity without explicit basis wording, Gemini conservatively flags gratuity basis as needing user confirmation (safe fail-closed behavior; user confirms in 1 click).
+- Post-event actual overtime reconciliation and multi-installment (>2 milestone) custom schedule editing in `BookingModal` are deferred to the next milestone.

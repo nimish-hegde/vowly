@@ -1,17 +1,46 @@
-import {
+import type {
   CurrencyCode,
   CurrencySource,
+  LineItemPricingModel,
+  PercentageBasis,
   Quote,
+  QuoteAddOn,
+  QuoteAttachmentPreview,
+  QuoteConflict,
   QuoteEvidenceSpan,
+  QuoteLineItem,
+  QuotePaymentMilestone,
+  QuoteUnconfirmedFee,
+  StructuredInclusion,
   TaxHandling,
   VendorCategory,
 } from '../types/vowly';
+
+export const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+  'application/pdf',
+]);
+
+export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
+
+export interface ExtractionAttachmentInput {
+  mimeType: string;
+  base64Data: string;
+  fileName: string;
+  sizeBytes: number;
+  dataUrl?: string;
+}
 
 export interface ExtractionInput {
   sourceType: 'pasted_message' | 'pdf' | 'screenshot';
   sourceChannel: string;
   rawText: string;
   fileName?: string;
+  attachments?: ExtractionAttachmentInput[];
+  guestCount?: number;
   presetId?: string;
   targetVendorId?: string;
   targetEventIds?: string[];
@@ -19,11 +48,31 @@ export interface ExtractionInput {
 
 export interface ExtractedQuoteResult {
   suggestedVendorName: string;
+  vendorNameMissing?: boolean;
   suggestedCategory: VendorCategory;
   suggestedLocation: string;
   isDemoVenue: boolean;
   quote: Quote;
   isRevisionOfExistingVendorId?: string;
+  extractionMeta?: {
+    provider: string;
+    model: string;
+    latencyMs: number;
+    tokenUsage?: { promptTokens: number; outputTokens: number; totalTokens: number };
+  };
+}
+
+export function validateUploadFile(file: { name: string; type: string; size: number }): string | null {
+  if (!ALLOWED_UPLOAD_MIME_TYPES.has(file.type)) {
+    return `Unsupported format (${file.type || 'unknown'}). Please upload a PNG, JPEG, WebP, GIF, or PDF file.`;
+  }
+  if (file.size <= 0) {
+    return `"${file.name}" is empty.`;
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return `"${file.name}" exceeds the 10 MB upload limit.`;
+  }
+  return null;
 }
 
 /**
@@ -702,4 +751,791 @@ export class SimulatedQuoteExtractor implements QuoteExtractionAdapter {
   }
 }
 
-export const quoteExtractor: QuoteExtractionAdapter = new SimulatedQuoteExtractor();
+interface BackendLineItem {
+  label: string;
+  pricingType: string;
+  amount: number | null;
+  minGuests?: number;
+  guestThreshold?: number;
+  packageId?: string;
+  ratioGuests?: number;
+  unitLabel?: string;
+  hours?: number;
+  percentageRate?: number;
+  percentageBasis?: PercentageBasis;
+  percentageTargetLabels?: string[];
+  customBasisAmount?: number;
+  originalAmount?: number;
+  isThirdParty?: boolean;
+  thirdPartyProvider?: string;
+  isFoodItem?: boolean;
+  chargeType?: 'mandatory' | 'conditional' | 'optional';
+  optionalAddon?: boolean;
+  conflictingOptions?: Array<{
+    sourceLabel: string;
+    pricingType: string;
+    amount: number;
+    sourceExcerpt: string;
+  }>;
+  sourceExcerpt: string;
+  pageReference?: string;
+}
+
+interface BackendPackageOption {
+  id: string;
+  name: string;
+  pricingType: 'flat' | 'per_person' | 'unknown';
+  amount: number | null;
+  minGuests?: number;
+  includedGuests?: number;
+  extraGuestRate?: number;
+  maxCapacity?: number;
+  hours?: number;
+  isFoodItem?: boolean;
+  fees?: BackendLineItem[];
+  taxStatus?: 'included' | 'excluded' | 'unknown';
+  taxPercent?: number | null;
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  inclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  paymentTerms?: {
+    depositAmount?: number;
+    depositPercent?: number;
+    methodRule: string;
+    scheduleNotes?: string;
+    milestones?: QuotePaymentMilestone[];
+  };
+  sourceExcerpt: string;
+  pageReference?: string;
+}
+
+interface BackendExtractedQuote {
+  vendorName: string | null;
+  vendorLocation?: string | null;
+  vendorContact?: { name?: string; email?: string; phone?: string };
+  category: string;
+  events: string[];
+  quotedDate?: string;
+  quoteKind: 'initial' | 'revision';
+  currency: CurrencyCode;
+  taxStatus: 'included' | 'excluded' | 'unknown';
+  taxPercent?: number | null;
+  gratuityStatus: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  serviceDurationHours?: number;
+  packages?: BackendPackageOption[];
+  selectedPackageId?: string | null;
+  lineItems: BackendLineItem[];
+  inclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  exclusions?: string[];
+  restrictions?: string[];
+  venueDetails?: {
+    roomName?: string;
+    maxCapacity?: number;
+    minGuests?: number;
+    packageName?: string;
+    dayOfWeek?: string;
+  };
+  photographerDetails?: {
+    hoursIncluded?: number;
+    extraHourRate?: number;
+    teamSize?: number;
+    includesMiniShoot?: boolean | 'unknown';
+  };
+  paymentTerms?: {
+    depositAmount?: number;
+    depositPercent?: number;
+    methodRule: string;
+    scheduleNotes?: string;
+    milestones?: QuotePaymentMilestone[];
+  };
+  openQuestions: Array<{
+    question: string;
+    reason: string;
+    sourceExcerpt: string;
+    pageReference?: string;
+  }>;
+}
+
+export interface BackendExtractResponse {
+  session?: {
+    id: string;
+    draftQuote: BackendExtractedQuote;
+    sourceWarnings?: string[];
+  };
+  meta?: {
+    provider: string;
+    model: string;
+    latencyMs: number;
+    tokenUsage?: { promptTokens: number; outputTokens: number; totalTokens: number };
+  };
+  error?: string;
+}
+
+function mapBackendCategory(cat: string): VendorCategory {
+  switch (cat) {
+    case 'venue':
+      return 'venue';
+    case 'catering':
+      return 'catering';
+    case 'photographer':
+      return 'photography';
+    case 'dj':
+      return 'dj';
+    case 'decor':
+      return 'decor';
+    case 'entertainment':
+      return 'entertainment';
+    default:
+      return 'other';
+  }
+}
+
+const INTERNAL_SCHEMA_TOKENS = new Set([
+  'deliverables',
+  'deliverable',
+  'team',
+  'included',
+  'mandatory',
+  'conditional',
+  'optional',
+  'flat',
+  'per_person',
+  'per_extra_guest',
+  'per_hour',
+  'per_guest_ratio',
+  'percentage',
+  'unknown',
+  'other',
+  'none',
+  'n/a',
+  'item',
+  'items',
+  'unit',
+  'units',
+]);
+
+const ROLE_OR_STATION_PATTERN =
+  /\b(photographer|videographer|cinematographer|shooter|assistant|dj|mc|bartender|server|coordinator|planner|booth|station)\b/i;
+
+function isInternalSchemaToken(value: string | undefined): boolean {
+  if (!value) return true;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 30) return true;
+  const lower = trimmed.toLowerCase();
+  if (INTERNAL_SCHEMA_TOKENS.has(lower)) return true;
+  // Detect snake_case or internal identifier tokens (e.g., "photography_coverage")
+  if (trimmed.includes('_')) return true;
+  return false;
+}
+
+function cleanInclusionName(name: string): string {
+  // Strip parenthetical internal schema tags like "(photography_coverage)" or trailing "[deliverables]"
+  return name
+    .replace(/\s*\(([a-z0-9]+_[a-z0-9_]+|deliverables|included|mandatory|conditional|optional|flat|team)\)/gi, '')
+    .replace(/\s*\[([a-z0-9]+_[a-z0-9_]+|deliverables|included|mandatory|conditional|optional|flat|team)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function singularStem(word: string): string {
+  const lower = word.toLowerCase().trim();
+  if (lower === 'hrs' || lower === 'hr' || lower === 'hours' || lower === 'hour') return 'hour';
+  if (lower.endsWith('ies') && lower.length > 4) return `${lower.slice(0, -3)}y`;
+  if (lower.endsWith('s') && lower.length > 3) return lower.slice(0, -1);
+  return lower;
+}
+
+export function formatStructuredInclusion(inc: StructuredInclusion): string {
+  const cleanName = cleanInclusionName(inc.name);
+  const rawUnit = inc.unit && !isInternalSchemaToken(inc.unit) ? inc.unit.trim() : undefined;
+  const qty = inc.quantity !== undefined && Number.isFinite(inc.quantity) ? inc.quantity : undefined;
+  const durationHours =
+    inc.durationHours !== undefined && Number.isFinite(inc.durationHours) && inc.durationHours > 0
+      ? inc.durationHours
+      : undefined;
+
+  if (!cleanName) {
+    if (qty !== undefined && rawUnit) return `${qty} ${rawUnit}`;
+    return '';
+  }
+
+  // Case 1: explicit durationHours on a role or service (e.g., "Second photographer (5 hours coverage)")
+  if (durationHours !== undefined) {
+    const durationLabel = `${durationHours} hour${durationHours === 1 ? '' : 's'} coverage`;
+    const nameAlreadyHasHours = new RegExp(`\\b${durationHours}\\s*(?:hours?|hrs?)\\b`, 'i').test(cleanName);
+    const base =
+      qty !== undefined &&
+      qty > 1 &&
+      !new RegExp(`^${qty}\\b`).test(cleanName)
+        ? `${qty} ${cleanName}`
+        : cleanName;
+    return nameAlreadyHasHours ? base : `${base} (${durationLabel})`;
+  }
+
+  // Case 2: quantity + unit where unit is hours on a role/station name (e.g., { name: "Second photographer", quantity: 5, unit: "hours" })
+  if (
+    qty !== undefined &&
+    rawUnit &&
+    /^(hours?|hrs?)$/i.test(rawUnit) &&
+    ROLE_OR_STATION_PATTERN.test(cleanName) &&
+    !/\b(hours?|hrs?)\b/i.test(cleanName)
+  ) {
+    return `${cleanName} (${qty} hour${qty === 1 ? '' : 's'} coverage)`;
+  }
+
+  // Case 3: name already starts with or embeds the exact quantity (prevent "2 2 photographers" or "5 hours (5 hours coverage)")
+  if (qty !== undefined) {
+    const startsWithQty = new RegExp(`^${qty}\\b`).test(cleanName);
+    const embedsQtyAndUnit =
+      rawUnit !== undefined &&
+      new RegExp(`\\b${qty}\\s*[-–]?\\s*${singularStem(rawUnit)}s?\\b`, 'i').test(cleanName);
+    if (startsWithQty || embedsQtyAndUnit) {
+      return cleanName;
+    }
+  }
+
+  if (qty !== undefined && rawUnit) {
+    const nameLower = cleanName.toLowerCase();
+    const unitStem = singularStem(rawUnit);
+    if (nameLower.includes(unitStem)) {
+      return `${qty} ${cleanName}`;
+    }
+    return `${qty} ${rawUnit} (${cleanName})`;
+  }
+
+  if (qty !== undefined) {
+    return `${qty} ${cleanName}`;
+  }
+
+  return cleanName;
+}
+
+const WORD_TO_HOURS: Record<string, number> = {
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+};
+
+function parseHoursFromText(text: string): number | undefined {
+  const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
+  if (numMatch) {
+    const val = Number(numMatch[1]);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  const wordMatch = text.match(
+    /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:-|\s)?(?:hours?|hrs?)\b/i
+  );
+  if (wordMatch) {
+    return WORD_TO_HOURS[wordMatch[1].toLowerCase()];
+  }
+  return undefined;
+}
+
+const OVERTIME_PATTERN =
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hourly|hours?|hrs?)\b|\b(hourly|hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
+
+function findIncludedHoursFromBackendQuote(
+  bq: BackendExtractedQuote,
+  excludeIdx: number,
+  pkgContext?: BackendPackageOption
+): number | undefined {
+  if (pkgContext?.hours !== undefined && pkgContext.hours > 0) {
+    return pkgContext.hours;
+  }
+  let hasSiblingFlat = Boolean(
+    pkgContext?.pricingType === 'flat' || bq.packages?.some((p) => p.pricingType === 'flat')
+  );
+  for (let i = 0; i < bq.lineItems.length; i++) {
+    if (i === excludeIdx) continue;
+    const sibling = bq.lineItems[i];
+    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      hasSiblingFlat = true;
+      if (sibling.hours !== undefined && sibling.hours > 0) return sibling.hours;
+    }
+  }
+  if (hasSiblingFlat && bq.photographerDetails?.hoursIncluded && bq.photographerDetails.hoursIncluded > 0) {
+    return bq.photographerDetails.hoursIncluded;
+  }
+  if (hasSiblingFlat && bq.serviceDurationHours && bq.serviceDurationHours > 0) {
+    return bq.serviceDurationHours;
+  }
+  for (let i = 0; i < bq.lineItems.length; i++) {
+    if (i === excludeIdx) continue;
+    const sibling = bq.lineItems[i];
+    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
+    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
+      const fromLabel = parseHoursFromText(sibling.label);
+      if (fromLabel !== undefined) return fromLabel;
+      const fromExcerpt = parseHoursFromText(sibling.sourceExcerpt);
+      if (fromExcerpt !== undefined) return fromExcerpt;
+    }
+  }
+  if (hasSiblingFlat) {
+    const allIncs = [...(pkgContext?.inclusions ?? []), ...(bq.inclusions ?? [])];
+    for (const inc of allIncs) {
+      if (
+        inc.durationHours !== undefined &&
+        inc.durationHours > 0 &&
+        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
+      ) {
+        return inc.durationHours;
+      }
+      if (
+        inc.quantity !== undefined &&
+        inc.quantity > 0 &&
+        inc.unit &&
+        /\b(hours?|hrs?)\b/i.test(inc.unit) &&
+        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
+      ) {
+        return inc.quantity;
+      }
+      const fromInc = parseHoursFromText(inc.name);
+      if (fromInc !== undefined && !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)) {
+        return fromInc;
+      }
+    }
+  }
+  return undefined;
+}
+
+function mapPricingTypeToModel(pricingType: string): LineItemPricingModel {
+  if (pricingType === 'per_person') return 'per_person';
+  if (pricingType === 'per_extra_guest') return 'per_extra_guest';
+  if (pricingType === 'per_hour') return 'hourly';
+  if (pricingType === 'per_guest_ratio') return 'guest_ratio';
+  if (pricingType === 'percentage') return 'percentage';
+  return 'flat';
+}
+
+function mapBackendTaxStatus(status: 'included' | 'excluded' | 'unknown' | undefined): TaxHandling {
+  if (status === 'included') return 'included';
+  if (status === 'excluded') return 'excluded_plus_hst';
+  return 'unspecified';
+}
+
+export function mapBackendExtractionToFrontendResult(
+  payload: BackendExtractResponse,
+  input: ExtractionInput
+): ExtractedQuoteResult {
+  const bq = payload.session?.draftQuote;
+  if (!bq) {
+    throw new Error(payload.error || 'Backend extraction returned no quote data.');
+  }
+
+  const nowDate = new Date().toISOString().slice(0, 10);
+  const uid = `q-${Date.now()}`;
+  const evidenceSpans: QuoteEvidenceSpan[] = [];
+  const addEvidence = (excerpt: string | undefined, label: string, pageRef?: string): string | undefined => {
+    const clean = excerpt?.trim();
+    if (!clean) return undefined;
+    const id = `ev-${evidenceSpans.length + 1}`;
+    evidenceSpans.push({
+      id,
+      excerpt: clean,
+      sourceLabel: pageRef ? `${label} · ${pageRef}` : label,
+    });
+    return id;
+  };
+
+  const lineItems: QuoteLineItem[] = [];
+  const addOns: QuoteAddOn[] = [];
+  const unconfirmedFees: QuoteUnconfirmedFee[] = [];
+  const conflicts: QuoteConflict[] = [];
+  const inclusionStrings: string[] = [];
+
+  const mapBackendItem = (
+    item: BackendLineItem,
+    idPrefix: string,
+    idx: number,
+    options?: {
+      packageId?: string;
+      pkgContext?: BackendPackageOption;
+      targetLineItems: QuoteLineItem[];
+      targetInclusions: string[];
+    }
+  ) => {
+    const targetLineItems = options?.targetLineItems ?? lineItems;
+    const targetInclusions = options?.targetInclusions ?? inclusionStrings;
+    const scopedPackageId = options?.packageId ?? item.packageId;
+    const evId = addEvidence(item.sourceExcerpt, item.label, item.pageReference);
+    const isOptional = item.optionalAddon === true || item.chargeType === 'optional';
+
+    if (item.pricingType === 'included') {
+      targetInclusions.push(item.label);
+      return;
+    }
+
+    if (item.pricingType === 'unknown' || item.amount === null) {
+      unconfirmedFees.push({
+        id: `uf-${idPrefix}-${idx}-${Date.now()}`,
+        label: item.label,
+        description: item.sourceExcerpt || 'Stated charge without a confirmed dollar amount.',
+        mandatory: !isOptional,
+        status: 'unconfirmed',
+        packageId: scopedPackageId,
+        evidenceId: evId,
+      });
+      return;
+    }
+
+    if (isOptional) {
+      const addOnModel = mapPricingTypeToModel(item.pricingType);
+      addOns.push({
+        id: `ao-${idPrefix}-${idx}-${Date.now()}`,
+        label: item.label,
+        description: item.sourceExcerpt || 'Optional add-on',
+        pricePreTax: addOnModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
+        pricingModel: addOnModel,
+        quantity: addOnModel === 'hourly' ? item.hours : undefined,
+        ratioDivisor: item.ratioGuests,
+        unitLabel: item.unitLabel,
+        minGuests: item.minGuests ?? options?.pkgContext?.minGuests,
+        eventId: input.targetEventIds?.[0],
+        packageId: scopedPackageId,
+        percentageBasis: item.percentageBasis,
+        percentageTargetLabels: item.percentageTargetLabels,
+        customBasisAmount: item.customBasisAmount,
+        selected: false,
+        evidenceId: evId,
+      });
+      return;
+    }
+
+    const pricingModel = mapPricingTypeToModel(item.pricingType);
+    const includedPackageHours =
+      pricingModel === 'hourly'
+        ? findIncludedHoursFromBackendQuote(
+            bq,
+            options?.pkgContext ? -1 : idx,
+            options?.pkgContext
+          )
+        : undefined;
+    const isConditionalOvertime =
+      pricingModel === 'hourly' &&
+      includedPackageHours !== undefined &&
+      !(item.hours !== undefined && item.hours > 1) &&
+      ((bq.photographerDetails?.extraHourRate !== undefined &&
+        Math.abs(item.amount - bq.photographerDetails.extraHourRate) < 0.01) ||
+        OVERTIME_PATTERN.test(item.label) ||
+        OVERTIME_PATTERN.test(item.sourceExcerpt));
+
+    const liId = `li-${idPrefix}-${idx}-${Date.now()}`;
+    targetLineItems.push({
+      id: liId,
+      label: item.label,
+      pricingModel,
+      unitPrice: pricingModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
+      quantity:
+        pricingModel === 'hourly'
+          ? isConditionalOvertime
+            ? 0
+            : item.hours
+          : undefined,
+      isConditionalOvertime: isConditionalOvertime || undefined,
+      includedPackageHours: isConditionalOvertime ? includedPackageHours : undefined,
+      ratioDivisor: item.ratioGuests,
+      unitLabel: item.unitLabel,
+      percentageBasis: item.percentageBasis,
+      percentageTargetLabels: item.percentageTargetLabels,
+      customBasisAmount: item.customBasisAmount,
+      originalUnitPrice: item.originalAmount,
+      isThirdParty: item.isThirdParty,
+      thirdPartyProvider: item.thirdPartyProvider,
+      isFoodItem: item.isFoodItem,
+      minGuests: item.minGuests ?? options?.pkgContext?.minGuests ?? bq.venueDetails?.minGuests,
+      guestThreshold: item.guestThreshold,
+      packageId: scopedPackageId,
+      eventId: input.targetEventIds?.[0],
+      evidenceId: evId,
+      pageReference: item.pageReference,
+    });
+
+    if (item.conflictingOptions && item.conflictingOptions.length > 0) {
+      const optionsList: QuoteConflict['options'] = [];
+      const formatOptLabel = (amt: number, model: LineItemPricingModel, src: string) => {
+        const suffix =
+          model === 'per_person' ? '/person' : model === 'hourly' ? '/hr' : '';
+        return `$${amt.toLocaleString('en-CA')}${suffix} (${src})`;
+      };
+      const hasPrimary = item.conflictingOptions.some(
+        (o) =>
+          Math.abs(o.amount - item.amount!) < 0.01 &&
+          mapPricingTypeToModel(o.pricingType) === pricingModel
+      );
+      if (!hasPrimary) {
+        optionsList.push({
+          id: `opt-${idPrefix}-${idx}-primary`,
+          label: formatOptLabel(item.amount, pricingModel, 'Primary quote'),
+          sourceLabel: 'Primary quote',
+          amount: item.amount,
+          pricingModel,
+          evidenceId: evId,
+        });
+      }
+      item.conflictingOptions.forEach((opt, optIdx) => {
+        const optEvId = addEvidence(opt.sourceExcerpt, opt.sourceLabel, item.pageReference);
+        const optModel = mapPricingTypeToModel(opt.pricingType);
+        optionsList.push({
+          id: `opt-${idPrefix}-${idx}-${optIdx}`,
+          label: formatOptLabel(opt.amount, optModel, opt.sourceLabel),
+          sourceLabel: opt.sourceLabel,
+          amount: opt.amount,
+          pricingModel: optModel,
+          evidenceId: optEvId,
+        });
+      });
+      if (optionsList.length >= 2) {
+        conflicts.push({
+          id: `conf-${idPrefix}-${idx}-${Date.now()}`,
+          fieldLabel: item.label,
+          description: `Conflicting prices found for ${item.label}. Select the confirmed price before approving.`,
+          targetLineItemId: liId,
+          options: optionsList,
+        });
+      }
+    }
+  };
+
+  bq.lineItems.forEach((item, idx) => {
+    mapBackendItem(item, 'base', idx);
+  });
+
+  const structuredInclusions = bq.inclusions ?? [];
+  for (const inc of structuredInclusions) {
+    const formatted = formatStructuredInclusion(inc);
+    if (formatted) {
+      inclusionStrings.push(formatted);
+    }
+    if (inc.sourceExcerpt) {
+      addEvidence(inc.sourceExcerpt, inc.name);
+    }
+  }
+
+  // Map mutually exclusive package options using the same shared line-item mapping strategy
+  const packages =
+    bq.packages && bq.packages.length > 0
+      ? bq.packages.map((pkg, pkgIdx) => {
+          const pkgId = pkg.id || `pkg-${pkgIdx + 1}`;
+          const pkgEvId = addEvidence(pkg.sourceExcerpt, pkg.name, pkg.pageReference);
+          const pkgInclusionStrings = (pkg.inclusions ?? [])
+            .map((inc) => {
+              if (inc.sourceExcerpt) addEvidence(inc.sourceExcerpt, inc.name);
+              return formatStructuredInclusion(inc);
+            })
+            .filter(Boolean);
+          const pkgFees: QuoteLineItem[] = [];
+          (pkg.fees ?? []).forEach((fee, fIdx) => {
+            mapBackendItem(fee, `pkg${pkgIdx}`, fIdx, {
+              packageId: pkgId,
+              pkgContext: pkg,
+              targetLineItems: pkgFees,
+              targetInclusions: pkgInclusionStrings,
+            });
+          });
+          const pkgPayParts: string[] = [];
+          if (pkg.paymentTerms?.depositAmount) {
+            pkgPayParts.push(`$${pkg.paymentTerms.depositAmount.toLocaleString('en-CA')} deposit`);
+          } else if (pkg.paymentTerms?.depositPercent) {
+            pkgPayParts.push(`${pkg.paymentTerms.depositPercent}% deposit`);
+          }
+          if (pkg.paymentTerms?.scheduleNotes) {
+            pkgPayParts.push(pkg.paymentTerms.scheduleNotes);
+          }
+          const isUnknownPrice = pkg.pricingType === 'unknown' || pkg.amount === null;
+          return {
+            id: pkgId,
+            name: pkg.name,
+            pricingModel: (isUnknownPrice
+              ? 'unknown'
+              : pkg.pricingType === 'per_person'
+                ? 'per_person'
+                : 'flat') as 'flat' | 'per_person' | 'unknown',
+            unitPrice: isUnknownPrice ? null : pkg.amount,
+            minGuests: pkg.minGuests,
+            includedGuests: pkg.includedGuests,
+            extraGuestRate: pkg.extraGuestRate,
+            maxCapacity: pkg.maxCapacity,
+            hours: pkg.hours,
+            isFoodItem: pkg.isFoodItem,
+            fees: pkgFees.length > 0 ? pkgFees : undefined,
+            taxHandling: pkg.taxStatus ? mapBackendTaxStatus(pkg.taxStatus) : undefined,
+            taxPercent:
+              pkg.taxPercent !== undefined && pkg.taxPercent !== null
+                ? pkg.taxPercent
+                : pkg.taxStatus === 'excluded'
+                  ? null
+                  : undefined,
+            gratuityStatus: pkg.gratuityStatus,
+            gratuityPercent:
+              pkg.gratuityPercent !== undefined && pkg.gratuityPercent !== null
+                ? pkg.gratuityPercent
+                : pkg.gratuityStatus === 'excluded'
+                  ? null
+                  : undefined,
+            gratuityBasis: pkg.gratuityBasis,
+            inclusions: Array.from(new Set(pkgInclusionStrings)),
+            structuredInclusions: pkg.inclusions,
+            deliveryTerms: pkg.deliveryTerms,
+            paymentTermsSummary: pkgPayParts.length > 0 ? pkgPayParts.join(' · ') : undefined,
+            paymentMilestones: pkg.paymentTerms?.milestones,
+            depositAmount: pkg.paymentTerms?.depositAmount,
+            depositPercent: pkg.paymentTerms?.depositPercent,
+            evidenceId: pkgEvId,
+            pageReference: pkg.pageReference,
+          };
+        })
+      : undefined;
+
+  for (const q of bq.openQuestions) {
+    addEvidence(q.sourceExcerpt, 'Needs attention', q.pageReference);
+  }
+
+  const taxHandling: TaxHandling = mapBackendTaxStatus(bq.taxStatus);
+
+  const rawVendorName = (bq.vendorName ?? '').trim();
+  const vendorNameMissing = rawVendorName.length === 0;
+  const rawLocation = (bq.vendorLocation ?? '').trim();
+
+  const paymentParts: string[] = [];
+  if (bq.paymentTerms?.depositAmount) {
+    paymentParts.push(`$${bq.paymentTerms.depositAmount.toLocaleString('en-CA')} deposit`);
+  } else if (bq.paymentTerms?.depositPercent) {
+    paymentParts.push(`${bq.paymentTerms.depositPercent}% deposit`);
+  }
+  if (bq.paymentTerms?.scheduleNotes) {
+    paymentParts.push(bq.paymentTerms.scheduleNotes);
+  }
+
+  const firstAtt = input.attachments?.[0];
+  const attachmentPreview: QuoteAttachmentPreview | undefined =
+    firstAtt && firstAtt.dataUrl
+      ? {
+          fileName: firstAtt.fileName,
+          mimeType: firstAtt.mimeType,
+          dataUrl: firstAtt.dataUrl,
+          sizeBytes: firstAtt.sizeBytes,
+        }
+      : undefined;
+
+  const quote: Quote = {
+    id: uid,
+    title:
+      bq.venueDetails?.packageName ||
+      (rawVendorName ? `${rawVendorName} Quote` : 'Imported Vendor Quote'),
+    approvalState: 'draft',
+    quoteKind: 'personalized',
+    receivedDate: bq.quotedDate || nowDate,
+    sourceType: input.sourceType,
+    sourceChannel: input.sourceChannel,
+    sourceText:
+      input.rawText.trim() ||
+      (firstAtt ? `Uploaded document: ${firstAtt.fileName}` : ''),
+    currency: bq.currency,
+    currencySource: bq.currency === 'UNKNOWN' ? 'unknown' : 'explicit_quote',
+    locationContext: rawLocation || undefined,
+    taxHandling,
+    taxPercent:
+      bq.taxPercent !== undefined && bq.taxPercent !== null
+        ? bq.taxPercent
+        : bq.taxStatus === 'excluded'
+          ? null
+          : undefined,
+    gratuityStatus: bq.gratuityStatus,
+    gratuityPercent: bq.gratuityPercent ?? null,
+    gratuityBasis: bq.gratuityBasis,
+    serviceDurationHours:
+      bq.serviceDurationHours ?? bq.photographerDetails?.hoursIncluded,
+    minGuests: bq.venueDetails?.minGuests,
+    maxCapacity: bq.venueDetails?.maxCapacity,
+    packages,
+    selectedPackageId:
+      packages && packages.length === 1
+        ? packages[0].id
+        : (bq.selectedPackageId ?? null),
+    lineItems,
+    addOns,
+    unconfirmedFees,
+    conflicts,
+    inclusions: Array.from(new Set(inclusionStrings.filter(Boolean))),
+    structuredInclusions,
+    deliveryTerms: bq.deliveryTerms ?? [],
+    exclusions: bq.exclusions ?? [],
+    restrictions: bq.restrictions ?? [],
+    legacyReviewAcknowledged: true,
+    paymentTermsSummary:
+      paymentParts.join(' · ') || 'Confirm deposit and payment schedule with vendor.',
+    paymentMilestones: bq.paymentTerms?.milestones ?? [],
+    depositAmount: bq.paymentTerms?.depositAmount,
+    depositPercent: bq.paymentTerms?.depositPercent,
+    clarificationQuestions: bq.openQuestions.map((q) => q.question),
+    evidenceSpans,
+    sourceWarnings: payload.session?.sourceWarnings ?? [],
+    sourceWarningsAcknowledged: false,
+    attachmentPreview,
+    vendorContact: bq.vendorContact,
+  };
+
+  return {
+    suggestedVendorName: rawVendorName,
+    vendorNameMissing,
+    suggestedCategory: mapBackendCategory(bq.category),
+    suggestedLocation: rawLocation,
+    isDemoVenue: false,
+    quote,
+    extractionMeta: payload.meta,
+  };
+}
+
+export class BackendQuoteExtractor implements QuoteExtractionAdapter {
+  private readonly endpoint: string;
+
+  constructor(endpoint = '/api/extract') {
+    this.endpoint = endpoint;
+  }
+
+  async extractQuote(input: ExtractionInput): Promise<ExtractedQuoteResult> {
+    const response = await fetch(this.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        rawMessage: input.rawText,
+        guestCount: input.guestCount ?? 160,
+        requireLive: true,
+        attachments: input.attachments?.map((att) => ({
+          mimeType: att.mimeType,
+          base64Data: att.base64Data,
+          fileName: att.fileName,
+        })),
+      }),
+    });
+
+    const data = (await response.json().catch(() => ({}))) as BackendExtractResponse;
+    if (!response.ok) {
+      throw new Error(
+        data.error ||
+          `Quote extraction failed (HTTP ${response.status}). Your source has been preserved so you can retry.`
+      );
+    }
+
+    return mapBackendExtractionToFrontendResult(data, input);
+  }
+}
+
+export const simulatedQuoteExtractor: QuoteExtractionAdapter = new SimulatedQuoteExtractor();
+export const liveQuoteExtractor: QuoteExtractionAdapter = new BackendQuoteExtractor();
+export const quoteExtractor: QuoteExtractionAdapter = liveQuoteExtractor;

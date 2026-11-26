@@ -1,35 +1,52 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
-  CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileText,
   FileUp,
   Image as ImageIcon,
   Loader2,
   MessageSquare,
+  Plus,
+  RefreshCw,
   Save,
+  Sparkles,
+  Tag,
+  Trash2,
   X,
+  ZoomIn,
 } from 'lucide-react';
 import {
   calculateQuoteFinancials,
   CATEGORY_META,
   formatCurrency,
   formatShortCad,
+  getEffectiveQuoteDeliveryTerms,
+  getEffectiveQuoteInclusions,
+  getVendorActiveQuote,
+  resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import {
-  quoteExtractor,
+  ExtractionAttachmentInput,
+  liveQuoteExtractor,
   SAMPLE_QUOTE_PRESETS,
+  simulatedQuoteExtractor,
+  validateUploadFile,
 } from '../services/quoteExtractor';
 import { useWorkspace } from '../store/workspaceStore';
 import {
   CurrencyCode,
+  LineItemPricingModel,
+  PercentageBasis,
   Quote,
   TaxHandling,
   Vendor,
   VendorCategory,
 } from '../types/vowly';
 import { DemoDataNote } from './DemoLabel';
+import { ImageLightboxModal } from './ImageLightboxModal';
 
 interface QuoteImportModalProps {
   isOpen: boolean;
@@ -37,6 +54,7 @@ interface QuoteImportModalProps {
   initialPresetId?: string;
   initialVendorId?: string;
   resumeDraftForVendorId?: string;
+  editApprovedForVendorId?: string;
   onCompleteForOnboarding?: (payload: {
     vendorName: string;
     category: VendorCategory;
@@ -49,12 +67,63 @@ interface QuoteImportModalProps {
   }) => void;
 }
 
-const EXTRACTION_STEPS = [
-  'Reading source text & pricing clauses...',
-  'Identifying vendor, events & Canadian location context...',
-  'Extracting line items, fees, add-ons & Ontario 13% HST rules...',
-  'Checking for conflicting prices and unconfirmed mandatory fees...',
+const LOADING_MESSAGES = [
+  'Planning your wedding rn, brb 💍',
+  'Doing wedding math. Send coffee.',
+  "Reading the fine print so you don't have to.",
+  'Finding those sneaky extra fees 👀',
+  'Making spreadsheets jealous.',
 ];
+
+const PRICING_MODEL_LABELS: Record<LineItemPricingModel, string> = {
+  flat: 'Fixed price',
+  per_person: 'Per guest',
+  per_extra_guest: 'Per extra guest (above threshold)',
+  hourly: 'Hourly rate',
+  guest_ratio: 'Ratio-based staffing / units',
+  percentage: 'Percentage charge',
+};
+
+const PERCENTAGE_BASIS_LABELS: Record<PercentageBasis, string> = {
+  food_subtotal: 'Food subtotal',
+  entire_subtotal: 'Entire applicable subtotal',
+  specific_line_items: 'Specific line items',
+  custom_amount: 'Confirmed custom amount',
+  unknown: 'Basis unknown (confirm before booking)',
+};
+
+const GENERIC_VENDOR_NAMES = new Set([
+  '',
+  'imported vendor',
+  'uploaded screenshot',
+  'uploaded pdf',
+  'unknown',
+  'unknown vendor',
+  'vendor',
+]);
+
+function readFileAsAttachment(file: File): Promise<ExtractionAttachmentInput> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      const commaIdx = dataUrl.indexOf(',');
+      if (commaIdx === -1) {
+        reject(new Error('Could not read the selected file.'));
+        return;
+      }
+      resolve({
+        mimeType: file.type,
+        base64Data: dataUrl.slice(commaIdx + 1),
+        fileName: file.name,
+        sizeBytes: file.size,
+        dataUrl,
+      });
+    };
+    reader.onerror = () => reject(new Error('Failed to read the selected file.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function QuoteImportModal({
   isOpen,
@@ -62,24 +131,32 @@ export function QuoteImportModal({
   initialPresetId,
   initialVendorId,
   resumeDraftForVendorId,
+  editApprovedForVendorId,
   onCompleteForOnboarding,
 }: QuoteImportModalProps) {
   const { activeWorkspace, saveDraftQuote, approveQuote } = useWorkspace();
 
   const [step, setStep] = useState<'input' | 'extracting' | 'review'>('input');
-  const [extractProgressIdx, setExtractProgressIdx] = useState(0);
+  const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [unlinkedNotice, setUnlinkedNotice] = useState<string | null>(null);
+  const isExtractingRef = useRef(false);
 
   // Input state
-  const [sourceType, setSourceType] = useState<'pasted_message' | 'pdf' | 'screenshot'>('pasted_message');
-  const [sourceChannel, setSourceChannel] = useState('WhatsApp message');
+  const [sourceType, setSourceType] = useState<'pasted_message' | 'pdf' | 'screenshot'>(
+    'pasted_message'
+  );
+  const [sourceChannel, setSourceChannel] = useState('WhatsApp / Email message');
   const [rawText, setRawText] = useState('');
-  const [fileName, setFileName] = useState<string | undefined>(undefined);
+  const [uploadedAttachment, setUploadedAttachment] =
+    useState<ExtractionAttachmentInput | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string | undefined>(undefined);
 
   // Review state
   const [vendorName, setVendorName] = useState('');
-  const [vendorCategory, setVendorCategory] = useState<VendorCategory>('venue');
-  const [vendorLocation, setVendorLocation] = useState('Mississauga, ON, Canada');
+  const [vendorCategory, setVendorCategory] = useState<VendorCategory>('other');
+  const [vendorLocation, setVendorLocation] = useState('');
   const [isDemoVenue, setIsDemoVenue] = useState(false);
   const [linkedVendorId, setLinkedVendorId] = useState<string | null>(null);
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
@@ -87,12 +164,76 @@ export function QuoteImportModal({
   const [activeEvidenceId, setActiveEvidenceId] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<'extracted' | 'source'>('extracted');
   const [feeInputs, setFeeInputs] = useState<Record<string, string>>({});
+  const [gratuityPercentInput, setGratuityPercentInput] = useState('');
+  const [showLineItemEditor, setShowLineItemEditor] = useState(false);
+  const [showVendorDetails, setShowVendorDetails] = useState(false);
+  const [vendorNamePromptOpen, setVendorNamePromptOpen] = useState(false);
+  const [revisionNote, setRevisionNote] = useState('');
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [newInclusionText, setNewInclusionText] = useState('');
+  const [newDeliveryTermText, setNewDeliveryTermText] = useState('');
+  const [editingBookedVendor, setEditingBookedVendor] = useState(false);
+  const [pkgPriceInput, setPkgPriceInput] = useState('');
+  const [pkgPriceModel, setPkgPriceModel] = useState<'flat' | 'per_person'>('flat');
+  const [taxPercentInput, setTaxPercentInput] = useState('');
   const [onboardingEventName, setOnboardingEventName] = useState('');
   const [onboardingPlannedGuests, setOnboardingPlannedGuests] = useState('');
+  const [extractionMetaLabel, setExtractionMetaLabel] = useState<string | null>(null);
+
+  // Rotate playful loading messages while extracting
+  useEffect(() => {
+    if (step !== 'extracting') return;
+    setLoadingMsgIdx(0);
+    const id = window.setInterval(() => {
+      setLoadingMsgIdx((prev) => (prev + 1) % LOADING_MESSAGES.length);
+    }, 2200);
+    return () => window.clearInterval(id);
+  }, [step]);
 
   // Reset / initialize whenever modal opens
   useEffect(() => {
     if (!isOpen) return;
+
+    setExtractError(null);
+    setUploadError(null);
+    setUnlinkedNotice(null);
+    setExtractionMetaLabel(null);
+    setShowLineItemEditor(false);
+    setShowVendorDetails(false);
+    setVendorNamePromptOpen(false);
+    setRevisionNote('');
+    setLightboxOpen(false);
+    setNewInclusionText('');
+    setNewDeliveryTermText('');
+    setEditingBookedVendor(false);
+    isExtractingRef.current = false;
+
+    if (editApprovedForVendorId) {
+      const existingVendor = activeWorkspace.vendors.find(
+        (v) => v.id === editApprovedForVendorId
+      );
+      const active = existingVendor ? getVendorActiveQuote(existingVendor) : undefined;
+      if (existingVendor && active) {
+        setLinkedVendorId(existingVendor.id);
+        setVendorName(existingVendor.name);
+        setVendorCategory(existingVendor.category);
+        setVendorLocation(existingVendor.location);
+        setIsDemoVenue(Boolean(existingVendor.isDemoVenue));
+        setSelectedEventIds(existingVendor.eventIds);
+        setEditingBookedVendor(existingVendor.status === 'Booked');
+        const cloned = structuredClone(active);
+        setDraftQuote(cloned);
+        setGratuityPercentInput(
+          cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
+            ? String(cloned.gratuityPercent)
+            : ''
+        );
+        setShowLineItemEditor(true);
+        setStep('review');
+        setMobilePane('extracted');
+        return;
+      }
+    }
 
     if (resumeDraftForVendorId) {
       const existingVendor = activeWorkspace.vendors.find(
@@ -100,13 +241,24 @@ export function QuoteImportModal({
       );
       if (existingVendor?.draftQuote) {
         const staged = existingVendor.draftVendorMetadata;
+        const resolvedName = staged?.name ?? existingVendor.name;
         setLinkedVendorId(existingVendor.id);
-        setVendorName(staged?.name ?? existingVendor.name);
+        setVendorName(resolvedName);
+        setVendorNamePromptOpen(
+          !resolvedName.trim() || GENERIC_VENDOR_NAMES.has(resolvedName.trim().toLowerCase())
+        );
         setVendorCategory(staged?.category ?? existingVendor.category);
         setVendorLocation(staged?.location ?? existingVendor.location);
         setIsDemoVenue(Boolean(staged?.isDemoVenue ?? existingVendor.isDemoVenue));
         setSelectedEventIds(staged?.eventIds ?? existingVendor.eventIds);
-        setDraftQuote(structuredClone(existingVendor.draftQuote));
+        setEditingBookedVendor(existingVendor.status === 'Booked');
+        const cloned = structuredClone(existingVendor.draftQuote);
+        setDraftQuote(cloned);
+        setGratuityPercentInput(
+          cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
+            ? String(cloned.gratuityPercent)
+            : ''
+        );
         setStep('review');
         setMobilePane('extracted');
         return;
@@ -117,7 +269,9 @@ export function QuoteImportModal({
     setDraftQuote(null);
     setActiveEvidenceId(null);
     setFeeInputs({});
+    setGratuityPercentInput('');
     setLinkedVendorId(initialVendorId ?? null);
+    setUploadedAttachment(null);
 
     if (initialPresetId) {
       const preset = SAMPLE_QUOTE_PRESETS.find((p) => p.id === initialPresetId);
@@ -126,24 +280,22 @@ export function QuoteImportModal({
         setSourceType(preset.sourceType);
         setSourceChannel(preset.sourceChannel);
         setRawText(preset.rawText);
-        setFileName(preset.sourceType !== 'pasted_message' ? `${preset.label}.pdf` : undefined);
         return;
       }
     }
 
     setSelectedPresetId(undefined);
     setSourceType('pasted_message');
-    setSourceChannel('WhatsApp message');
+    setSourceChannel('WhatsApp / Email message');
     setRawText('');
-    setFileName(undefined);
-  }, [isOpen, initialPresetId, initialVendorId, resumeDraftForVendorId]);
+  }, [isOpen, initialPresetId, initialVendorId, resumeDraftForVendorId, editApprovedForVendorId]);
 
   const onboardingEventsPreview = useMemo(() => {
     if (!onCompleteForOnboarding) return activeWorkspace.events;
-    const parsedGuests =
-      onboardingPlannedGuests.trim() !== '' &&
-      /^\d+$/.test(onboardingPlannedGuests.trim())
-        ? parseInt(onboardingPlannedGuests.trim(), 10)
+    const trimmed = onboardingPlannedGuests.trim();
+    const parsed =
+      trimmed !== '' && /^\d+$/.test(trimmed) && parseInt(trimmed, 10) > 0
+        ? parseInt(trimmed, 10)
         : null;
     return [
       {
@@ -152,9 +304,9 @@ export function QuoteImportModal({
         date: '',
         dateDisplay: 'Date TBD',
         time: '',
-        location: vendorLocation || 'Location TBD',
-        guestCount: parsedGuests,
-        status: 'Shortlisting' as const,
+        location: activeWorkspace.location,
+        guestCount: parsed,
+        status: 'Early planning' as const,
         budgetAllowance: null,
         tone: 'sage' as const,
       },
@@ -162,9 +314,9 @@ export function QuoteImportModal({
   }, [
     onCompleteForOnboarding,
     activeWorkspace.events,
+    activeWorkspace.location,
     onboardingEventName,
     onboardingPlannedGuests,
-    vendorLocation,
   ]);
 
   const calc = useMemo(() => {
@@ -181,65 +333,120 @@ export function QuoteImportModal({
     selectedEventIds,
   ]);
 
+  const primarySelectedEvent = useMemo(() => {
+    if (onCompleteForOnboarding) return onboardingEventsPreview[0];
+    return activeWorkspace.events.find((e) => selectedEventIds.includes(e.id));
+  }, [
+    onCompleteForOnboarding,
+    onboardingEventsPreview,
+    activeWorkspace.events,
+    selectedEventIds,
+  ]);
+
   if (!isOpen) return null;
+
+  const isVendorNameValid =
+    vendorName.trim().length > 0 &&
+    !GENERIC_VENDOR_NAMES.has(vendorName.trim().toLowerCase());
+
+  const canApproveWithVendor = Boolean(calc?.canApprove && isVendorNameValid);
 
   const handleSelectPreset = (presetId: string) => {
     const preset = SAMPLE_QUOTE_PRESETS.find((p) => p.id === presetId);
     if (!preset) return;
+    setExtractError(null);
+    setUploadError(null);
+    setUploadedAttachment(null);
     setSelectedPresetId(preset.id);
     setSourceType(preset.sourceType);
     setSourceChannel(preset.sourceChannel);
     setRawText(preset.rawText);
-    setFileName(
-      preset.sourceType === 'pdf'
-        ? `${preset.id}.pdf`
-        : preset.sourceType === 'screenshot'
-          ? `${preset.id}.png`
-          : undefined
-    );
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setFileName(file.name);
+    setUploadError(null);
+    setExtractError(null);
     setSelectedPresetId(undefined);
-    if (!rawText.trim()) {
-      setRawText(
-        `Uploaded ${sourceType === 'pdf' ? 'PDF document' : 'screenshot'}: ${file.name}\nVendor location: Mississauga, Ontario\nPackage quote: $4,200 + 13% HST\nMandatory setup/delivery fee: TBD`
+
+    const validationError = validateUploadFile(file);
+    if (validationError) {
+      setUploadError(validationError);
+      setUploadedAttachment(null);
+      e.target.value = '';
+      return;
+    }
+
+    try {
+      const attachment = await readFileAsAttachment(file);
+      setUploadedAttachment(attachment);
+    } catch (err) {
+      setUploadError(
+        err instanceof Error ? err.message : 'Could not read the selected file.'
       );
+      setUploadedAttachment(null);
     }
   };
 
   const handleRunExtraction = async () => {
-    if (!rawText.trim() && !fileName) return;
-    setStep('extracting');
-    setExtractProgressIdx(0);
+    if (isExtractingRef.current) return;
+    if (!rawText.trim() && !uploadedAttachment) return;
 
-    const timer1 = window.setTimeout(() => setExtractProgressIdx(1), 350);
-    const timer2 = window.setTimeout(() => setExtractProgressIdx(2), 700);
-    const timer3 = window.setTimeout(() => setExtractProgressIdx(3), 1050);
+    isExtractingRef.current = true;
+    setExtractError(null);
+    setUnlinkedNotice(null);
+    setStep('extracting');
+
+    const contextualEvent =
+      activeWorkspace.events.find((e) => selectedEventIds.includes(e.id)) ??
+      activeWorkspace.events.find((e) =>
+        e.name.toLowerCase().includes('reception')
+      ) ??
+      activeWorkspace.events[0];
 
     try {
-      const result = await quoteExtractor.extractQuote({
+      const useDemoPreset = Boolean(selectedPresetId && !uploadedAttachment);
+      const adapter = useDemoPreset ? simulatedQuoteExtractor : liveQuoteExtractor;
+
+      const result = await adapter.extractQuote({
         sourceType,
         sourceChannel,
         rawText,
-        fileName,
+        fileName: uploadedAttachment?.fileName,
+        attachments: uploadedAttachment ? [uploadedAttachment] : undefined,
+        guestCount: contextualEvent?.guestCount ?? undefined,
         presetId: selectedPresetId,
-        targetVendorId: linkedVendorId ?? undefined,
+        targetVendorId: initialVendorId ?? undefined,
+        targetEventIds: selectedEventIds.length > 0 ? selectedEventIds : undefined,
       });
 
-      await new Promise((r) => setTimeout(r, 750));
-      window.clearTimeout(timer1);
-      window.clearTimeout(timer2);
-      window.clearTimeout(timer3);
-
       setVendorName(result.suggestedVendorName);
+      const suggestedClean = result.suggestedVendorName.trim().toLowerCase();
+      setVendorNamePromptOpen(
+        !suggestedClean || GENERIC_VENDOR_NAMES.has(suggestedClean)
+      );
       setVendorCategory(result.suggestedCategory);
       setVendorLocation(result.suggestedLocation);
       setIsDemoVenue(result.isDemoVenue);
       setDraftQuote(result.quote);
+      setGratuityPercentInput(
+        result.quote.gratuityPercent !== undefined &&
+          result.quote.gratuityPercent !== null
+          ? String(result.quote.gratuityPercent)
+          : ''
+      );
+
+      if (result.extractionMeta) {
+        setExtractionMetaLabel(
+          `${result.extractionMeta.provider} · ${result.extractionMeta.model} · ${(
+            result.extractionMeta.latencyMs / 1000
+          ).toFixed(1)}s`
+        );
+      } else {
+        setExtractionMetaLabel(useDemoPreset ? 'Demo preset (offline)' : null);
+      }
+
       if (onCompleteForOnboarding) {
         setOnboardingEventName(
           result.suggestedCategory === 'venue' ? 'Reception' : 'Wedding Event'
@@ -247,22 +454,45 @@ export function QuoteImportModal({
         setOnboardingPlannedGuests('');
       }
 
-      // Match existing vendor if ID suggested or name matches
-      const matchedVendor =
-        (linkedVendorId &&
-          activeWorkspace.vendors.find((v) => v.id === linkedVendorId)) ||
-        (result.isRevisionOfExistingVendorId &&
-          activeWorkspace.vendors.find(
-            (v) => v.id === result.isRevisionOfExistingVendorId
-          )) ||
-        activeWorkspace.vendors.find(
-          (v) =>
-            v.name.toLowerCase() === result.suggestedVendorName.toLowerCase()
-        );
+      // Safe existing-vendor linking: never silently overwrite an unrelated vendor
+      const suggestedNorm = result.suggestedVendorName.trim().toLowerCase();
+      const hasRealSuggestedName = !GENERIC_VENDOR_NAMES.has(suggestedNorm);
 
-      if (matchedVendor) {
-        setLinkedVendorId(matchedVendor.id);
-        setSelectedEventIds(matchedVendor.eventIds);
+      let resolvedVendor: Vendor | undefined;
+      if (initialVendorId) {
+        const target = activeWorkspace.vendors.find((v) => v.id === initialVendorId);
+        if (target) {
+          const targetNorm = target.name.trim().toLowerCase();
+          if (
+            !hasRealSuggestedName ||
+            targetNorm === suggestedNorm ||
+            targetNorm.includes(suggestedNorm) ||
+            suggestedNorm.includes(targetNorm)
+          ) {
+            resolvedVendor = target;
+            if (!hasRealSuggestedName) {
+              setVendorName(target.name);
+            }
+          } else {
+            // Different vendor extracted than the one originally opened — do not overwrite!
+            setUnlinkedNotice(
+              `This quote appears to be from "${result.suggestedVendorName}" rather than "${target.name}", so it will be saved as a new vendor instead of overwriting ${target.name}.`
+            );
+          }
+        }
+      } else if (result.isRevisionOfExistingVendorId) {
+        resolvedVendor = activeWorkspace.vendors.find(
+          (v) => v.id === result.isRevisionOfExistingVendorId
+        );
+      } else if (hasRealSuggestedName) {
+        resolvedVendor = activeWorkspace.vendors.find(
+          (v) => v.name.trim().toLowerCase() === suggestedNorm
+        );
+      }
+
+      if (resolvedVendor) {
+        setLinkedVendorId(resolvedVendor.id);
+        setSelectedEventIds(resolvedVendor.eventIds);
       } else {
         setLinkedVendorId(null);
         const defaultEvt =
@@ -276,8 +506,15 @@ export function QuoteImportModal({
 
       setStep('review');
       setMobilePane('extracted');
-    } catch {
+    } catch (err) {
+      setExtractError(
+        err instanceof Error
+          ? err.message
+          : 'Could not analyze this quote. Your source is preserved — please try again.'
+      );
       setStep('input');
+    } finally {
+      isExtractingRef.current = false;
     }
   };
 
@@ -285,9 +522,32 @@ export function QuoteImportModal({
     setDraftQuote((prev) => (prev ? updater(prev) : prev));
   };
 
+  const updateEffectiveTaxHandling = (nextTax: TaxHandling, nextPercent?: number) => {
+    updateQuote((q) => {
+      const updatedPackages = q.packages?.map((pkg) => {
+        if (q.selectedPackageId && pkg.id === q.selectedPackageId && pkg.taxHandling !== undefined) {
+          return {
+            ...pkg,
+            taxHandling: nextTax,
+            taxPercent: nextPercent !== undefined ? nextPercent : pkg.taxPercent,
+          };
+        }
+        return pkg;
+      });
+      return {
+        ...q,
+        taxHandling: nextTax,
+        taxPercent: nextPercent !== undefined ? nextPercent : q.taxPercent,
+        packages: updatedPackages,
+      };
+    });
+  };
+
   const handleSave = (asDraft: boolean) => {
     if (!draftQuote) return;
-    if (!asDraft && calc && !calc.canApprove) return;
+    if (!asDraft && !canApproveWithVendor) return;
+
+    const cleanName = vendorName.trim() || 'Unnamed Vendor';
 
     if (onCompleteForOnboarding) {
       const parsedPlanned =
@@ -297,9 +557,9 @@ export function QuoteImportModal({
           ? parseInt(onboardingPlannedGuests.trim(), 10)
           : null;
       onCompleteForOnboarding({
-        vendorName: vendorName.trim() || 'Imported Vendor',
+        vendorName: cleanName,
         category: vendorCategory,
-        location: vendorLocation,
+        location: vendorLocation.trim(),
         isDemoVenue,
         quote: draftQuote,
         asDraft,
@@ -313,13 +573,13 @@ export function QuoteImportModal({
     }
 
     const newVendorPayload: Omit<Vendor, 'id' | 'quotes'> = {
-      name: vendorName.trim() || 'Imported Vendor',
+      name: cleanName,
       category: vendorCategory,
       eventIds: selectedEventIds,
-      location: vendorLocation,
-      contactName: '',
-      contactEmail: '',
-      contactPhone: '',
+      location: vendorLocation.trim(),
+      contactName: draftQuote.vendorContact?.name ?? '',
+      contactEmail: draftQuote.vendorContact?.email ?? '',
+      contactPhone: draftQuote.vendorContact?.phone ?? '',
       status: asDraft ? 'Revision pending' : 'Quoted',
       isPreferred: !asDraft,
       isDemoVenue,
@@ -329,12 +589,16 @@ export function QuoteImportModal({
     if (asDraft) {
       saveDraftQuote(linkedVendorId, newVendorPayload, draftQuote);
     } else {
-      approveQuote(linkedVendorId, newVendorPayload, draftQuote);
+      approveQuote(
+        linkedVendorId,
+        newVendorPayload,
+        draftQuote,
+        editApprovedForVendorId ? (revisionNote.trim() || 'Manual quote edit') : undefined
+      );
     }
     onClose();
   };
 
-  // Highlight active evidence excerpt inside source text
   const renderHighlightedSource = () => {
     if (!draftQuote) return null;
     const text = draftQuote.sourceText;
@@ -363,6 +627,21 @@ export function QuoteImportModal({
     );
   };
 
+  const needsAttentionCount =
+    (isVendorNameValid && !vendorNamePromptOpen ? 0 : 1) +
+    (calc?.unresolvedPackageSelection ? 1 : 0) +
+    (calc?.unresolvedPackagePrice ? 1 : 0) +
+    (calc?.isCurrencyUnknown ? 1 : 0) +
+    (calc?.gratuityUnresolved ? 1 : 0) +
+    (calc?.unresolvedMandatoryFeesCount ?? 0) +
+    (calc?.unresolvedConflictsCount ?? 0) +
+    (calc?.unresolvedPercentageCount ?? 0) +
+    (draftQuote?.sourceWarnings &&
+    draftQuote.sourceWarnings.length > 0 &&
+    !draftQuote.sourceWarningsAcknowledged
+      ? 1
+      : 0);
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-[2px] p-2 sm:p-4"
@@ -374,22 +653,27 @@ export function QuoteImportModal({
         {/* Top Modal Header */}
         <div className="px-5 py-4 bg-white border-b border-[#E5DED2] flex items-center justify-between gap-4 shrink-0">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-base sm:text-lg font-semibold text-[#22201D]">
                 {step === 'input'
                   ? 'Import Vendor Quote'
                   : step === 'extracting'
-                    ? 'Extracting Quote Details'
-                    : 'Review & Verify Extracted Quote'}
+                    ? 'Analyzing Your Quote'
+                    : 'Review Extracted Quote'}
               </h2>
               {step === 'review' && isDemoVenue && <DemoDataNote />}
+              {step === 'review' && extractionMetaLabel && (
+                <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#F3EFE8] text-[#6B655C]">
+                  {extractionMetaLabel}
+                </span>
+              )}
             </div>
             <p className="text-xs text-[#6B655C]">
               {step === 'input'
-                ? 'Import one quote at a time from a pasted email, WhatsApp/IG message, PDF, or screenshot.'
+                ? 'Paste a vendor message or upload a screenshot/PDF. Vowly extracts prices, inclusions, and payment terms.'
                 : step === 'extracting'
-                  ? 'Parsing pricing clauses, Ontario HST rules, and potential ambiguities.'
-                  : 'Verify every extracted figure against its source passage. Approving updates estimates without booking.'}
+                  ? 'Extracting structured pricing, inclusions, and fine print.'
+                  : 'Resolve only what needs your attention, then approve into your projected budget.'}
             </p>
           </div>
           <button
@@ -404,45 +688,28 @@ export function QuoteImportModal({
 
         {/* STEP 1: INPUT */}
         {step === 'input' && (
-          <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
-            {/* Quick Try Presets */}
-            <div>
-              <div className="text-xs font-semibold text-[#22201D] mb-2.5">
-                Try a realistic GTA sample quote (one click to populate):
+          <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
+            {extractError && (
+              <div className="rounded-xl bg-[#FEE2E2] border border-[#FCA5A5] p-4 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-[#991B1B] mt-0.5 shrink-0" />
+                  <div className="text-xs text-[#991B1B] space-y-1">
+                    <div className="font-semibold">Extraction did not complete</div>
+                    <div>{extractError}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleRunExtraction}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#991B1B] text-white hover:bg-[#7F1D1D] shrink-0 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  Retry
+                </button>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {SAMPLE_QUOTE_PRESETS.map((preset) => {
-                  const isActive = selectedPresetId === preset.id;
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      onClick={() => handleSelectPreset(preset.id)}
-                      className={`text-left rounded-xl border p-3.5 transition-all cursor-pointer ${
-                        isActive
-                          ? 'bg-[#E7F1EA] border-[#486755]'
-                          : 'bg-white border-[#E5DED2] hover:bg-[#F7F4FC] hover:border-[#D7CBEB]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-[#22201D]">
-                          {preset.label}
-                        </span>
-                        {preset.isDemoVenue && <DemoDataNote compact />}
-                      </div>
-                      <div className="mt-1 text-[11px] font-medium text-[#4C3B70]">
-                        {preset.badge}
-                      </div>
-                      <p className="mt-1 text-xs text-[#6B655C] leading-snug">
-                        {preset.description}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            )}
 
-            {/* Source Type Tabs */}
+            {/* Source Input Card */}
             <div className="bg-white rounded-2xl border border-[#E5DED2] p-5 space-y-4">
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -450,6 +717,8 @@ export function QuoteImportModal({
                   onClick={() => {
                     setSourceType('pasted_message');
                     setSourceChannel('WhatsApp / Email message');
+                    setUploadedAttachment(null);
+                    setUploadError(null);
                   }}
                   className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-xl cursor-pointer transition-colors ${
                     sourceType === 'pasted_message'
@@ -463,23 +732,9 @@ export function QuoteImportModal({
                 <button
                   type="button"
                   onClick={() => {
-                    setSourceType('pdf');
-                    setSourceChannel('PDF Quote');
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-xl cursor-pointer transition-colors ${
-                    sourceType === 'pdf'
-                      ? 'bg-[#486755] text-white'
-                      : 'bg-[#F3EFE8] text-[#6B655C] hover:text-[#22201D]'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  Upload PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
                     setSourceType('screenshot');
-                    setSourceChannel('Screenshot / Image');
+                    setSourceChannel('Uploaded Screenshot / Image');
+                    setSelectedPresetId(undefined);
                   }}
                   className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-xl cursor-pointer transition-colors ${
                     sourceType === 'screenshot'
@@ -490,26 +745,82 @@ export function QuoteImportModal({
                   <ImageIcon className="w-3.5 h-3.5" />
                   Upload Screenshot / Image
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceType('pdf');
+                    setSourceChannel('Uploaded PDF Quote');
+                    setSelectedPresetId(undefined);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium rounded-xl cursor-pointer transition-colors ${
+                    sourceType === 'pdf'
+                      ? 'bg-[#486755] text-white'
+                      : 'bg-[#F3EFE8] text-[#6B655C] hover:text-[#22201D]'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Upload PDF
+                </button>
               </div>
 
               {(sourceType === 'pdf' || sourceType === 'screenshot') && (
-                <label className="block rounded-xl border border-dashed border-[#C5DEC9] bg-[#F3F8F5] p-5 text-center cursor-pointer hover:bg-[#E7F1EA] transition-colors">
-                  <FileUp className="w-5 h-5 text-[#486755] mx-auto" />
-                  <div className="mt-2 text-xs font-medium text-[#22201D]">
-                    {fileName
-                      ? `Selected file: ${fileName}`
-                      : `Choose a single ${sourceType === 'pdf' ? 'PDF document' : 'PNG/JPG screenshot'}`}
-                  </div>
-                  <div className="mt-0.5 text-[11px] text-[#6B655C]">
-                    Simulated prototype upload — file stays in your browser
-                  </div>
-                  <input
-                    type="file"
-                    accept={sourceType === 'pdf' ? '.pdf' : 'image/*'}
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </label>
+                <div className="space-y-2">
+                  <label className="block rounded-xl border border-dashed border-[#C5DEC9] bg-[#F3F8F5] p-5 text-center cursor-pointer hover:bg-[#E7F1EA] transition-colors">
+                    <FileUp className="w-5 h-5 text-[#486755] mx-auto" />
+                    <div className="mt-2 text-xs font-medium text-[#22201D]">
+                      {uploadedAttachment
+                        ? `Selected: ${uploadedAttachment.fileName} (${Math.max(
+                            1,
+                            Math.round(uploadedAttachment.sizeBytes / 1024)
+                          )} KB)`
+                        : `Choose a ${sourceType === 'pdf' ? 'PDF document' : 'PNG, JPG, WebP, or GIF screenshot'} (max 10 MB)`}
+                    </div>
+                    <div className="mt-1 text-[11px] text-[#6B655C]">
+                      Uploaded documents are processed by the configured AI provider to extract quote details.
+                    </div>
+                    <input
+                      type="file"
+                      accept={
+                        sourceType === 'pdf'
+                          ? 'application/pdf,.pdf'
+                          : 'image/png,image/jpeg,image/webp,image/gif'
+                      }
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                  </label>
+                  {uploadedAttachment &&
+                    uploadedAttachment.mimeType.startsWith('image/') &&
+                    uploadedAttachment.dataUrl && (
+                      <div className="flex items-center gap-3 rounded-xl border border-[#E5DED2] bg-[#FAF8F4] p-2.5">
+                        <img
+                          src={uploadedAttachment.dataUrl}
+                          alt={uploadedAttachment.fileName}
+                          className="w-16 h-16 object-cover rounded-lg border border-[#E5DED2]"
+                        />
+                        <div className="text-xs text-[#22201D] flex-1 min-w-0">
+                          <div className="font-medium truncate">
+                            {uploadedAttachment.fileName}
+                          </div>
+                          <div className="text-[11px] text-[#6B655C]">
+                            Ready for real multimodal AI extraction
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setUploadedAttachment(null)}
+                          className="text-xs text-[#6B655C] hover:text-[#991B1B] px-2 py-1 cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  {uploadError && (
+                    <div className="text-xs text-[#991B1B] font-medium">
+                      {uploadError}
+                    </div>
+                  )}
+                </div>
               )}
 
               <div>
@@ -517,11 +828,13 @@ export function QuoteImportModal({
                   htmlFor="quote-raw-text"
                   className="block text-xs font-medium text-[#22201D] mb-1.5"
                 >
-                  Quote text / pasted vendor message
+                  {uploadedAttachment
+                    ? 'Optional accompanying note (e.g. context from DM or email)'
+                    : 'Paste vendor message or quote text'}
                 </label>
                 <textarea
                   id="quote-raw-text"
-                  rows={7}
+                  rows={6}
                   value={rawText}
                   onChange={(e) => {
                     setRawText(e.target.value);
@@ -532,72 +845,82 @@ export function QuoteImportModal({
                 />
               </div>
 
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-xs text-[#6B655C]">
-                  Simulated AI extraction · Ready to connect to Vowly’s Antigravity backend
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                <span className="text-[11px] text-[#6B655C]">
+                  {selectedPresetId
+                    ? 'Demo preset selected (runs offline simulation)'
+                    : 'Powered by Vowly AI backend · Never invents missing prices or currencies'}
                 </span>
                 <button
                   type="button"
-                  disabled={!rawText.trim() && !fileName}
+                  disabled={!rawText.trim() && !uploadedAttachment}
                   onClick={handleRunExtraction}
-                  className={`px-5 py-2.5 text-sm font-medium rounded-xl transition-colors ${
-                    !rawText.trim() && !fileName
+                  className={`inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-xl transition-colors ${
+                    !rawText.trim() && !uploadedAttachment
                       ? 'bg-[#E5DED2] text-[#9A9388] cursor-not-allowed'
                       : 'bg-[#486755] text-white hover:bg-[#395344] cursor-pointer'
                   }`}
                 >
-                  Extract Quote Details
+                  <Sparkles className="w-4 h-4" />
+                  Analyze Quote
                 </button>
               </div>
             </div>
+
+            {/* Collapsible Demo Presets */}
+            <details className="rounded-xl border border-[#E5DED2] bg-white p-4">
+              <summary className="text-xs font-semibold text-[#6B655C] cursor-pointer select-none">
+                Or try an offline GTA sample preset (4 examples)
+              </summary>
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {SAMPLE_QUOTE_PRESETS.map((preset) => {
+                  const isActive = selectedPresetId === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      onClick={() => handleSelectPreset(preset.id)}
+                      className={`text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-[#E7F1EA] border-[#486755]'
+                          : 'bg-[#FAF8F4] border-[#E5DED2] hover:bg-[#F7F4FC]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-[#22201D]">
+                          {preset.label}
+                        </span>
+                        {preset.isDemoVenue && <DemoDataNote compact />}
+                      </div>
+                      <div className="mt-0.5 text-[11px] font-medium text-[#4C3B70]">
+                        {preset.badge}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </details>
           </div>
         )}
 
-        {/* STEP 2: EXTRACTING PROGRESS */}
+        {/* STEP 2: SMART LOADING EXPERIENCE */}
         {step === 'extracting' && (
-          <div className="p-10 sm:p-16 flex flex-col items-center justify-center text-center space-y-6">
-            <div className="w-12 h-12 rounded-2xl bg-[#E7F1EA] border border-[#C6DEC9] flex items-center justify-center">
-              <Loader2 className="w-6 h-6 text-[#486755] animate-spin" />
+          <div className="p-12 sm:p-20 flex flex-col items-center justify-center text-center space-y-5">
+            <div className="w-14 h-14 rounded-2xl bg-[#E7F1EA] border border-[#C6DEC9] flex items-center justify-center shadow-sm">
+              <Loader2 className="w-7 h-7 text-[#486755] animate-spin" />
             </div>
-            <div>
+            <div className="space-y-1.5 max-w-md">
               <h3 className="text-lg font-semibold text-[#22201D]">
-                Analyzing vendor quote
+                {LOADING_MESSAGES[loadingMsgIdx]}
               </h3>
-              <p className="mt-1 text-xs text-[#6B655C]">
-                Verifying currency, Ontario HST assumptions, and mandatory fees
+              <p className="text-xs text-[#6B655C]">
+                Reading your {uploadedAttachment ? uploadedAttachment.fileName : 'vendor message'} — checking pricing, inclusions, taxes, and payment terms.
               </p>
             </div>
-            <div className="w-full max-w-md space-y-2.5 text-left">
-              {EXTRACTION_STEPS.map((label, idx) => {
-                const done = idx < extractProgressIdx;
-                const active = idx === extractProgressIdx;
-                return (
-                  <div
-                    key={label}
-                    className={`flex items-center gap-2.5 text-xs px-3.5 py-2.5 rounded-xl border ${
-                      done
-                        ? 'bg-[#E7F1EA] border-[#C6DEC9] text-[#2D4F3C]'
-                        : active
-                          ? 'bg-white border-[#D7CBEB] text-[#22201D] font-medium'
-                          : 'bg-[#F3EFE8]/60 border-transparent text-[#9A9388]'
-                    }`}
-                  >
-                    {done ? (
-                      <CheckCircle2 className="w-4 h-4 text-[#486755] shrink-0" />
-                    ) : active ? (
-                      <Loader2 className="w-3.5 h-3.5 text-[#4C3B70] animate-spin shrink-0" />
-                    ) : (
-                      <span className="w-3.5 h-3.5 rounded-full border border-[#D8D0C3] shrink-0" />
-                    )}
-                    <span>{label}</span>
-                  </div>
-                );
-              })}
-            </div>
           </div>
         )}
 
-        {/* STEP 3: SPLIT-SCREEN REVIEW */}
+        {/* STEP 3: PROGRESSIVE-DISCLOSURE INTELLIGENT QUOTE REVIEW */}
         {step === 'review' && draftQuote && calc && (
           <>
             {/* Mobile Source / Extracted Switch */}
@@ -611,7 +934,7 @@ export function QuoteImportModal({
                     : 'bg-[#F3EFE8] text-[#6B655C]'
                 }`}
               >
-                Extracted Details
+                Quote Summary
               </button>
               <button
                 type="button"
@@ -622,12 +945,12 @@ export function QuoteImportModal({
                     : 'bg-[#F3EFE8] text-[#6B655C]'
                 }`}
               >
-                Source Document
+                Original Source
               </button>
             </div>
 
             <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 overflow-hidden">
-              {/* LEFT PANE: Original Source Document & Clickable Evidence */}
+              {/* LEFT PANE: Original Source & Evidence */}
               <div
                 className={`lg:col-span-5 border-r border-[#E5DED2] bg-white p-5 overflow-y-auto space-y-4 ${
                   mobilePane === 'source' ? 'block' : 'hidden lg:block'
@@ -640,14 +963,52 @@ export function QuoteImportModal({
                   <span>{draftQuote.receivedDate}</span>
                 </div>
 
-                <div className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-4">
-                  {renderHighlightedSource()}
-                </div>
+                {draftQuote.attachmentPreview && (
+                  <div className="rounded-xl border border-[#E5DED2] bg-[#FAF8F4] p-3 space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-[#22201D] truncate">
+                        {draftQuote.attachmentPreview.fileName}
+                      </span>
+                      <span className="text-[11px] text-[#6B655C]">
+                        {Math.max(1, Math.round(draftQuote.attachmentPreview.sizeBytes / 1024))} KB
+                      </span>
+                    </div>
+                    {draftQuote.attachmentPreview.mimeType.startsWith('image/') ? (
+                      <div className="space-y-1.5">
+                        <img
+                          src={draftQuote.attachmentPreview.dataUrl}
+                          alt={draftQuote.attachmentPreview.fileName}
+                          onClick={() => setLightboxOpen(true)}
+                          className="w-full max-h-72 object-contain rounded-lg border border-[#E5DED2] bg-white cursor-zoom-in"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setLightboxOpen(true)}
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-[#486755] hover:underline cursor-pointer"
+                        >
+                          <ZoomIn className="w-3.5 h-3.5" />
+                          Enlarge source image
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 text-xs text-[#6B655C] py-3 px-2 bg-white rounded-lg border border-[#E5DED2]">
+                        <FileText className="w-4 h-4 text-[#486755]" />
+                        PDF document preserved for review
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {draftQuote.sourceText && (
+                  <div className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-4">
+                    {renderHighlightedSource()}
+                  </div>
+                )}
 
                 {draftQuote.evidenceSpans.length > 0 && (
                   <div>
                     <div className="text-xs font-semibold text-[#22201D] mb-2">
-                      Source evidence passages (click to highlight)
+                      Source evidence (click to highlight)
                     </div>
                     <div className="space-y-1.5">
                       {draftQuote.evidenceSpans.map((span) => {
@@ -675,270 +1036,290 @@ export function QuoteImportModal({
                 )}
               </div>
 
-              {/* RIGHT PANE: Structured Editable Fields */}
+              {/* RIGHT PANE: Progressive-Disclosure Review Sections */}
               <div
-                className={`lg:col-span-7 p-5 overflow-y-auto space-y-5 ${
+                className={`lg:col-span-7 p-5 overflow-y-auto space-y-4 ${
                   mobilePane === 'extracted' ? 'block' : 'hidden lg:block'
                 }`}
               >
-                {/* Approval Blockers Banner */}
-                {!calc.canApprove && (
-                  <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/50 p-4 space-y-2">
-                    <div className="flex items-center gap-2 text-xs font-semibold text-[#92400E]">
-                      <AlertTriangle className="w-4 h-4 shrink-0" />
-                      Approval blocked until material financial ambiguities are resolved
-                    </div>
-                    <ul className="list-disc pl-5 text-xs text-[#92400E] space-y-1">
-                      {calc.blockingReasons.map((reason, idx) => (
-                        <li key={idx}>{reason}</li>
-                      ))}
-                    </ul>
-                    <p className="text-[11px] text-[#92400E]/90">
-                      You can click <strong>Save as Draft</strong> now to preserve this quote without affecting your projected budget, and finish approving once the vendor replies.
-                    </p>
+                {editingBookedVendor && (
+                  <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/60 p-3 text-xs text-[#92400E]">
+                    <strong>Booked vendor safeguard:</strong> Saving edits creates a new quote
+                    revision and preserves prior versions. Your confirmed booking total and paid
+                    milestones will not be changed automatically.
                   </div>
                 )}
 
-                {/* Vendor, Category & Events */}
-                <div className="rounded-xl bg-white border border-[#E5DED2] p-4 space-y-3.5">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                        Vendor name
-                      </label>
-                      <input
-                        type="text"
-                        value={vendorName}
-                        onChange={(e) => setVendorName(e.target.value)}
-                        className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-sm font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                        Category
-                      </label>
-                      <select
-                        value={vendorCategory}
-                        onChange={(e) =>
-                          setVendorCategory(e.target.value as VendorCategory)
-                        }
-                        className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-sm text-[#22201D] focus:outline-none focus:border-[#486755]"
-                      >
-                        {(Object.keys(CATEGORY_META) as VendorCategory[]).map(
-                          (cat) => (
-                            <option key={cat} value={cat}>
-                              {CATEGORY_META[cat].label}
-                            </option>
-                          )
-                        )}
-                      </select>
-                    </div>
+                {editApprovedForVendorId && (
+                  <div className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-3 space-y-1.5">
+                    <label className="block text-xs font-semibold text-[#22201D]">
+                      Revision note (optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={revisionNote}
+                      onChange={(e) => setRevisionNote(e.target.value)}
+                      placeholder="e.g. Confirmed Imperial package & 13% HST with vendor"
+                      className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
+                    />
                   </div>
+                )}
 
-                  {/* Link to Existing Vendor or Create New */}
-                  {!onCompleteForOnboarding && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                          Link to existing vendor (optional)
-                        </label>
-                        <select
-                          value={linkedVendorId ?? ''}
-                          onChange={(e) =>
-                            setLinkedVendorId(e.target.value || null)
-                          }
-                          className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs text-[#22201D] focus:outline-none focus:border-[#486755]"
-                        >
-                          <option value="">Create as new vendor</option>
-                          {activeWorkspace.vendors.map((v) => (
-                            <option key={v.id} value={v.id}>
-                              Update {v.name} ({v.status})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                          Vendor location
-                        </label>
-                        <input
-                          type="text"
-                          value={vendorLocation}
-                          onChange={(e) => setVendorLocation(e.target.value)}
-                          className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs text-[#22201D] focus:outline-none focus:border-[#486755]"
-                        />
-                      </div>
-                    </div>
-                  )}
+                {unlinkedNotice && (
+                  <div className="rounded-xl bg-[#EEF4FB] border border-[#B5D3EE] p-3 text-xs text-[#214869]">
+                    {unlinkedNotice}
+                  </div>
+                )}
 
-                  {/* Onboarding Event Name & Separate Planned Attendance */}
-                  {onCompleteForOnboarding && (
-                    <div className="pt-2 border-t border-[#F0EAE0] grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                          Event name
-                        </label>
-                        <input
-                          type="text"
-                          value={onboardingEventName}
-                          onChange={(e) => setOnboardingEventName(e.target.value)}
-                          placeholder="e.g., Reception, Sangeet"
-                          className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs text-[#22201D] focus:outline-none focus:border-[#486755]"
-                        />
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="text-[11px] font-medium text-[#6B655C]">
-                            Planned attendance (optional)
-                          </label>
-                          {draftQuote.minGuests ? (
-                            <span className="text-[11px] font-medium text-[#4C3B70]">
-                              Vendor min: {draftQuote.minGuests}
-                            </span>
-                          ) : null}
-                        </div>
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={onboardingPlannedGuests}
-                          onChange={(e) => setOnboardingPlannedGuests(e.target.value)}
-                          placeholder="Leave blank if undecided"
-                          className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 font-num text-xs text-[#22201D] placeholder:font-sans placeholder:text-[#9A9388] focus:outline-none focus:border-[#486755]"
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Associated Events */}
-                  {activeWorkspace.events.length > 0 && !onCompleteForOnboarding && (
+                {/* 1. PROMINENT SUMMARY CARD: Vendor identity + Estimated Total */}
+                <div className="rounded-2xl bg-white border border-[#E5DED2] p-5 space-y-3">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
-                      <div className="text-[11px] font-medium text-[#6B655C] mb-1.5">
-                        Associated events (select multiple for shared packages)
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-lg font-semibold text-[#22201D]">
+                          {isVendorNameValid ? vendorName : 'Vendor name needed'}
+                        </h3>
+                        <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-[#F3EFE8] text-[#6B655C]">
+                          {CATEGORY_META[vendorCategory]?.label ?? 'Other'}
+                        </span>
+                        {!calc.isEstimateComplete && (
+                          <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-[#FEF3C7] text-[#92400E]">
+                            Incomplete estimate
+                          </span>
+                        )}
                       </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {activeWorkspace.events.map((evt) => {
-                          const checked = selectedEventIds.includes(evt.id);
-                          return (
-                            <button
-                              key={evt.id}
-                              type="button"
-                              onClick={() =>
-                                setSelectedEventIds((prev) =>
-                                  checked
-                                    ? prev.filter((id) => id !== evt.id)
-                                    : [...prev, evt.id]
-                                )
-                              }
-                              className={`px-2.5 py-1 text-xs rounded-lg border transition-colors cursor-pointer ${
-                                checked
-                                  ? 'bg-[#E7F1EA] border-[#486755] text-[#2D4F3C] font-medium'
-                                  : 'bg-[#FAF8F4] border-[#E5DED2] text-[#6B655C]'
-                              }`}
-                            >
-                              {evt.name}
-                            </button>
-                          );
+                      <div className="text-xs text-[#6B655C] mt-1 flex flex-wrap items-center gap-2">
+                        {vendorLocation ? (
+                          <span>{vendorLocation}</span>
+                        ) : (
+                          <span>Location not stated</span>
+                        )}
+                        {primarySelectedEvent && (
+                          <span>
+                            · {primarySelectedEvent.name}
+                            {primarySelectedEvent.guestCount
+                              ? ` (${primarySelectedEvent.guestCount} guests)`
+                              : ''}
+                          </span>
+                        )}
+                        {draftQuote.minGuests && (
+                          <span>· Min {draftQuote.minGuests} guests</span>
+                        )}
+                        {draftQuote.maxCapacity && (
+                          <span>· Max {draftQuote.maxCapacity}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-[11px] font-medium text-[#6B655C]">
+                        {calc.isEstimateComplete ? 'Estimated total' : 'Known total so far'}
+                      </div>
+                      <div className="font-num text-2xl font-semibold text-[#1F3A2B]">
+                        {formatCurrency(calc.estimatedAllInTotal, calc.currencyLabel, {
+                          decimals: 2,
                         })}
                       </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Currency Assumption & Ontario HST Controls */}
-                <div className="rounded-xl bg-white border border-[#E5DED2] p-4 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] font-medium text-[#6B655C]">
-                        Currency
-                      </label>
-                      <span
-                        className={`text-[11px] font-medium ${
-                          draftQuote.currencySource === 'inferred_canada'
-                            ? 'text-[#2B5170]'
-                            : draftQuote.currency === 'UNKNOWN'
-                              ? 'text-[#B91C1C]'
-                              : 'text-[#2D4F3C]'
-                        }`}
-                      >
-                        {draftQuote.currencySource === 'explicit_quote'
-                          ? 'Explicitly quoted'
-                          : draftQuote.currencySource === 'inferred_canada'
-                            ? 'Inferred from Canadian location (editable)'
-                            : draftQuote.currencySource === 'user_confirmed'
-                              ? 'Confirmed by you'
-                              : 'Unknown — required'}
-                      </span>
-                    </div>
-                    <select
-                      value={draftQuote.currency}
-                      onChange={(e) =>
-                        updateQuote((q) => ({
-                          ...q,
-                          currency: e.target.value as CurrencyCode,
-                          currencySource:
-                            e.target.value === 'UNKNOWN'
-                              ? 'unknown'
-                              : 'user_confirmed',
-                        }))
-                      }
-                      className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
-                    >
-                      <option value="CAD">CAD ($ Canadian Dollar)</option>
-                      <option value="USD">USD ($ US Dollar)</option>
-                      <option value="UNKNOWN">Unknown / Unspecified</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] font-medium text-[#6B655C]">
-                        Ontario 13% HST handling
-                      </label>
-                      {calc.hstAssumed && (
-                        <span className="text-[11px] font-medium text-[#B45309]">
-                          Assumed 13% ON HST
-                        </span>
+                      {calc.negotiatedSavings > 0 && (
+                        <div className="inline-flex items-center gap-1 mt-1 text-xs font-semibold text-[#234733] bg-[#DFEFE4] px-2.5 py-0.5 rounded-full">
+                          <Tag className="w-3 h-3" />
+                          Saved {formatShortCad(calc.negotiatedSavings)} negotiated
+                        </div>
                       )}
                     </div>
-                    <select
-                      value={draftQuote.taxHandling}
-                      onChange={(e) =>
-                        updateQuote((q) => ({
-                          ...q,
-                          taxHandling: e.target.value as TaxHandling,
-                        }))
-                      }
-                      className="w-full rounded-lg border border-[#E5DED2] px-3 py-2 text-xs font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
-                    >
-                      <option value="excluded_plus_hst">
-                        Excluded — add 13% Ontario HST
-                      </option>
-                      <option value="unspecified_ontario_assumed">
-                        Unspecified — estimate 13% Ontario HST
-                      </option>
-                      <option value="included">
-                        HST already included (do not add again)
-                      </option>
-                      <option value="tax_exempt">Tax exempt / 0%</option>
-                    </select>
                   </div>
                 </div>
 
-                {/* Conflicting Prices Resolver */}
-                {draftQuote.conflicts.length > 0 && (
-                  <div className="rounded-xl bg-[#FDF6F2] border border-[#EED0BE] p-4 space-y-3">
-                    <div className="text-xs font-semibold text-[#7A4329]">
-                      Conflicting prices detected — select one confirmed figure (never summed)
+                {/* 2. NEEDS YOUR ATTENTION (only shown when items require user action) */}
+                {needsAttentionCount > 0 && (
+                  <div className="rounded-2xl bg-[#FFFBEB] border border-[#F59E0B]/60 p-4 space-y-3.5">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[#92400E]">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      Needs your attention ({needsAttentionCount})
                     </div>
+
+                    {/* Missing Vendor Name (stays mounted while typing until confirmed) */}
+                    {(!isVendorNameValid || vendorNamePromptOpen) && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <label className="block text-xs font-semibold text-[#22201D]">
+                          Who is this quote from?
+                        </label>
+                        <p className="text-[11px] text-[#6B655C]">
+                          The vendor name wasn’t stated in the quote. Enter it so we don’t save a placeholder name.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={vendorName}
+                            onChange={(e) => setVendorName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && isVendorNameValid) {
+                                setVendorNamePromptOpen(false);
+                              }
+                            }}
+                            placeholder="e.g. Grand Palace Banquet Hall"
+                            className="flex-1 rounded-lg border border-[#E5DED2] px-3 py-2 text-xs font-medium text-[#22201D] focus:outline-none focus:border-[#486755]"
+                          />
+                          {isVendorNameValid && (
+                            <button
+                              type="button"
+                              onClick={() => setVendorNamePromptOpen(false)}
+                              className="px-3 py-2 text-xs font-semibold rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer whitespace-nowrap"
+                            >
+                              Done
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Mutually Exclusive Package Selection Required */}
+                    {calc.unresolvedPackageSelection && draftQuote.packages && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Choose one package option
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          This quote includes multiple package tiers. Select one package to calculate your estimate (all options are preserved for future comparison), or Save as Draft.
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {draftQuote.packages.map((pkg) => (
+                            <button
+                              key={pkg.id}
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  selectedPackageId: pkg.id,
+                                  minGuests: pkg.minGuests ?? q.minGuests,
+                                  maxCapacity: pkg.maxCapacity ?? q.maxCapacity,
+                                }))
+                              }
+                              className="text-left rounded-xl border border-[#E5DED2] bg-[#FAF8F4] hover:border-[#486755] hover:bg-[#EAF5EE] p-3 space-y-1 cursor-pointer transition-colors"
+                            >
+                              <div className="text-xs font-semibold text-[#22201D]">
+                                {pkg.name}
+                              </div>
+                              <div className="font-num text-sm font-semibold text-[#1F3A2B]">
+                                {pkg.unitPrice !== null
+                                  ? `${formatShortCad(pkg.unitPrice)}${pkg.pricingModel === 'per_person' ? '/person' : ' flat'}`
+                                  : 'Price TBD'}
+                              </div>
+                              <div className="text-[11px] text-[#6B655C]">
+                                {pkg.minGuests ? `Min ${pkg.minGuests} guests` : 'No minimum stated'}
+                                {pkg.extraGuestRate
+                                  ? ` · +$${pkg.extraGuestRate}/extra guest`
+                                  : ''}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Ambiguous Currency — suggest workspace currency */}
+                    {calc.isCurrencyUnknown && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Confirm currency
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          The quote only uses “$” without specifying CAD or USD. Should we use your workspace currency ({activeWorkspace.currency})?
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateQuote((q) => ({
+                                ...q,
+                                currency: activeWorkspace.currency,
+                                currencySource: 'user_confirmed',
+                              }))
+                            }
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer"
+                          >
+                            Use {activeWorkspace.currency} (workspace default)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateQuote((q) => ({
+                                ...q,
+                                currency: activeWorkspace.currency === 'CAD' ? 'USD' : 'CAD',
+                                currencySource: 'user_confirmed',
+                              }))
+                            }
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E5DED2] bg-white text-[#22201D] hover:bg-[#F3EFE8] cursor-pointer"
+                          >
+                            Use {activeWorkspace.currency === 'CAD' ? 'USD' : 'CAD'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Unresolved Gratuity Percentage / Basis */}
+                    {calc.gratuityUnresolved && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Gratuity is extra, but the percentage or basis is missing
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          Confirm the gratuity percentage and what it applies to, or save as a draft until the vendor confirms.
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.5"
+                            placeholder="e.g. 15"
+                            value={gratuityPercentInput}
+                            onChange={(e) => setGratuityPercentInput(e.target.value)}
+                            className="w-24 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 font-num text-xs text-[#22201D]"
+                          />
+                          <span className="text-xs text-[#6B655C]">% of</span>
+                          <select
+                            value={draftQuote.gratuityBasis ?? 'entire_subtotal'}
+                            onChange={(e) =>
+                              updateQuote((q) => ({
+                                ...q,
+                                gratuityBasis: e.target.value as PercentageBasis,
+                              }))
+                            }
+                            className="rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs text-[#22201D]"
+                          >
+                            <option value="food_subtotal">Food subtotal</option>
+                            <option value="entire_subtotal">Entire subtotal</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const parsed = parseFloat(gratuityPercentInput);
+                              if (Number.isNaN(parsed) || parsed < 0) return;
+                              updateQuote((q) => ({
+                                ...q,
+                                gratuityStatus: 'excluded',
+                                gratuityPercent: parsed,
+                                gratuityBasis: q.gratuityBasis ?? 'entire_subtotal',
+                              }));
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer"
+                          >
+                            Apply gratuity
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Price Conflicts */}
                     {draftQuote.conflicts.map((conflict) => (
-                      <div key={conflict.id} className="space-y-2">
-                        <p className="text-xs text-[#22201D] font-medium">
-                          {conflict.fieldLabel}
-                        </p>
-                        <p className="text-xs text-[#6B655C]">
-                          {conflict.description}
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                      <div
+                        key={conflict.id}
+                        className="rounded-xl bg-white border border-[#EED0BE] p-3 space-y-2"
+                      >
+                        <div className="text-xs font-semibold text-[#7A4329]">
+                          Conflicting prices for {conflict.fieldLabel} — pick one
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                           {conflict.options.map((opt) => {
                             const chosen = conflict.resolvedOptionId === opt.id;
                             return (
@@ -946,8 +1327,7 @@ export function QuoteImportModal({
                                 key={opt.id}
                                 type="button"
                                 onClick={() => {
-                                  if (opt.evidenceId)
-                                    setActiveEvidenceId(opt.evidenceId);
+                                  if (opt.evidenceId) setActiveEvidenceId(opt.evidenceId);
                                   updateQuote((q) => ({
                                     ...q,
                                     conflicts: q.conflicts.map((c) =>
@@ -957,30 +1337,31 @@ export function QuoteImportModal({
                                     ),
                                     lineItems: q.lineItems.map((li) =>
                                       li.id === conflict.targetLineItemId
-                                        ? { ...li, unitPrice: opt.amount }
+                                        ? {
+                                            ...li,
+                                            unitPrice: opt.amount,
+                                            pricingModel: opt.pricingModel ?? li.pricingModel,
+                                          }
                                         : li
                                     ),
                                   }));
                                 }}
-                                className={`text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                                className={`text-left rounded-lg border p-2.5 cursor-pointer ${
                                   chosen
                                     ? 'bg-[#E7F1EA] border-[#486755]'
-                                    : 'bg-white border-[#E5DED2] hover:border-[#7A4329]'
+                                    : 'bg-[#FAF8F4] border-[#E5DED2]'
                                 }`}
                               >
-                                <div className="flex items-center justify-between">
-                                  <span className="font-num text-sm font-semibold text-[#22201D]">
-                                    {formatShortCad(opt.amount)}
-                                  </span>
-                                  {chosen && (
-                                    <Check className="w-4 h-4 text-[#2D4F3C]" />
-                                  )}
-                                </div>
-                                <div className="mt-0.5 text-xs font-medium text-[#22201D]">
-                                  {opt.label}
+                                <div className="font-num text-sm font-semibold text-[#22201D]">
+                                  {formatShortCad(opt.amount)}
+                                  {opt.pricingModel === 'per_person'
+                                    ? '/person'
+                                    : opt.pricingModel === 'hourly'
+                                      ? '/hr'
+                                      : ''}
                                 </div>
                                 <div className="text-[11px] text-[#6B655C]">
-                                  Source: {opt.sourceLabel}
+                                  {opt.sourceLabel}
                                 </div>
                               </button>
                             );
@@ -988,195 +1369,87 @@ export function QuoteImportModal({
                         </div>
                       </div>
                     ))}
-                  </div>
-                )}
 
-                {/* Cash vs Regular Payment Options */}
-                {draftQuote.paymentOptions && draftQuote.paymentOptions.length > 0 && (
-                  <div className="rounded-xl bg-[#F7F4FC] border border-[#D7CBEB] p-4 space-y-2.5">
-                    <div className="text-xs font-semibold text-[#4C3B70]">
-                      Alternative payment options (regular vs. cash)
-                    </div>
-                    <p className="text-[11px] text-[#6B655C]">
-                      Cash options are tracked as selectable alternatives — Vowly never assumes cash is tax-free.
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {draftQuote.paymentOptions.map((opt) => {
-                        const selected =
-                          draftQuote.selectedPaymentOptionId === opt.id;
-                        return (
+                    {/* Unresolved Selected Package Base Price */}
+                    {calc.unresolvedPackagePrice && draftQuote.selectedPackageId && (
+                      <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">
+                          Confirm base price for {calc.selectedPackageName ?? 'selected package'}
+                        </div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          This package’s price wasn’t stated in the quote. Enter the confirmed price to approve, or Save as Draft.
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <select
+                            value={pkgPriceModel}
+                            onChange={(e) => setPkgPriceModel(e.target.value as 'flat' | 'per_person')}
+                            className="rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 text-xs"
+                          >
+                            <option value="flat">Fixed price</option>
+                            <option value="per_person">Per guest</option>
+                          </select>
+                          <input
+                            type="number"
+                            placeholder="Confirmed amount"
+                            value={pkgPriceInput}
+                            onChange={(e) => setPkgPriceInput(e.target.value)}
+                            className="w-36 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 font-num text-xs"
+                          />
                           <button
-                            key={opt.id}
                             type="button"
                             onClick={() => {
-                              if (opt.evidenceId)
-                                setActiveEvidenceId(opt.evidenceId);
+                              const parsed = parseFloat(pkgPriceInput);
+                              if (Number.isNaN(parsed) || parsed < 0) return;
                               updateQuote((q) => ({
                                 ...q,
-                                selectedPaymentOptionId: opt.id,
+                                packages: q.packages?.map((p) =>
+                                  p.id === q.selectedPackageId
+                                    ? { ...p, pricingModel: pkgPriceModel, unitPrice: parsed }
+                                    : p
+                                ),
                               }));
+                              setPkgPriceInput('');
                             }}
-                            className={`text-left rounded-xl border p-3 transition-colors cursor-pointer ${
-                              selected
-                                ? 'bg-white border-[#4C3B70] ring-1 ring-[#4C3B70]/25'
-                                : 'bg-white/70 border-[#D7CBEB]'
-                            }`}
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#486755] text-white cursor-pointer"
                           >
-                            <div className="flex items-center justify-between text-xs font-semibold text-[#22201D]">
-                              <span>{opt.label}</span>
-                              {selected && (
-                                <Check className="w-3.5 h-3.5 text-[#4C3B70]" />
-                              )}
-                            </div>
-                            <p className="mt-1 text-[11px] text-[#6B655C]">
-                              {opt.note}
-                            </p>
+                            Confirm package price
                           </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Extracted Editable Line Items */}
-                <div className="rounded-xl bg-white border border-[#E5DED2] p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[#22201D]">
-                      Extracted line items (editable)
-                    </span>
-                    {draftQuote.minGuests && (
-                      <span className="text-[11px] text-[#6B655C]">
-                        Min {draftQuote.minGuests} guests
-                        {draftQuote.maxCapacity
-                          ? ` · Max ${draftQuote.maxCapacity}`
-                          : ''}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="space-y-2.5">
-                    {draftQuote.lineItems.map((item) => (
-                      <div
-                        key={item.id}
-                        onClick={() =>
-                          item.evidenceId && setActiveEvidenceId(item.evidenceId)
-                        }
-                        className="rounded-xl border border-[#E5DED2] bg-[#FAF8F4] p-3 grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center"
-                      >
-                        <div className="sm:col-span-6">
-                          <input
-                            type="text"
-                            value={item.label}
-                            onChange={(e) =>
-                              updateQuote((q) => ({
-                                ...q,
-                                lineItems: q.lineItems.map((li) =>
-                                  li.id === item.id
-                                    ? { ...li, label: e.target.value }
-                                    : li
-                                ),
-                              }))
-                            }
-                            className="w-full rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 text-xs font-medium text-[#22201D]"
-                          />
-                        </div>
-                        <div className="sm:col-span-3">
-                          <select
-                            value={item.pricingModel}
-                            onChange={(e) =>
-                              updateQuote((q) => ({
-                                ...q,
-                                lineItems: q.lineItems.map((li) =>
-                                  li.id === item.id
-                                    ? {
-                                        ...li,
-                                        pricingModel: e.target.value as typeof item.pricingModel,
-                                      }
-                                    : li
-                                ),
-                              }))
-                            }
-                            className="w-full rounded-lg border border-[#E5DED2] bg-white px-2 py-1.5 text-xs text-[#6B655C]"
-                          >
-                            <option value="flat">Flat fee</option>
-                            <option value="per_person">Per guest</option>
-                            <option value="hourly">Hourly</option>
-                            <option value="guest_ratio">Per table</option>
-                          </select>
-                        </div>
-                        <div className="sm:col-span-3">
-                          <div className="relative">
-                            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[#6B655C]">
-                              $
-                            </span>
-                            <input
-                              type="number"
-                              value={item.unitPrice}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value);
-                                updateQuote((q) => ({
-                                  ...q,
-                                  lineItems: q.lineItems.map((li) =>
-                                    li.id === item.id
-                                      ? {
-                                          ...li,
-                                          unitPrice: Number.isNaN(val) ? 0 : val,
-                                        }
-                                      : li
-                                  ),
-                                }));
-                              }}
-                              className="w-full rounded-lg border border-[#E5DED2] bg-white pl-6 pr-2.5 py-1.5 text-right font-num text-xs font-semibold text-[#22201D]"
-                            />
-                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
+                    )}
 
-                {/* Unconfirmed Mandatory Fees Resolver */}
-                {draftQuote.unconfirmedFees.length > 0 && (
-                  <div className="rounded-xl bg-white border border-[#F59E0B]/60 p-4 space-y-3">
-                    <div className="text-xs font-semibold text-[#92400E]">
-                      Unconfirmed mandatory charges
-                    </div>
-                    {draftQuote.unconfirmedFees.map((fee) => (
+                    {/* Unconfirmed Mandatory Fees (quote-wide + selected package) */}
+                    {draftQuote.unconfirmedFees
+                      .filter(
+                        (fee) => !fee.packageId || fee.packageId === draftQuote.selectedPackageId
+                      )
+                      .map((fee) => (
                       <div
                         key={fee.id}
                         onClick={() =>
                           fee.evidenceId && setActiveEvidenceId(fee.evidenceId)
                         }
-                        className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-3 space-y-2.5"
+                        className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2"
                       >
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <div className="text-xs font-semibold text-[#22201D]">
                               {fee.label}
                             </div>
-                            <p className="text-[11px] text-[#6B655C] mt-0.5">
-                              {fee.description}
-                            </p>
+                            <p className="text-[11px] text-[#6B655C]">{fee.description}</p>
                           </div>
-                          <span
-                            className={`text-[11px] font-semibold whitespace-nowrap ${
-                              fee.status === 'unconfirmed'
-                                ? 'text-[#B45309]'
-                                : 'text-[#2D4F3C]'
-                            }`}
-                          >
+                          <span className="text-[11px] font-semibold text-[#B45309]">
                             {fee.status === 'unconfirmed'
                               ? 'Unresolved'
                               : fee.status === 'confirmed_amount'
-                                ? `Confirmed: ${formatShortCad(fee.confirmedAmount)}`
+                                ? formatShortCad(fee.confirmedAmount)
                                 : 'Included / Waived'}
                           </span>
                         </div>
-
                         <div className="flex flex-wrap items-center gap-2">
                           <input
                             type="number"
-                            placeholder="Confirmed CAD $"
+                            placeholder="Confirmed amount"
                             value={feeInputs[fee.id] ?? (fee.confirmedAmount ?? '')}
                             onChange={(e) =>
                               setFeeInputs((prev) => ({
@@ -1184,7 +1457,7 @@ export function QuoteImportModal({
                                 [fee.id]: e.target.value,
                               }))
                             }
-                            className="w-36 rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 font-num text-xs text-[#22201D]"
+                            className="w-36 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 font-num text-xs"
                           />
                           <button
                             type="button"
@@ -1204,7 +1477,7 @@ export function QuoteImportModal({
                                 ),
                               }));
                             }}
-                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer"
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[#486755] text-white cursor-pointer"
                           >
                             Confirm amount
                           </button>
@@ -1224,22 +1497,670 @@ export function QuoteImportModal({
                                 ),
                               }))
                             }
-                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E5DED2] bg-white text-[#22201D] hover:bg-[#F3EFE8] cursor-pointer"
+                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E5DED2] bg-white cursor-pointer"
                           >
                             Mark included / waived
                           </button>
                         </div>
                       </div>
                     ))}
+
+                    {/* Source Evidence Warnings */}
+                    {draftQuote.sourceWarnings &&
+                      draftQuote.sourceWarnings.length > 0 &&
+                      !draftQuote.sourceWarningsAcknowledged && (
+                        <div className="rounded-xl bg-[#FEF2F2] border border-[#FCA5A5] p-3 space-y-2">
+                          <div className="text-xs font-semibold text-[#991B1B]">
+                            Verify flagged evidence against original source
+                          </div>
+                          <ul className="list-disc pl-4 text-[11px] text-[#991B1B] space-y-0.5">
+                            {draftQuote.sourceWarnings.map((w, i) => (
+                              <li key={i}>{w}</li>
+                            ))}
+                          </ul>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateQuote((q) => ({
+                                ...q,
+                                sourceWarningsAcknowledged: true,
+                              }))
+                            }
+                            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#991B1B] text-white cursor-pointer"
+                          >
+                            I checked these against the source
+                          </button>
+                        </div>
+                      )}
                   </div>
                 )}
 
+                {/* 2B. PACKAGE OPTION SWITCHER (always visible when multiple packages exist) */}
+                {draftQuote.packages && draftQuote.packages.length >= 2 && (
+                  <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-semibold text-[#22201D]">
+                        Package options ({draftQuote.packages.length} preserved)
+                      </h4>
+                      <span className="text-[11px] text-[#6B655C]">
+                        Mutually exclusive — only selected package is counted
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {draftQuote.packages.map((pkg) => {
+                        const selected = draftQuote.selectedPackageId === pkg.id;
+                        return (
+                          <button
+                            key={pkg.id}
+                            type="button"
+                            onClick={() =>
+                              updateQuote((q) => ({
+                                ...q,
+                                selectedPackageId: pkg.id,
+                                minGuests: pkg.minGuests ?? q.minGuests,
+                                maxCapacity: pkg.maxCapacity ?? q.maxCapacity,
+                              }))
+                            }
+                            className={`text-left rounded-xl border p-3 space-y-1 cursor-pointer transition-colors ${
+                              selected
+                                ? 'bg-[#E7F1EA] border-[#486755]'
+                                : 'bg-[#FAF8F4] border-[#E5DED2] hover:border-[#486755]/60'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-[#22201D]">
+                                {pkg.name}
+                              </span>
+                              {selected && (
+                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#486755] text-white">
+                                  Selected
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-num text-sm font-semibold text-[#1F3A2B]">
+                              {formatShortCad(pkg.unitPrice)}
+                              {pkg.pricingModel === 'per_person' ? '/person' : ' flat'}
+                            </div>
+                            <div className="text-[11px] text-[#6B655C]">
+                              {pkg.minGuests ? `Min ${pkg.minGuests} guests` : 'No minimum stated'}
+                              {pkg.extraGuestRate ? ` · +$${pkg.extraGuestRate}/extra guest` : ''}
+                              {pkg.inclusions.length > 0
+                                ? ` · ${pkg.inclusions.length} inclusions`
+                                : ''}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* 3. PRICE & COST BREAKDOWN (Plain language + expandable editor) */}
+                <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-[#22201D]">
+                      Price &amp; cost breakdown
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={() => setShowLineItemEditor((prev) => !prev)}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-[#486755] hover:underline cursor-pointer"
+                    >
+                      {showLineItemEditor ? (
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      ) : (
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      )}
+                      {showLineItemEditor ? 'Hide line-item editor' : 'Edit line items & tax'}
+                    </button>
+                  </div>
+
+                    {/* Clean Readable Breakdown */}
+                    <div className="divide-y divide-[#F0EAE0] text-xs">
+                      {calc.lineItemBreakdowns.map((row) => {
+                        const matchingOvertimeItem = draftQuote.lineItems.find(
+                          (li) => li.id === row.id && li.isConditionalOvertime
+                        );
+                        return (
+                          <div
+                            key={row.id}
+                            className="py-2 flex items-start justify-between gap-3"
+                          >
+                            <div>
+                              <div className="font-medium text-[#22201D] flex items-center gap-1.5 flex-wrap">
+                                <span>{row.label}</span>
+                                {row.isThirdParty && (
+                                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-[#EAE2F7] text-[#42306B]">
+                                    Third-party{row.thirdPartyProvider ? ` · ${row.thirdPartyProvider}` : ''}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-[#6B655C] mt-0.5">
+                                {row.formulaText}
+                              </div>
+                              {matchingOvertimeItem && (
+                                <div className="mt-1.5 inline-flex items-center gap-2 text-[11px] text-[#22201D]">
+                                  <span className="text-[#6B655C]">Extra hours:</span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === matchingOvertimeItem.id
+                                            ? { ...li, quantity: Math.max(0, (li.quantity ?? 0) - 1) }
+                                            : li
+                                        ),
+                                      }))
+                                    }
+                                    className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
+                                    aria-label="Decrease extra hours"
+                                  >
+                                    −
+                                  </button>
+                                  <span className="font-num font-semibold min-w-[1.5rem] text-center">
+                                    {matchingOvertimeItem.quantity ?? 0}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === matchingOvertimeItem.id
+                                            ? { ...li, quantity: (li.quantity ?? 0) + 1 }
+                                            : li
+                                        ),
+                                      }))
+                                    }
+                                    className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
+                                    aria-label="Increase extra hours"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )}
+                              {row.negotiatedSavings && row.negotiatedOriginalAmount && (
+                                <div className="text-[11px] font-medium text-[#234733] mt-0.5">
+                                  Normally {formatShortCad(row.negotiatedOriginalAmount)} · You save{' '}
+                                  {formatShortCad(row.negotiatedSavings)}
+                                </div>
+                              )}
+                            </div>
+                            <div className="font-num font-semibold text-[#22201D] whitespace-nowrap">
+                              {row.amount !== null
+                                ? formatCurrency(row.amount, calc.currencyLabel, { decimals: 2 })
+                                : 'Needs basis'}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    {calc.gratuityAmount > 0 && (
+                      <div className="py-2 flex items-center justify-between text-[#6B655C]">
+                        <span>
+                          Gratuity ({draftQuote.gratuityPercent}% of{' '}
+                          {calc.gratuityBasisLabel ?? 'subtotal'})
+                        </span>
+                        <span className="font-num font-medium text-[#22201D]">
+                          {formatCurrency(calc.gratuityAmount, calc.currencyLabel, {
+                            decimals: 2,
+                          })}
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="py-2 space-y-2">
+                      <div className="flex items-center justify-between text-[#6B655C]">
+                        <span>{calc.taxStatusLabel}</span>
+                        <span className="font-num font-medium text-[#22201D]">
+                          {formatCurrency(calc.taxAmount, calc.currencyLabel, {
+                            decimals: 2,
+                          })}
+                        </span>
+                      </div>
+                      {calc.taxRateUnresolved && (
+                        <div className="rounded-lg bg-[#FFFBEB] border border-[#F59E0B]/50 p-2.5 space-y-1.5">
+                          <div className="text-[11px] text-[#92400E]">
+                            This quote states “plus tax” without a percentage. Enter the confirmed tax rate (or estimate 13% HST) before booking.
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              placeholder="Tax % (e.g. 13)"
+                              value={taxPercentInput}
+                              onChange={(e) => setTaxPercentInput(e.target.value)}
+                              className="w-28 rounded-md border border-[#E5DED2] bg-white px-2 py-1 font-num text-[11px]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const parsed = parseFloat(taxPercentInput);
+                                if (Number.isNaN(parsed) || parsed < 0) return;
+                                updateEffectiveTaxHandling('excluded_plus_hst', parsed);
+                                setTaxPercentInput('');
+                              }}
+                              className="px-2.5 py-1 text-[11px] font-semibold rounded-md bg-[#486755] text-white cursor-pointer"
+                            >
+                              Apply rate
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateEffectiveTaxHandling('unspecified_ontario_assumed', 13)
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Estimate 13% HST
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {calc.taxNotStated && (
+                        <div className="rounded-lg bg-[#FFFBEB] border border-[#F59E0B]/50 p-2.5 space-y-1.5">
+                          <div className="text-[11px] text-[#92400E]">
+                            Tax not stated — excluded from estimate. You can approve for your projected budget now, but tax must be confirmed before booking.
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateEffectiveTaxHandling(
+                                  'unspecified_ontario_assumed',
+                                  draftQuote.taxPercent ?? 13
+                                )
+                              }
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Estimate 13% HST
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateEffectiveTaxHandling('included')}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Tax included
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => updateEffectiveTaxHandling('tax_exempt')}
+                              className="px-2.5 py-1 text-[11px] font-medium rounded-md bg-white border border-[#E5DED2] text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer"
+                            >
+                              Confirmed no tax charged
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Expandable Detailed Line-Item & Tax Editor */}
+                  {showLineItemEditor && (
+                    <div className="pt-3 border-t border-[#E5DED2] space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                            Currency
+                          </label>
+                          <select
+                            value={draftQuote.currency}
+                            onChange={(e) =>
+                              updateQuote((q) => ({
+                                ...q,
+                                currency: e.target.value as CurrencyCode,
+                                currencySource:
+                                  e.target.value === 'UNKNOWN'
+                                    ? 'unknown'
+                                    : 'user_confirmed',
+                              }))
+                            }
+                            className="w-full rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                          >
+                            <option value="CAD">CAD ($ Canadian Dollar)</option>
+                            <option value="USD">USD ($ US Dollar)</option>
+                            <option value="UNKNOWN">Unknown / Unspecified</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                            Tax handling
+                          </label>
+                          <select
+                            value={calc.effectiveTaxHandling}
+                            onChange={(e) =>
+                              updateEffectiveTaxHandling(e.target.value as TaxHandling)
+                            }
+                            className="w-full rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                          >
+                            <option value="excluded_plus_hst">Excluded — add tax/HST</option>
+                            <option value="unspecified_ontario_assumed">
+                              Estimated jurisdiction tax (13% HST)
+                            </option>
+                            <option value="included">Tax already included</option>
+                            <option value="tax_exempt">Confirmed no tax charged (0%)</option>
+                            <option value="unspecified">
+                              Tax not stated — confirm later (0%)
+                            </option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {draftQuote.lineItems.map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() =>
+                            item.evidenceId && setActiveEvidenceId(item.evidenceId)
+                          }
+                          className="rounded-xl border border-[#E5DED2] bg-[#FAF8F4] p-3 space-y-2"
+                        >
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                            <input
+                              type="text"
+                              value={item.label}
+                              onChange={(e) =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  lineItems: q.lineItems.map((li) =>
+                                    li.id === item.id ? { ...li, label: e.target.value } : li
+                                  ),
+                                }))
+                              }
+                              className="sm:col-span-5 rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 text-xs font-medium"
+                            />
+                            <select
+                              value={item.pricingModel}
+                              onChange={(e) =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  lineItems: q.lineItems.map((li) =>
+                                    li.id === item.id
+                                      ? {
+                                          ...li,
+                                          pricingModel: e.target.value as LineItemPricingModel,
+                                        }
+                                      : li
+                                  ),
+                                }))
+                              }
+                              className="sm:col-span-4 rounded-lg border border-[#E5DED2] bg-white px-2 py-1.5 text-xs"
+                            >
+                              {(Object.keys(PRICING_MODEL_LABELS) as LineItemPricingModel[]).map(
+                                (m) => (
+                                  <option key={m} value={m}>
+                                    {PRICING_MODEL_LABELS[m]}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                            <input
+                              type="number"
+                              value={item.unitPrice}
+                              onChange={(e) => {
+                                const val = parseFloat(e.target.value);
+                                updateQuote((q) => ({
+                                  ...q,
+                                  lineItems: q.lineItems.map((li) =>
+                                    li.id === item.id
+                                      ? { ...li, unitPrice: Number.isNaN(val) ? 0 : val }
+                                      : li
+                                  ),
+                                }));
+                              }}
+                              className="sm:col-span-3 rounded-lg border border-[#E5DED2] bg-white px-2.5 py-1.5 text-right font-num text-xs font-semibold"
+                            />
+                          </div>
+
+                          {/* Conditional fields by pricing model */}
+                          {item.pricingModel === 'guest_ratio' && (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#6B655C]">
+                              <span>1</span>
+                              <input
+                                type="text"
+                                value={item.unitLabel ?? ''}
+                                placeholder="e.g. bartender"
+                                onChange={(e) =>
+                                  updateQuote((q) => ({
+                                    ...q,
+                                    lineItems: q.lineItems.map((li) =>
+                                      li.id === item.id
+                                        ? { ...li, unitLabel: e.target.value }
+                                        : li
+                                    ),
+                                  }))
+                                }
+                                className="w-28 rounded border border-[#E5DED2] bg-white px-2 py-1 text-xs text-[#22201D]"
+                              />
+                              <span>per</span>
+                              <input
+                                type="number"
+                                min="1"
+                                value={item.ratioDivisor ?? 75}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  updateQuote((q) => ({
+                                    ...q,
+                                    lineItems: q.lineItems.map((li) =>
+                                      li.id === item.id
+                                        ? {
+                                            ...li,
+                                            ratioDivisor: Number.isNaN(val) ? 1 : val,
+                                          }
+                                        : li
+                                    ),
+                                  }));
+                                }}
+                                className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                              />
+                              <span>guests</span>
+                            </div>
+                          )}
+
+                          {item.pricingModel === 'percentage' && (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-[#6B655C]">
+                              <span>Applies to:</span>
+                              <select
+                                value={item.percentageBasis ?? 'unknown'}
+                                onChange={(e) =>
+                                  updateQuote((q) => ({
+                                    ...q,
+                                    lineItems: q.lineItems.map((li) =>
+                                      li.id === item.id
+                                        ? {
+                                            ...li,
+                                            percentageBasis: e.target.value as PercentageBasis,
+                                          }
+                                        : li
+                                    ),
+                                  }))
+                                }
+                                className="rounded border border-[#E5DED2] bg-white px-2 py-1 text-xs text-[#22201D]"
+                              >
+                                {(Object.keys(PERCENTAGE_BASIS_LABELS) as PercentageBasis[]).map(
+                                  (b) => (
+                                    <option key={b} value={b}>
+                                      {PERCENTAGE_BASIS_LABELS[b]}
+                                    </option>
+                                  )
+                                )}
+                              </select>
+                              {item.percentageBasis === 'custom_amount' && (
+                                <input
+                                  type="number"
+                                  placeholder="Confirmed basis $"
+                                  value={item.customBasisAmount ?? ''}
+                                  onChange={(e) => {
+                                    const val = parseFloat(e.target.value);
+                                    updateQuote((q) => ({
+                                      ...q,
+                                      lineItems: q.lineItems.map((li) =>
+                                        li.id === item.id
+                                          ? {
+                                              ...li,
+                                              customBasisAmount: Number.isNaN(val)
+                                                ? undefined
+                                                : val,
+                                            }
+                                          : li
+                                      ),
+                                    }));
+                                  }}
+                                  className="w-32 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                />
+                              )}
+                            </div>
+                          )}
+                          {/* Extra-guest threshold, minGuests, or quantity editing + Delete */}
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-[#6B655C]">
+                            <div className="flex flex-wrap items-center gap-2">
+                              {item.pricingModel === 'per_person' && (
+                                <label className="inline-flex items-center gap-1.5">
+                                  <span>Min guests:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={item.minGuests ?? ''}
+                                    placeholder="None"
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === item.id
+                                            ? { ...li, minGuests: Number.isNaN(val) ? undefined : val }
+                                            : li
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                  />
+                                </label>
+                              )}
+                              {item.pricingModel === 'per_extra_guest' && (
+                                <label className="inline-flex items-center gap-1.5">
+                                  <span>Guests above:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={item.guestThreshold ?? ''}
+                                    placeholder="e.g. 150"
+                                    onChange={(e) => {
+                                      const val = parseInt(e.target.value, 10);
+                                      updateQuote((q) => ({
+                                        ...q,
+                                        lineItems: q.lineItems.map((li) =>
+                                          li.id === item.id
+                                            ? { ...li, guestThreshold: Number.isNaN(val) ? 0 : val }
+                                            : li
+                                        ),
+                                      }));
+                                    }}
+                                    className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                  />
+                                </label>
+                              )}
+                              {item.pricingModel === 'hourly' && (
+                                <div className="flex flex-wrap items-center gap-3">
+                                  <label className="inline-flex items-center gap-1.5">
+                                    <span>Planned hours:</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={item.quantity ?? (item.isConditionalOvertime ? 0 : 1)}
+                                      onChange={(e) => {
+                                        const val = parseFloat(e.target.value);
+                                        updateQuote((q) => ({
+                                          ...q,
+                                          lineItems: q.lineItems.map((li) =>
+                                            li.id === item.id
+                                              ? { ...li, quantity: Number.isNaN(val) ? 0 : val }
+                                              : li
+                                          ),
+                                        }));
+                                      }}
+                                      className="w-20 rounded border border-[#E5DED2] bg-white px-2 py-1 font-num text-xs text-[#22201D]"
+                                    />
+                                  </label>
+                                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-[#22201D]">
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(item.isConditionalOvertime)}
+                                      onChange={(e) => {
+                                        const checked = e.target.checked;
+                                        updateQuote((q) => ({
+                                          ...q,
+                                          lineItems: q.lineItems.map((li) =>
+                                            li.id === item.id
+                                              ? {
+                                                  ...li,
+                                                  isConditionalOvertime: checked || undefined,
+                                                  quantity: checked
+                                                    ? 0
+                                                    : li.quantity && li.quantity > 0
+                                                      ? li.quantity
+                                                      : 1,
+                                                }
+                                              : li
+                                          ),
+                                        }));
+                                      }}
+                                      className="accent-[#486755]"
+                                    />
+                                    <span>Conditional rate (0 hrs default)</span>
+                                  </label>
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateQuote((q) => ({
+                                  ...q,
+                                  lineItems: q.lineItems.filter((li) => li.id !== item.id),
+                                }))
+                              }
+                              className="inline-flex items-center gap-1 text-[11px] text-[#991B1B] hover:underline cursor-pointer"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          updateQuote((q) => ({
+                            ...q,
+                            lineItems: [
+                              ...q.lineItems,
+                              {
+                                id: `li-manual-${Date.now()}`,
+                                label: 'New line item',
+                                pricingModel: 'flat',
+                                unitPrice: 0,
+                                eventId: selectedEventIds[0],
+                              },
+                            ],
+                          }))
+                        }
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-dashed border-[#486755] text-[#486755] hover:bg-[#EAF5EE] cursor-pointer"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        Add line item
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* Optional Add-Ons */}
                 {draftQuote.addOns.length > 0 && (
-                  <div className="rounded-xl bg-white border border-[#E5DED2] p-4 space-y-2">
-                    <div className="text-xs font-semibold text-[#22201D]">
-                      Optional add-ons (toggle to preview impact)
-                    </div>
+                  <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2">
+                    <h4 className="text-xs font-semibold text-[#22201D]">
+                      Optional add-ons
+                    </h4>
                     {calc.addOnImpacts.map((addon) => (
                       <label
                         key={addon.id}
@@ -1253,9 +2174,7 @@ export function QuoteImportModal({
                               updateQuote((q) => ({
                                 ...q,
                                 addOns: q.addOns.map((a) =>
-                                  a.id === addon.id
-                                    ? { ...a, selected: !a.selected }
-                                    : a
+                                  a.id === addon.id ? { ...a, selected: !a.selected } : a
                                 ),
                               }))
                             }
@@ -1271,106 +2190,372 @@ export function QuoteImportModal({
                           </div>
                         </div>
                         <span className="font-num text-xs font-semibold text-[#4C3B70] whitespace-nowrap">
-                          +{formatShortCad(addon.impactWithTax)} incl. tax
+                          +{formatShortCad(addon.impactWithTax)}
                         </span>
                       </label>
                     ))}
                   </div>
                 )}
 
-                {/* Live Calculated Totals Summary */}
-                <div className="rounded-xl bg-[#F3F8F5] border border-[#C6DEC9] p-4 space-y-2 text-xs">
-                  <div className="flex justify-between text-[#6B655C]">
-                    <span>Pre-tax subtotal</span>
-                    <span className="font-num font-medium text-[#22201D]">
-                      {formatCurrency(calc.preTaxTotal, calc.currencyLabel, {
-                        decimals: 2,
-                      })}
+                {/* 4. WHAT'S INCLUDED & DELIVERY TERMS */}
+                {(getEffectiveQuoteInclusions(draftQuote).length > 0 ||
+                  getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 ||
+                  draftQuote.serviceDurationHours ||
+                  showLineItemEditor ||
+                  (draftQuote.exclusions && draftQuote.exclusions.length > 0) ||
+                  (draftQuote.restrictions && draftQuote.restrictions.length > 0)) && (
+                  <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-xs font-semibold text-[#22201D]">
+                        What’s included{calc.selectedPackageName ? ` · ${calc.selectedPackageName}` : ''}
+                      </h4>
+                      {draftQuote.serviceDurationHours && (
+                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-[#DFEFE4] text-[#234733]">
+                          {draftQuote.serviceDurationHours} hours coverage
+                        </span>
+                      )}
+                    </div>
+                    {getEffectiveQuoteInclusions(draftQuote).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {getEffectiveQuoteInclusions(draftQuote).map((inc, idx) => (
+                          <span
+                            key={idx}
+                            className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-[#FAF8F4] border border-[#E5DED2] text-[#22201D]"
+                          >
+                            {inc}
+                            {showLineItemEditor && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  updateQuote((q) => ({
+                                    ...q,
+                                    inclusions: q.inclusions.filter((item) => item !== inc),
+                                    packages: q.packages?.map((p) =>
+                                      p.id === q.selectedPackageId
+                                        ? { ...p, inclusions: p.inclusions.filter((item) => item !== inc) }
+                                        : p
+                                    ),
+                                  }))
+                                }
+                                className="text-[#6B655C] hover:text-[#991B1B] cursor-pointer"
+                                aria-label={`Remove inclusion ${inc}`}
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {showLineItemEditor && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="text"
+                          value={newInclusionText}
+                          onChange={(e) => setNewInclusionText(e.target.value)}
+                          placeholder="Add package inclusion..."
+                          className="flex-1 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const val = newInclusionText.trim();
+                            if (!val) return;
+                            updateQuote((q) => ({
+                              ...q,
+                              inclusions: [...q.inclusions, val],
+                            }));
+                            setNewInclusionText('');
+                          }}
+                          className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#FAF8F4] border border-[#E5DED2] hover:bg-[#F3EFE8] cursor-pointer"
+                        >
+                          Add
+                        </button>
+                      </div>
+                    )}
+                    {(getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 || showLineItemEditor) && (
+                      <div className="pt-1 space-y-1.5">
+                        <div className="text-[11px] font-semibold text-[#22201D]">
+                          Delivery &amp; turnaround
+                        </div>
+                        {getEffectiveQuoteDeliveryTerms(draftQuote).length > 0 && (
+                          <ul className="list-disc pl-4 text-xs text-[#22201D] space-y-0.5">
+                            {getEffectiveQuoteDeliveryTerms(draftQuote).map((term, idx) => (
+                              <li key={idx}>{term}</li>
+                            ))}
+                          </ul>
+                        )}
+                        {showLineItemEditor && (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={newDeliveryTermText}
+                              onChange={(e) => setNewDeliveryTermText(e.target.value)}
+                              placeholder="Add delivery term (e.g. Online gallery in 6–8 weeks)..."
+                              className="flex-1 rounded-lg border border-[#E5DED2] px-2.5 py-1.5 text-xs"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const val = newDeliveryTermText.trim();
+                                if (!val) return;
+                                updateQuote((q) => ({
+                                  ...q,
+                                  deliveryTerms: [...(q.deliveryTerms ?? []), val],
+                                }));
+                                setNewDeliveryTermText('');
+                              }}
+                              className="px-2.5 py-1.5 text-xs font-medium rounded-lg bg-[#FAF8F4] border border-[#E5DED2] hover:bg-[#F3EFE8] cursor-pointer"
+                            >
+                              Add
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {draftQuote.exclusions && draftQuote.exclusions.length > 0 && (
+                      <div className="text-[11px] text-[#6B655C]">
+                        <strong className="text-[#22201D]">Not included:</strong>{' '}
+                        {draftQuote.exclusions.join('; ')}
+                      </div>
+                    )}
+                    {draftQuote.restrictions && draftQuote.restrictions.length > 0 && (
+                      <div className="text-[11px] text-[#6B655C]">
+                        <strong className="text-[#22201D]">Conditions:</strong>{' '}
+                        {draftQuote.restrictions.join('; ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* 5. PAYMENT SCHEDULE */}
+                <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-[#22201D]">
+                      Payment schedule
+                    </h4>
+                    <span className="text-[11px] text-[#6B655C]">
+                      Deposits default to unpaid until confirmed
                     </span>
                   </div>
-                  <div className="flex justify-between text-[#6B655C]">
-                    <span>
-                      {calc.hstIncluded
-                        ? 'Ontario HST (already included)'
-                        : calc.hstAssumed
-                          ? 'Estimated Ontario HST (13% assumed)'
-                          : calc.taxRate > 0
-                            ? 'Ontario HST (13%)'
-                            : 'Tax (0%)'}
-                    </span>
-                    <span className="font-num font-medium text-[#22201D]">
-                      {formatCurrency(calc.taxAmount, calc.currencyLabel, {
-                        decimals: 2,
-                      })}
-                    </span>
-                  </div>
-                  <div className="pt-2 border-t border-[#C6DEC9] flex justify-between items-baseline">
-                    <span className="font-semibold text-[#1F3A2B] text-sm">
-                      Estimated All-In Total
-                    </span>
-                    <span className="font-num text-lg font-semibold text-[#1F3A2B]">
-                      {formatCurrency(calc.estimatedAllInTotal, calc.currencyLabel, {
-                        decimals: 2,
-                      })}
-                    </span>
-                  </div>
-                  {calc.revisionSavings && (
-                    <div className="text-[11px] font-medium text-[#2D4F3C]">
-                      Verified revision savings: {formatShortCad(calc.revisionSavings.savingsWithTax)} incl. HST vs prior quote.
+                  {showLineItemEditor ? (
+                    <textarea
+                      rows={2}
+                      value={draftQuote.paymentTermsSummary}
+                      onChange={(e) =>
+                        updateQuote((q) => ({
+                          ...q,
+                          paymentTermsSummary: e.target.value,
+                        }))
+                      }
+                      className="w-full rounded-lg border border-[#E5DED2] bg-[#FAF8F4] px-2.5 py-1.5 text-xs text-[#22201D]"
+                    />
+                  ) : (
+                    <p className="text-xs text-[#22201D]">
+                      {draftQuote.paymentTermsSummary}
+                    </p>
+                  )}
+                  {draftQuote.paymentMilestones &&
+                    draftQuote.paymentMilestones.length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        {draftQuote.paymentMilestones.map((m, idx) => {
+                          const computedDate = resolveRelativeDeadlineDate(
+                            primarySelectedEvent?.date,
+                            m.relativeDaysBeforeEvent
+                          );
+                          return (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between text-xs bg-[#FAF8F4] rounded-lg px-3 py-1.5"
+                            >
+                              <span className="font-medium text-[#22201D]">{m.label}</span>
+                              <span className="text-[#6B655C]">
+                                {m.amount
+                                  ? formatShortCad(m.amount)
+                                  : m.percent
+                                    ? `${m.percent}%`
+                                    : ''}
+                                {computedDate
+                                  ? ` · Due ${computedDate} (${m.relativeDeadlineText ?? `${m.relativeDaysBeforeEvent}d prior`})`
+                                  : m.dueDate
+                                    ? ` · Due ${m.dueDate}`
+                                    : m.relativeDeadlineText
+                                      ? ` · ${m.relativeDeadlineText}`
+                                      : ''}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                </div>
+
+                {/* 6. VENDOR DETAILS & EVENT ASSIGNMENT (Collapsible) */}
+                <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowVendorDetails((prev) => !prev)}
+                    className="w-full flex items-center justify-between text-xs font-semibold text-[#22201D] cursor-pointer"
+                  >
+                    <span>Vendor details &amp; event assignment</span>
+                    {showVendorDetails ? (
+                      <ChevronDown className="w-4 h-4 text-[#6B655C]" />
+                    ) : (
+                      <ChevronRight className="w-4 h-4 text-[#6B655C]" />
+                    )}
+                  </button>
+
+                  {showVendorDetails && (
+                    <div className="pt-2 border-t border-[#F0EAE0] space-y-3">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                            Vendor name
+                          </label>
+                          <input
+                            type="text"
+                            value={vendorName}
+                            onChange={(e) => setVendorName(e.target.value)}
+                            placeholder="Enter vendor name"
+                            className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs font-medium text-[#22201D]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                            Category
+                          </label>
+                          <select
+                            value={vendorCategory}
+                            onChange={(e) =>
+                              setVendorCategory(e.target.value as VendorCategory)
+                            }
+                            className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs text-[#22201D]"
+                          >
+                            {(Object.keys(CATEGORY_META) as VendorCategory[]).map((cat) => (
+                              <option key={cat} value={cat}>
+                                {CATEGORY_META[cat].label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {!onCompleteForOnboarding && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                              Vendor location (leave blank if unstated)
+                            </label>
+                            <input
+                              type="text"
+                              value={vendorLocation}
+                              onChange={(e) => setVendorLocation(e.target.value)}
+                              placeholder="Not stated in quote"
+                              className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs text-[#22201D]"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                              Save as new or link to existing vendor
+                            </label>
+                            <select
+                              value={linkedVendorId ?? ''}
+                              onChange={(e) => setLinkedVendorId(e.target.value || null)}
+                              className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs text-[#22201D]"
+                            >
+                              <option value="">Create as new vendor</option>
+                              {activeWorkspace.vendors.map((v) => (
+                                <option key={v.id} value={v.id}>
+                                  Update {v.name} ({v.status})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
+
+                      {activeWorkspace.events.length > 0 && !onCompleteForOnboarding && (
+                        <div>
+                          <div className="text-[11px] font-medium text-[#6B655C] mb-1.5">
+                            Associated events
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {activeWorkspace.events.map((evt) => {
+                              const checked = selectedEventIds.includes(evt.id);
+                              return (
+                                <button
+                                  key={evt.id}
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedEventIds((prev) =>
+                                      checked
+                                        ? prev.filter((id) => id !== evt.id)
+                                        : [...prev, evt.id]
+                                    )
+                                  }
+                                  className={`px-2.5 py-1 text-xs rounded-lg border cursor-pointer ${
+                                    checked
+                                      ? 'bg-[#E7F1EA] border-[#486755] text-[#2D4F3C] font-medium'
+                                      : 'bg-[#FAF8F4] border-[#E5DED2] text-[#6B655C]'
+                                  }`}
+                                >
+                                  {evt.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-
-                {/* Clarification Questions */}
-                {draftQuote.clarificationQuestions.length > 0 && (
-                  <div className="rounded-xl bg-white border border-[#E5DED2] p-4">
-                    <div className="text-xs font-semibold text-[#22201D] mb-1.5">
-                      Suggested clarification questions for vendor
-                    </div>
-                    <ul className="list-disc pl-4 space-y-1 text-xs text-[#6B655C]">
-                      {draftQuote.clarificationQuestions.map((q, idx) => (
-                        <li key={idx}>{q}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
               </div>
             </div>
 
             {/* Bottom Review Action Footer */}
             <div className="px-5 py-3.5 bg-white border-t border-[#E5DED2] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
               <div className="text-xs text-[#6B655C]">
-                {calc.canApprove
-                  ? 'Approving updates your projected estimate only. Booking confirmation is a separate step.'
-                  : 'Resolve blocking items above to approve, or save as Draft to revisit later.'}
+                {canApproveWithVendor
+                  ? 'Approving adds this quote to your projected budget. Booking is confirmed separately.'
+                  : 'Resolve the items under “Needs your attention” to approve, or save as a Draft.'}
               </div>
               <div className="flex items-center gap-2.5 justify-end shrink-0">
                 <button
                   type="button"
                   onClick={() => handleSave(true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl border border-[#D7CBEB] bg-[#EFEAF8] text-[#4C3B70] hover:bg-[#E5DCF4] transition-colors whitespace-nowrap cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl border border-[#D7CBEB] bg-[#EFEAF8] text-[#4C3B70] hover:bg-[#E5DCF4] whitespace-nowrap cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
                   Save as Draft
                 </button>
                 <button
                   type="button"
-                  disabled={!calc.canApprove}
+                  disabled={!canApproveWithVendor}
                   onClick={() => handleSave(false)}
-                  className={`inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold rounded-xl transition-colors whitespace-nowrap ${
-                    calc.canApprove
+                  className={`inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold rounded-xl whitespace-nowrap ${
+                    canApproveWithVendor
                       ? 'bg-[#486755] text-white hover:bg-[#395344] cursor-pointer'
                       : 'bg-[#E5DED2] text-[#9A9388] cursor-not-allowed'
                   }`}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  Approve Quote
+                  {editApprovedForVendorId ? 'Approve Changes' : 'Approve Quote'}
                 </button>
               </div>
             </div>
           </>
         )}
       </div>
+
+      {draftQuote?.attachmentPreview &&
+        draftQuote.attachmentPreview.mimeType.startsWith('image/') && (
+          <ImageLightboxModal
+            isOpen={lightboxOpen}
+            onClose={() => setLightboxOpen(false)}
+            imageUrl={draftQuote.attachmentPreview.dataUrl}
+            fileName={draftQuote.attachmentPreview.fileName}
+          />
+        )}
     </div>
   );
 }

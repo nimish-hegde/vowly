@@ -2,8 +2,10 @@ import type {
   BudgetRow,
   PastelTone,
   PaymentMilestone,
+  PercentageBasis,
   Quote,
   QuoteLineItem,
+  QuotePackageOption,
   TaxHandling,
   Vendor,
   VendorCategory,
@@ -12,6 +14,35 @@ import type {
 } from '../types/vowly';
 
 export const ONTARIO_HST_RATE = 0.13;
+
+const FOOD_ITEM_PATTERN =
+  /\b(banquet|dinner|buffet|menu|catering|food|meal|entree|appetizer|dessert|plated|brunch|lunch|reception package|per[\s-]person|per[\s-]guest)\b/i;
+
+export function resolveRelativeDeadlineDate(
+  eventDateIso: string | undefined,
+  relativeDaysBeforeEvent: number | undefined
+): string | null {
+  if (!eventDateIso || !/^\d{4}-\d{2}-\d{2}$/.test(eventDateIso)) return null;
+  if (relativeDaysBeforeEvent === undefined || !Number.isFinite(relativeDaysBeforeEvent)) {
+    return null;
+  }
+  const [y, m, d] = eventDateIso.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() - Math.round(relativeDaysBeforeEvent));
+  return dt.toISOString().slice(0, 10);
+}
+
+export interface LineItemBreakdown {
+  id: string;
+  label: string;
+  amount: number | null;
+  formulaText: string;
+  negotiatedOriginalAmount?: number;
+  negotiatedSavings?: number;
+  isThirdParty?: boolean;
+  thirdPartyProvider?: string;
+  unresolvedBasis?: boolean;
+}
 
 export interface QuoteCalculationResult {
   currencyLabel: string;
@@ -22,10 +53,15 @@ export interface QuoteCalculationResult {
   paymentOptionAdjustment: number;
   preTaxTotal: number;
   gratuityAmount: number;
+  gratuityUnresolved: boolean;
+  gratuityBasisLabel?: string;
   taxRate: number;
   taxAmount: number;
   hstAssumed: boolean;
   hstIncluded: boolean;
+  taxNotStated: boolean;
+  taxRateUnresolved: boolean;
+  taxStatusLabel: string;
   effectiveTaxHandling: TaxHandling;
   estimatedAllInTotal: number;
   effectiveGuestCountUsed: number | null;
@@ -33,8 +69,16 @@ export interface QuoteCalculationResult {
   minGuestsApplied: boolean;
   appliedMinGuests: number | null;
   capacityExceeded: boolean;
+  unresolvedPackageSelection: boolean;
+  unresolvedPackagePrice: boolean;
+  selectedPackageName?: string;
+  legacyReviewReasons: string[];
   unresolvedMandatoryFeesCount: number;
   unresolvedConflictsCount: number;
+  unresolvedPercentageCount: number;
+  negotiatedSavings: number;
+  isEstimateComplete: boolean;
+  lineItemBreakdowns: LineItemBreakdown[];
   blockingReasons: string[];
   canApprove: boolean;
   addOnImpacts: Array<{
@@ -158,6 +202,27 @@ function resolveLineItemAmount(
     };
   }
 
+  if (item.pricingModel === 'per_extra_guest') {
+    const threshold = item.guestThreshold ?? item.minGuests ?? 0;
+    if (rawGuests === null) {
+      return {
+        amount: 0,
+        guestsUsed: null,
+        minApplied: false,
+        appliedMin: null,
+        guestMissing: true,
+      };
+    }
+    const extraGuests = Math.max(0, rawGuests - threshold);
+    return {
+      amount: extraGuests * item.unitPrice,
+      guestsUsed: rawGuests,
+      minApplied: false,
+      appliedMin: null,
+      guestMissing: false,
+    };
+  }
+
   if (item.pricingModel === 'guest_ratio') {
     if (rawGuests === null) {
       return {
@@ -180,7 +245,7 @@ function resolveLineItemAmount(
   }
 
   if (item.pricingModel === 'hourly') {
-    const hours = item.quantity ?? 1;
+    const hours = item.isConditionalOvertime ? (item.quantity ?? 0) : (item.quantity ?? 1);
     return {
       amount: hours * item.unitPrice,
       guestsUsed: null,
@@ -201,11 +266,238 @@ function resolveLineItemAmount(
   };
 }
 
+function resolvePercentageBasis(
+  basis: PercentageBasis | undefined,
+  baseItems: Array<{ item: QuoteLineItem; amount: number | null }>,
+  options?: { targetLabels?: string[]; customBasisAmount?: number }
+): { amount: number | null; label: string } {
+  const effectiveBasis = basis ?? 'unknown';
+  if (effectiveBasis === 'unknown') {
+    return { amount: null, label: 'calculation basis unresolved' };
+  }
+  if (effectiveBasis === 'custom_amount') {
+    if (
+      options?.customBasisAmount !== undefined &&
+      Number.isFinite(options.customBasisAmount) &&
+      options.customBasisAmount >= 0
+    ) {
+      return {
+        amount: Math.round(options.customBasisAmount * 100) / 100,
+        label: 'confirmed custom amount',
+      };
+    }
+    return { amount: null, label: 'custom amount not confirmed' };
+  }
+  if (effectiveBasis === 'entire_subtotal') {
+    const sum = baseItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: 'applicable subtotal' };
+  }
+  if (effectiveBasis === 'food_subtotal') {
+    const foodItems = baseItems.filter(
+      (e) =>
+        e.item.isFoodItem === true ||
+        (e.item.isFoodItem !== false &&
+          !e.item.isThirdParty &&
+          e.item.pricingModel !== 'guest_ratio' &&
+          FOOD_ITEM_PATTERN.test(e.item.label))
+    );
+    if (foodItems.length === 0 || foodItems.some((e) => e.amount === null)) {
+      return { amount: null, label: 'food subtotal unresolved' };
+    }
+    const sum = foodItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: 'food subtotal' };
+  }
+  if (effectiveBasis === 'specific_line_items') {
+    const targets = (options?.targetLabels ?? [])
+      .map((t) => t.toLowerCase().trim())
+      .filter(Boolean);
+    if (targets.length === 0) {
+      return { amount: null, label: 'target line items unresolved' };
+    }
+    const matched = baseItems.filter((e) =>
+      targets.some((t) => e.item.label.toLowerCase().includes(t))
+    );
+    if (matched.length === 0 || matched.some((e) => e.amount === null)) {
+      return { amount: null, label: 'target line items unresolved' };
+    }
+    const sum = matched.reduce((acc, e) => acc + (e.amount ?? 0), 0);
+    return { amount: Math.round(sum * 100) / 100, label: targets.join(', ') };
+  }
+  return { amount: null, label: 'calculation basis unresolved' };
+}
+
+function isDuplicateGratuityPercentageItem(item: QuoteLineItem, quote: Quote): boolean {
+  if (item.pricingModel !== 'percentage') return false;
+  if (!/\b(gratuity|tip|service\s*charge)\b/i.test(item.label)) return false;
+  if (quote.gratuityStatus !== 'excluded') return false;
+  if (quote.gratuityPercent === undefined || quote.gratuityPercent === null) return false;
+  return Math.abs(item.unitPrice - quote.gratuityPercent) < 0.01;
+}
+
+const EXTRA_GUEST_LABEL_PATTERN =
+  /\b(extra|additional)\s+(guests?|persons?|people|plates?)\b|\bguests?\s+(over|above|beyond)\b/i;
+
+const LEGACY_OVERTIME_PATTERN =
+  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hours?|hrs?)\b|\b(hours?|hrs?)\s*(extension|overtime)\b|\bovertime\b/i;
+
+const MULTI_TIER_PACKAGE_PATTERN =
+  /\b(package|menu|tier|plan|royal|imperial|silver|gold|platinum|diamond|classic|deluxe|premium)\b/i;
+
+export function getSelectedPackageOption(quote: Quote): {
+  hasMultiplePackages: boolean;
+  selectedPackage?: QuotePackageOption;
+} {
+  const pkgs = quote.packages ?? [];
+  if (pkgs.length < 2) {
+    return { hasMultiplePackages: false, selectedPackage: pkgs[0] };
+  }
+  if (!quote.selectedPackageId) {
+    return { hasMultiplePackages: true, selectedPackage: undefined };
+  }
+  const chosen = pkgs.find((p) => p.id === quote.selectedPackageId);
+  return { hasMultiplePackages: true, selectedPackage: chosen };
+}
+
+export function getEffectiveQuoteInclusions(quote: Quote): string[] {
+  const { selectedPackage } = getSelectedPackageOption(quote);
+  if (selectedPackage) {
+    return Array.from(new Set([...selectedPackage.inclusions, ...quote.inclusions]));
+  }
+  return quote.inclusions;
+}
+
+export function getEffectiveQuoteDeliveryTerms(quote: Quote): string[] {
+  const { selectedPackage } = getSelectedPackageOption(quote);
+  const pkgTerms = selectedPackage?.deliveryTerms ?? [];
+  const quoteTerms = quote.deliveryTerms ?? [];
+  return Array.from(new Set([...pkgTerms, ...quoteTerms]));
+}
+
+export function getTaxStatusLabel(taxHandling: TaxHandling, taxRate: number): string {
+  switch (taxHandling) {
+    case 'included':
+      return 'Tax / HST included';
+    case 'excluded_plus_hst':
+      return taxRate > 0 ? `Plus ${Math.round(taxRate * 100)}% HST / tax` : 'Plus tax';
+    case 'unspecified_ontario_assumed':
+      return `Est. +${Math.round(taxRate * 100)}% HST (assumed)`;
+    case 'tax_exempt':
+      return 'Confirmed no tax charged (0%)';
+    case 'unspecified':
+    default:
+      return 'Tax not stated — excluded from estimate.';
+  }
+}
+
+function isRedundantExtraGuestLineItem(
+  item: QuoteLineItem,
+  activeItems: QuoteLineItem[],
+  quote: Quote,
+  selectedPackage?: QuotePackageOption
+): boolean {
+  if (selectedPackage && item.id === `pkg-active-${selectedPackage.id}`) return false;
+  const isExtraGuestCandidate =
+    item.pricingModel === 'per_extra_guest' ||
+    (item.pricingModel === 'per_person' && EXTRA_GUEST_LABEL_PATTERN.test(item.label));
+  if (!isExtraGuestCandidate) return false;
+
+  if (
+    selectedPackage &&
+    selectedPackage.pricingModel === 'per_person' &&
+    selectedPackage.unitPrice !== null &&
+    Math.abs(selectedPackage.unitPrice - item.unitPrice) < 0.01
+  ) {
+    return true;
+  }
+  if (
+    !item.packageId &&
+    (quote.packages ?? []).some(
+      (p) =>
+        p.pricingModel === 'per_person' &&
+        p.unitPrice !== null &&
+        Math.abs(p.unitPrice - item.unitPrice) < 0.01
+    )
+  ) {
+    return true;
+  }
+
+  return activeItems.some(
+    (sibling) =>
+      sibling.id !== item.id &&
+      sibling.pricingModel === 'per_person' &&
+      !EXTRA_GUEST_LABEL_PATTERN.test(sibling.label) &&
+      Math.abs(sibling.unitPrice - item.unitPrice) < 0.01
+  );
+}
+
+/**
+ * Flags legacy saved quotes that exhibit known pre-fix calculation failure patterns
+ * so they are never silently retained as bookable without user re-review.
+ */
+export function detectLegacyQuoteReviewReasons(quote: Quote): string[] {
+  if (quote.legacyReviewAcknowledged) return [];
+  const reasons: string[] = [];
+
+  // 1. Multiple per_person package/tier items summed in a legacy quote without packages[]
+  if (!quote.packages || quote.packages.length === 0) {
+    const perPersonBaseItems = quote.lineItems.filter(
+      (li) => li.pricingModel === 'per_person' && !EXTRA_GUEST_LABEL_PATTERN.test(li.label)
+    );
+    const tierNamedItems = perPersonBaseItems.filter((li) =>
+      MULTI_TIER_PACKAGE_PATTERN.test(li.label)
+    );
+    if (tierNamedItems.length >= 2) {
+      reasons.push(
+        'Multiple per-person package options appear summed together — re-review and choose one package.'
+      );
+    }
+
+    const extraGuestPerPerson = quote.lineItems.filter(
+      (li) => li.pricingModel === 'per_person' && EXTRA_GUEST_LABEL_PATTERN.test(li.label)
+    );
+    if (perPersonBaseItems.length >= 1 && extraGuestPerPerson.length >= 1) {
+      reasons.push(
+        'Extra-guest pricing may be applied across all guests instead of incremental guests — re-review line items.'
+      );
+    }
+  }
+
+  // 2. Conditional overtime hourly rate billed by default alongside a flat package
+  const hasFlatBase = quote.lineItems.some((li) => li.pricingModel === 'flat');
+  if (hasFlatBase) {
+    const suspiciousOvertime = quote.lineItems.find(
+      (li) =>
+        li.pricingModel === 'hourly' &&
+        !li.isConditionalOvertime &&
+        (li.quantity ?? 1) >= 1 &&
+        LEGACY_OVERTIME_PATTERN.test(li.label)
+    );
+    if (suspiciousOvertime) {
+      reasons.push(
+        `Additional hourly rate ("${suspiciousOvertime.label}") is billed by default — verify whether extra hours are needed.`
+      );
+    }
+  }
+
+  // 3. Unknown tax previously auto-mapped to tax_exempt
+  if (
+    quote.taxHandling === 'tax_exempt' &&
+    quote.sourceText.trim().length > 0 &&
+    !/\b(tax[\s-]*exempt|no\s*tax|tax[\s-]*free|0%\s*tax|zero\s*tax)\b/i.test(quote.sourceText)
+  ) {
+    reasons.push(
+      'Tax was previously marked tax-exempt without explicit source wording — confirm actual tax handling.'
+    );
+  }
+
+  return reasons;
+}
+
 /**
  * Pure deterministic calculator for any vendor quote.
- * Guarantees consistent Ontario 13% HST handling, minimum guest floors,
- * optional add-ons, cash vs regular payment alternatives, conflict checks,
- * and approval blockers.
+ * Guarantees consistent tax/gratuity handling, structured percentage bases,
+ * minimum guest floors, staffing ratios, optional add-ons, negotiated savings,
+ * conflict checks, and approval blockers.
  */
 export function calculateQuoteFinancials(
   quote: Quote,
@@ -226,28 +518,121 @@ export function calculateQuoteFinancials(
   let appliedMinGuests: number | null = null;
   let effectiveGuestCountUsed: number | null = null;
   let guestCountMissing = false;
+  let negotiatedSavings = 0;
+  let unresolvedPercentageCount = 0;
+  const lineItemBreakdowns: LineItemBreakdown[] = [];
+  const resolvedBaseItems: Array<{ item: QuoteLineItem; amount: number | null }> = [];
+  const percentageItems: QuoteLineItem[] = [];
 
-  const resolvedConflictPriceByLineItem: Record<string, number> = {};
+  const resolvedConflictByLineItem: Record<
+    string,
+    { amount: number; pricingModel?: QuoteLineItem['pricingModel'] }
+  > = {};
   for (const conflict of quote.conflicts) {
     if (conflict.targetLineItemId) {
       const chosen =
         conflict.options.find((o) => o.id === conflict.resolvedOptionId) ??
         conflict.options[0];
       if (chosen) {
-        resolvedConflictPriceByLineItem[conflict.targetLineItemId] = chosen.amount;
+        resolvedConflictByLineItem[conflict.targetLineItemId] = {
+          amount: chosen.amount,
+          pricingModel: chosen.pricingModel,
+        };
       }
     }
   }
 
-  for (const item of quote.lineItems) {
+  const { hasMultiplePackages, selectedPackage } = getSelectedPackageOption(quote);
+  const unresolvedPackageSelection = hasMultiplePackages && !selectedPackage;
+  const unresolvedPackagePrice = Boolean(
+    selectedPackage &&
+      (selectedPackage.pricingModel === 'unknown' || selectedPackage.unitPrice === null)
+  );
+
+  const activeItems: QuoteLineItem[] = [];
+  if (selectedPackage) {
+    if (unresolvedPackagePrice) {
+      lineItemBreakdowns.push({
+        id: `pkg-active-${selectedPackage.id}`,
+        label: selectedPackage.name,
+        amount: null,
+        formulaText: 'Base package price unconfirmed (TBD)',
+      });
+    } else {
+      activeItems.push({
+        id: `pkg-active-${selectedPackage.id}`,
+        label: selectedPackage.name,
+        pricingModel: selectedPackage.pricingModel as 'flat' | 'per_person',
+        unitPrice: selectedPackage.unitPrice!,
+        minGuests: selectedPackage.minGuests,
+        isFoodItem: selectedPackage.isFoodItem,
+        eventId: vendorEventIds[0],
+        evidenceId: selectedPackage.evidenceId,
+        pageReference: selectedPackage.pageReference,
+      });
+
+      if (
+        selectedPackage.pricingModel === 'flat' &&
+        selectedPackage.extraGuestRate !== undefined &&
+        selectedPackage.extraGuestRate > 0 &&
+        (selectedPackage.includedGuests !== undefined || selectedPackage.minGuests !== undefined)
+      ) {
+        activeItems.push({
+          id: `pkg-extra-${selectedPackage.id}`,
+          label: `${selectedPackage.name} extra guests`,
+          pricingModel: 'per_extra_guest',
+          unitPrice: selectedPackage.extraGuestRate,
+          guestThreshold: selectedPackage.includedGuests ?? selectedPackage.minGuests,
+          isFoodItem: selectedPackage.isFoodItem,
+          eventId: vendorEventIds[0],
+          evidenceId: selectedPackage.evidenceId,
+        });
+      }
+    }
+
+    if (selectedPackage.fees && selectedPackage.fees.length > 0) {
+      activeItems.push(...selectedPackage.fees);
+    }
+  }
+
+  const knownPackageIds = new Set((quote.packages ?? []).map((p) => p.id.toLowerCase()));
+  for (const li of quote.lineItems) {
+    const liPkgId = li.packageId?.trim().toLowerCase();
+    if (hasMultiplePackages && liPkgId && knownPackageIds.has(liPkgId)) {
+      if (!selectedPackage || liPkgId !== selectedPackage.id.toLowerCase()) {
+        continue;
+      }
+    }
+    if (
+      selectedPackage &&
+      !hasMultiplePackages &&
+      selectedPackage.unitPrice !== null &&
+      li.pricingModel === selectedPackage.pricingModel &&
+      Math.abs(li.unitPrice - selectedPackage.unitPrice) < 0.01
+    ) {
+      continue;
+    }
+    activeItems.push(li);
+  }
+
+  for (const item of activeItems) {
+    if (isRedundantExtraGuestLineItem(item, activeItems, quote, selectedPackage)) {
+      continue;
+    }
+    if (item.pricingModel === 'percentage') {
+      percentageItems.push(item);
+      continue;
+    }
+    const conflictOverride = resolvedConflictByLineItem[item.id];
     const overriddenUnitPrice =
-      resolvedConflictPriceByLineItem[item.id] !== undefined
-        ? resolvedConflictPriceByLineItem[item.id]
-        : item.unitPrice;
+      conflictOverride !== undefined ? conflictOverride.amount : item.unitPrice;
+    const overriddenPricingModel =
+      conflictOverride?.pricingModel ?? item.pricingModel;
     const effectiveItem: QuoteLineItem = {
       ...item,
+      pricingModel: overriddenPricingModel,
       unitPrice: overriddenUnitPrice,
-      minGuests: item.minGuests ?? quote.minGuests,
+      minGuests: item.minGuests ?? selectedPackage?.minGuests ?? quote.minGuests,
     };
     const res = resolveLineItemAmount(
       effectiveItem,
@@ -262,10 +647,80 @@ export function calculateQuoteFinancials(
     }
     if (res.guestsUsed !== null) effectiveGuestCountUsed = res.guestsUsed;
     if (res.guestMissing) guestCountMissing = true;
+
+    let itemSavings: number | undefined;
+    let itemOriginalTotal: number | undefined;
+    if (
+      item.originalUnitPrice !== undefined &&
+      item.originalUnitPrice > overriddenUnitPrice &&
+      !quote.conflicts.some((c) => c.targetLineItemId === item.id)
+    ) {
+      const origRes = resolveLineItemAmount(
+        { ...effectiveItem, unitPrice: item.originalUnitPrice },
+        guestMap,
+        primaryEventGuests,
+        guestCountOverride
+      );
+      if (origRes.amount > res.amount) {
+        itemOriginalTotal = Math.round(origRes.amount * 100) / 100;
+        itemSavings = Math.round((origRes.amount - res.amount) * 100) / 100;
+        negotiatedSavings = Math.round((negotiatedSavings + itemSavings) * 100) / 100;
+      }
+    }
+
+    let formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} fixed`;
+    if (effectiveItem.pricingModel === 'per_person') {
+      formulaText =
+        res.guestsUsed !== null
+          ? `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest × ${res.guestsUsed} guests${
+              res.minApplied && res.appliedMin ? ` (min ${res.appliedMin} applied)` : ''
+            }`
+          : `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest (guest count needed)`;
+    } else if (effectiveItem.pricingModel === 'per_extra_guest') {
+      const threshold = effectiveItem.guestThreshold ?? effectiveItem.minGuests ?? 0;
+      if (res.guestsUsed !== null) {
+        const extra = Math.max(0, res.guestsUsed - threshold);
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} × ${extra} extra guest${extra === 1 ? '' : 's'}`;
+      } else {
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} (guest count needed)`;
+      }
+    } else if (effectiveItem.pricingModel === 'guest_ratio') {
+      const divisor = effectiveItem.ratioDivisor && effectiveItem.ratioDivisor > 0 ? effectiveItem.ratioDivisor : 10;
+      const unitWord = effectiveItem.unitLabel || 'unit';
+      if (res.guestsUsed !== null) {
+        const units = Math.ceil(res.guestsUsed / divisor);
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} · 1 per ${divisor} guests · ${res.guestsUsed} guests → ${units} ${unitWord}${units === 1 ? '' : 's'}`;
+      } else {
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} (1 per ${divisor} guests)`;
+      }
+    } else if (effectiveItem.pricingModel === 'hourly') {
+      if (effectiveItem.isConditionalOvertime) {
+        const overtimeHrs = effectiveItem.quantity ?? 0;
+        const includedText = effectiveItem.includedPackageHours
+          ? ` (above ${effectiveItem.includedPackageHours} included hrs)`
+          : '';
+        formulaText = `${overtimeHrs} overtime hr${overtimeHrs === 1 ? '' : 's'} × $${overriddenUnitPrice.toLocaleString('en-CA')}/hr${includedText}`;
+      } else {
+        const hrs = effectiveItem.quantity ?? 1;
+        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/hr × ${hrs} hr${hrs === 1 ? '' : 's'}`;
+      }
+    }
+
+    resolvedBaseItems.push({ item: effectiveItem, amount: res.guestMissing && res.amount === 0 ? null : res.amount });
+    lineItemBreakdowns.push({
+      id: item.id,
+      label: item.label,
+      amount: Math.round(res.amount * 100) / 100,
+      formulaText,
+      negotiatedOriginalAmount: itemOriginalTotal,
+      negotiatedSavings: itemSavings,
+      isThirdParty: item.isThirdParty,
+      thirdPartyProvider: item.thirdPartyProvider,
+    });
   }
 
   let paymentOptionAdjustment = 0;
-  let effectiveTaxHandling: TaxHandling = quote.taxHandling;
+  let effectiveTaxHandling: TaxHandling = selectedPackage?.taxHandling ?? quote.taxHandling;
   if (quote.paymentOptions && quote.paymentOptions.length > 0) {
     const activeOpt =
       quote.paymentOptions.find((o) => o.id === quote.selectedPaymentOptionId) ??
@@ -274,11 +729,26 @@ export function calculateQuoteFinancials(
     effectiveTaxHandling = activeOpt.taxHandling;
   }
 
+  // Resolve confirmed extra fees BEFORE evaluating whole-subtotal percentage charges
+  // Only include fees that are quote-wide OR scoped to the currently selected package
   let confirmedExtraFeesPreTax = 0;
   let unresolvedMandatoryFeesCount = 0;
   for (const fee of quote.unconfirmedFees) {
+    if (fee.packageId && (!selectedPackage || fee.packageId !== selectedPackage.id)) {
+      continue;
+    }
     if (fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number') {
       confirmedExtraFeesPreTax += fee.confirmedAmount;
+      resolvedBaseItems.push({
+        item: {
+          id: fee.id,
+          label: fee.label,
+          pricingModel: 'flat',
+          unitPrice: fee.confirmedAmount,
+          isFoodItem: false,
+        },
+        amount: fee.confirmedAmount,
+      });
     } else if (fee.mandatory && fee.status === 'unconfirmed') {
       unresolvedMandatoryFeesCount += 1;
     }
@@ -286,50 +756,235 @@ export function calculateQuoteFinancials(
 
   const hstIncluded = effectiveTaxHandling === 'included';
   const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
+  const effectiveTaxPercentValue =
+    selectedPackage?.taxPercent !== undefined ? selectedPackage.taxPercent : quote.taxPercent;
+  const hasExplicitTaxLineItem = activeItems.some((li) =>
+    /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
+  );
+  const taxNotStated = !hasExplicitTaxLineItem && effectiveTaxHandling === 'unspecified';
+  // When a quote explicitly says "plus tax" without a stated percentage (taxPercent === null),
+  // preserve the unknown rate instead of silently defaulting to 13% HST.
+  const taxRateUnresolved =
+    !hasExplicitTaxLineItem &&
+    effectiveTaxHandling === 'excluded_plus_hst' &&
+    effectiveTaxPercentValue === null;
+  const explicitTaxRate =
+    typeof effectiveTaxPercentValue === 'number' && Number.isFinite(effectiveTaxPercentValue)
+      ? effectiveTaxPercentValue / 100
+      : ONTARIO_HST_RATE;
   const taxRate =
-    effectiveTaxHandling === 'excluded_plus_hst' ||
-    effectiveTaxHandling === 'unspecified_ontario_assumed'
-      ? ONTARIO_HST_RATE
-      : 0;
+    hasExplicitTaxLineItem ||
+    effectiveTaxHandling === 'included' ||
+    effectiveTaxHandling === 'tax_exempt' ||
+    effectiveTaxHandling === 'unspecified' ||
+    taxRateUnresolved
+      ? 0
+      : explicitTaxRate;
+  const taxStatusLabel = hasExplicitTaxLineItem
+    ? 'Tax listed in line items'
+    : taxRateUnresolved
+      ? 'Plus tax (rate not stated — excluded from estimate.)'
+      : getTaxStatusLabel(effectiveTaxHandling, taxRate);
 
+  // Evaluate optional add-ons in two order-independent passes:
+  // Pass 1: resolve all non-percentage add-ons and add selected ones to resolvedBaseItems
+  // Pass 2: evaluate percentage add-ons against the completed resolvedBaseItems
   let selectedAddOnsPreTax = 0;
-  const addOnImpacts = quote.addOns.map((addon) => {
-    if (addon.selected) {
-      selectedAddOnsPreTax += addon.pricePreTax;
+  const activeAddOns = quote.addOns.filter(
+    (a) => !a.packageId || (selectedPackage && a.packageId === selectedPackage.id)
+  );
+  const preTaxByAddOnId = new Map<string, number>();
+
+  for (const addon of activeAddOns) {
+    const model = addon.pricingModel ?? 'flat';
+    if (model === 'percentage') continue;
+    let computedPreTax = addon.pricePreTax;
+    if (model !== 'flat') {
+      const addonRes = resolveLineItemAmount(
+        {
+          id: addon.id,
+          label: addon.label,
+          pricingModel: model,
+          unitPrice: addon.pricePreTax,
+          quantity: addon.quantity,
+          ratioDivisor: addon.ratioDivisor,
+          unitLabel: addon.unitLabel,
+          minGuests: addon.minGuests,
+          guestThreshold: addon.minGuests,
+          eventId: addon.eventId,
+        },
+        guestMap,
+        primaryEventGuests,
+        guestCountOverride
+      );
+      computedPreTax = Math.round(addonRes.amount * 100) / 100;
     }
-    const impactWithTax = Math.round(addon.pricePreTax * (1 + taxRate) * 100) / 100;
+    preTaxByAddOnId.set(addon.id, computedPreTax);
+    if (addon.selected) {
+      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
+      resolvedBaseItems.push({
+        item: {
+          id: addon.id,
+          label: addon.label,
+          pricingModel: model,
+          unitPrice: addon.pricePreTax,
+          isFoodItem: false,
+        },
+        amount: computedPreTax,
+      });
+    }
+  }
+
+  for (const addon of activeAddOns) {
+    const model = addon.pricingModel ?? 'flat';
+    if (model !== 'percentage') continue;
+    const basis = resolvePercentageBasis(addon.percentageBasis, resolvedBaseItems, {
+      targetLabels: addon.percentageTargetLabels,
+      customBasisAmount: addon.customBasisAmount,
+    });
+    let computedPreTax = 0;
+    if (basis.amount === null) {
+      if (addon.selected) {
+        unresolvedPercentageCount += 1;
+      }
+    } else {
+      computedPreTax = Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100;
+    }
+    preTaxByAddOnId.set(addon.id, computedPreTax);
+    if (addon.selected) {
+      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
+    }
+  }
+
+  const addOnImpacts = activeAddOns.map((addon) => {
+    const computedPreTax = preTaxByAddOnId.get(addon.id) ?? 0;
+    const impactWithTax = Math.round(computedPreTax * (1 + taxRate) * 100) / 100;
     return {
       id: addon.id,
       label: addon.label,
       description: addon.description,
-      pricePreTax: addon.pricePreTax,
+      pricePreTax: computedPreTax,
       impactWithTax,
       selected: addon.selected,
     };
   });
 
+  // Evaluate non-duplicate percentage-based line items AFTER confirmed fees & selected non-percentage add-ons
+  for (const pctItem of percentageItems) {
+    if (isDuplicateGratuityPercentageItem(pctItem, quote)) {
+      continue;
+    }
+    const rate = pctItem.unitPrice;
+    const basis = resolvePercentageBasis(pctItem.percentageBasis, resolvedBaseItems, {
+      targetLabels: pctItem.percentageTargetLabels,
+      customBasisAmount: pctItem.customBasisAmount,
+    });
+    if (basis.amount === null) {
+      unresolvedPercentageCount += 1;
+      lineItemBreakdowns.push({
+        id: pctItem.id,
+        label: pctItem.label,
+        amount: null,
+        formulaText: `${rate}% (${basis.label})`,
+        isThirdParty: pctItem.isThirdParty,
+        thirdPartyProvider: pctItem.thirdPartyProvider,
+        unresolvedBasis: true,
+      });
+    } else {
+      const charge = Math.round(basis.amount * (rate / 100) * 100) / 100;
+      baseSubtotal = Math.round((baseSubtotal + charge) * 100) / 100;
+      lineItemBreakdowns.push({
+        id: pctItem.id,
+        label: pctItem.label,
+        amount: charge,
+        formulaText: `${rate}% of ${basis.label} ($${basis.amount.toLocaleString('en-CA')})`,
+        isThirdParty: pctItem.isThirdParty,
+        thirdPartyProvider: pctItem.thirdPartyProvider,
+      });
+    }
+  }
+
   const preTaxTotal = Math.max(
     0,
-    baseSubtotal + paymentOptionAdjustment + confirmedExtraFeesPreTax + selectedAddOnsPreTax
+    Math.round(
+      (baseSubtotal + paymentOptionAdjustment + confirmedExtraFeesPreTax + selectedAddOnsPreTax) *
+        100
+    ) / 100
   );
 
-  const gratuityAmount = quote.gratuityPercent
-    ? Math.round(preTaxTotal * (quote.gratuityPercent / 100) * 100) / 100
-    : 0;
+  // Gratuity calculation (prevent duplicate application; support package-specific overrides & structured bases;
+  // explicit null on a selected package override never inherits quote-level gratuityPercent)
+  const effectiveGratuityStatus = selectedPackage?.gratuityStatus ?? quote.gratuityStatus;
+  const effectiveGratuityPercent =
+    selectedPackage?.gratuityPercent !== undefined
+      ? selectedPackage.gratuityPercent
+      : quote.gratuityPercent;
+  const effectiveGratuityBasis = selectedPackage?.gratuityBasis ?? quote.gratuityBasis;
+
+  const hasExplicitGratuityLineItem = activeItems.some(
+    (li) =>
+      !isDuplicateGratuityPercentageItem(li, quote) &&
+      /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
+  );
+  let gratuityAmount = 0;
+  let gratuityUnresolved = false;
+  let gratuityBasisLabel: string | undefined;
+
+  if (!hasExplicitGratuityLineItem) {
+    if (
+      effectiveGratuityStatus === 'excluded' &&
+      (effectiveGratuityPercent === undefined || effectiveGratuityPercent === null)
+    ) {
+      gratuityUnresolved = true;
+      gratuityBasisLabel = 'percentage unknown';
+    } else if (
+      effectiveGratuityPercent !== undefined &&
+      effectiveGratuityPercent !== null &&
+      effectiveGratuityPercent > 0 &&
+      effectiveGratuityStatus !== 'included'
+    ) {
+      const basisType = effectiveGratuityBasis ?? 'entire_subtotal';
+      if (basisType === 'entire_subtotal') {
+        gratuityAmount = Math.round(preTaxTotal * (effectiveGratuityPercent / 100) * 100) / 100;
+        gratuityBasisLabel = 'applicable subtotal';
+      } else {
+        const basis = resolvePercentageBasis(basisType, resolvedBaseItems);
+        if (basis.amount === null) {
+          gratuityUnresolved = true;
+          gratuityBasisLabel = basis.label;
+        } else {
+          gratuityAmount = Math.round(basis.amount * (effectiveGratuityPercent / 100) * 100) / 100;
+          gratuityBasisLabel = basis.label;
+        }
+      }
+    }
+  }
 
   const taxableBase = preTaxTotal + gratuityAmount;
   const taxAmount = Math.round(taxableBase * taxRate * 100) / 100;
   const estimatedAllInTotal = Math.round((taxableBase + taxAmount) * 100) / 100;
 
+  const effectiveMaxCap = selectedPackage?.maxCapacity ?? quote.maxCapacity;
   const capacityExceeded =
-    quote.maxCapacity !== undefined &&
+    effectiveMaxCap !== undefined &&
     primaryEventGuests !== null &&
-    primaryEventGuests > quote.maxCapacity;
+    primaryEventGuests > effectiveMaxCap;
 
   const unresolvedConflictsCount = quote.conflicts.filter((c) => !c.resolvedOptionId).length;
   const isCurrencyUnknown = quote.currency === 'UNKNOWN';
+  const legacyReviewReasons = detectLegacyQuoteReviewReasons(quote);
 
   const blockingReasons: string[] = [];
+  if (unresolvedPackageSelection) {
+    blockingReasons.push(
+      'Select one package option before approving this quote, or Save as Draft to keep all options.'
+    );
+  }
+  if (unresolvedPackagePrice && selectedPackage) {
+    blockingReasons.push(
+      `Confirm the base price for "${selectedPackage.name}" before approving, or Save as Draft.`
+    );
+  }
   if (isCurrencyUnknown) {
     blockingReasons.push('Confirm currency (CAD or USD) before approving.');
   }
@@ -345,6 +1000,23 @@ export function calculateQuoteFinancials(
       `Resolve ${unresolvedMandatoryFeesCount} unconfirmed mandatory ${
         unresolvedMandatoryFeesCount === 1 ? 'fee' : 'fees'
       } (enter confirmed amount or mark included/waived), or Save as Draft.`
+    );
+  }
+  if (gratuityUnresolved) {
+    blockingReasons.push(
+      'Confirm the mandatory gratuity percentage and calculation basis before approving, or Save as Draft.'
+    );
+  }
+  if (unresolvedPercentageCount > 0) {
+    blockingReasons.push(
+      `Confirm the calculation basis for ${unresolvedPercentageCount} percentage-based ${
+        unresolvedPercentageCount === 1 ? 'charge' : 'charges'
+      } before approving, or Save as Draft.`
+    );
+  }
+  if (quote.sourceWarnings && quote.sourceWarnings.length > 0 && !quote.sourceWarningsAcknowledged) {
+    blockingReasons.push(
+      'Review flagged source evidence warnings against the original document before approving.'
     );
   }
 
@@ -387,10 +1059,15 @@ export function calculateQuoteFinancials(
     paymentOptionAdjustment,
     preTaxTotal,
     gratuityAmount,
+    gratuityUnresolved,
+    gratuityBasisLabel,
     taxRate,
     taxAmount,
     hstAssumed,
     hstIncluded,
+    taxNotStated,
+    taxRateUnresolved,
+    taxStatusLabel,
     effectiveTaxHandling,
     estimatedAllInTotal,
     effectiveGuestCountUsed,
@@ -398,8 +1075,17 @@ export function calculateQuoteFinancials(
     minGuestsApplied,
     appliedMinGuests,
     capacityExceeded,
+    unresolvedPackageSelection,
+    unresolvedPackagePrice,
+    selectedPackageName: selectedPackage?.name,
+    legacyReviewReasons,
     unresolvedMandatoryFeesCount,
     unresolvedConflictsCount,
+    unresolvedPercentageCount,
+    negotiatedSavings,
+    isEstimateComplete:
+      blockingReasons.length === 0 && !guestCountMissing && !taxNotStated && !taxRateUnresolved,
+    lineItemBreakdowns,
     blockingReasons,
     canApprove: blockingReasons.length === 0,
     addOnImpacts,
@@ -445,8 +1131,31 @@ export function getVendorBookingEligibility(
 
   if (activeQuote) {
     const calc = calculateQuoteFinancials(activeQuote, events, vendor.eventIds);
+    if (calc.unresolvedPackageSelection) {
+      blockingReasons.push('Select one package option before confirming a booking.');
+    }
+    if (calc.unresolvedPackagePrice) {
+      blockingReasons.push(
+        `Confirm the base price for "${calc.selectedPackageName ?? 'selected package'}" before booking.`
+      );
+    }
     if (calc.isCurrencyUnknown) {
       blockingReasons.push('Confirm quote currency (CAD or USD) before booking.');
+    }
+    if (calc.taxNotStated) {
+      blockingReasons.push(
+        'Confirm tax handling before booking (tax is not stated on this quote).'
+      );
+    }
+    if (calc.taxRateUnresolved) {
+      blockingReasons.push(
+        'Confirm the tax percentage before booking (quote states plus tax without a rate).'
+      );
+    }
+    if (calc.legacyReviewReasons.length > 0) {
+      blockingReasons.push(
+        `Re-review this quote before booking: ${calc.legacyReviewReasons[0]}`
+      );
     }
     if (calc.unresolvedMandatoryFeesCount > 0) {
       blockingReasons.push(
@@ -462,6 +1171,18 @@ export function getVendorBookingEligibility(
         } before booking.`
       );
     }
+    if (calc.gratuityUnresolved) {
+      blockingReasons.push(
+        'Confirm the mandatory gratuity percentage and calculation basis before booking.'
+      );
+    }
+    if (calc.unresolvedPercentageCount > 0) {
+      blockingReasons.push(
+        `Confirm the calculation basis for ${calc.unresolvedPercentageCount} percentage-based ${
+          calc.unresolvedPercentageCount === 1 ? 'charge' : 'charges'
+        } before booking.`
+      );
+    }
   }
 
   return {
@@ -472,11 +1193,226 @@ export function getVendorBookingEligibility(
 
 export const DEFAULT_DEPOSIT_ALREADY_PAID = false;
 
+const MONTH_MAP: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+/**
+ * Parses an ISO date ("2027-08-13") or human-readable date ("August 13, 2027",
+ * "Aug 13, 2027", "13 August 2027") into a canonical YYYY-MM-DD string.
+ * Returns null if the input is empty or not a concrete calendar date.
+ */
+export function normalizeIsoDate(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (isoMatch) {
+    const y = Number(isoMatch[1]);
+    const m = Number(isoMatch[2]);
+    const d = Number(isoMatch[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  const slashMatch = trimmed.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+  if (slashMatch) {
+    const y = Number(slashMatch[1]);
+    const m = Number(slashMatch[2]);
+    const d = Number(slashMatch[3]);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  // "August 13, 2027" or "Aug 13 2027"
+  const mdyMatch = trimmed.match(/^([A-Za-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})$/);
+  if (mdyMatch) {
+    const m = MONTH_MAP[mdyMatch[1].toLowerCase()];
+    const d = Number(mdyMatch[2]);
+    const y = Number(mdyMatch[3]);
+    if (m && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  // "13 August 2027"
+  const dmyMatch = trimmed.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([A-Za-z]+)\.?,?\s+(\d{4})$/);
+  if (dmyMatch) {
+    const d = Number(dmyMatch[1]);
+    const m = MONTH_MAP[dmyMatch[2].toLowerCase()];
+    const y = Number(dmyMatch[3]);
+    if (m && d >= 1 && d <= 31) {
+      return `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    }
+  }
+
+  return null;
+}
+
+export interface BookingScheduleDefaults {
+  depositAmount: number;
+  depositHasKnownDate: boolean;
+  depositDate: string;
+  depositRelativeLabel: string;
+  balanceHasKnownDate: boolean;
+  balanceDueDate: string;
+  balanceRelativeLabel: string;
+}
+
+/**
+ * Derives booking schedule defaults directly from the approved quote (or its
+ * selected package's payment terms), strictly prioritizing:
+ *   1) Explicit extracted calendar dates (e.g., "August 13, 2027" -> "2027-08-13"),
+ *   2) Explicit extracted relative deadlines resolved against the event date,
+ *   3) Unresolved / TBD (never fabricating hardcoded dates or assumed 30-day offsets).
+ */
+export function deriveBookingScheduleDefaults(
+  quote: Quote | undefined,
+  events: WeddingEvent[],
+  vendorEventIds: string[],
+  contractTotal: number
+): BookingScheduleDefaults {
+  const { selectedPackage } = quote ? getSelectedPackageOption(quote) : { selectedPackage: undefined };
+  const milestones =
+    selectedPackage?.paymentMilestones && selectedPackage.paymentMilestones.length > 0
+      ? selectedPackage.paymentMilestones
+      : quote?.paymentMilestones ?? [];
+
+  const primaryEvent = events.find((e) => vendorEventIds.includes(e.id));
+
+  const depositMilestone = milestones.find((m) =>
+    /\b(deposit|retainer|booking|signing|initial)\b/i.test(m.label)
+  );
+  const balanceMilestone = milestones.find(
+    (m) =>
+      m !== depositMilestone &&
+      /\b(balance|remaining|final|rest|due)\b/i.test(m.label)
+  ) ?? (milestones.length >= 2 ? milestones[milestones.length - 1] : undefined);
+
+  // Deposit amount: selected package milestone/deposit -> quote milestone/deposit -> 0
+  let depositAmount = 0;
+  if (depositMilestone?.amount !== undefined && depositMilestone.amount > 0) {
+    depositAmount = depositMilestone.amount;
+  } else if (depositMilestone?.percent !== undefined && depositMilestone.percent > 0 && contractTotal > 0) {
+    depositAmount = Math.round(contractTotal * (depositMilestone.percent / 100) * 100) / 100;
+  } else if (selectedPackage?.depositAmount !== undefined && selectedPackage.depositAmount > 0) {
+    depositAmount = selectedPackage.depositAmount;
+  } else if (
+    selectedPackage?.depositPercent !== undefined &&
+    selectedPackage.depositPercent > 0 &&
+    contractTotal > 0
+  ) {
+    depositAmount = Math.round(contractTotal * (selectedPackage.depositPercent / 100) * 100) / 100;
+  } else if (quote?.depositAmount !== undefined && quote.depositAmount > 0) {
+    depositAmount = quote.depositAmount;
+  } else if (quote?.depositPercent !== undefined && quote.depositPercent > 0 && contractTotal > 0) {
+    depositAmount = Math.round(contractTotal * (quote.depositPercent / 100) * 100) / 100;
+  }
+  depositAmount = Math.min(Math.max(0, contractTotal), Math.max(0, depositAmount));
+
+  // Deposit due date: explicit dueDate -> relativeDaysBeforeEvent -> relativeDeadlineText -> unresolved
+  let depositHasKnownDate = false;
+  let depositDate = '';
+  let depositRelativeLabel = 'Due upon signing / date TBD';
+  const explicitDepositIso = normalizeIsoDate(depositMilestone?.dueDate);
+  if (explicitDepositIso) {
+    depositHasKnownDate = true;
+    depositDate = explicitDepositIso;
+    depositRelativeLabel = '';
+  } else if (depositMilestone?.relativeDaysBeforeEvent !== undefined) {
+    const computed = resolveRelativeDeadlineDate(
+      primaryEvent?.date,
+      depositMilestone.relativeDaysBeforeEvent
+    );
+    if (computed) {
+      depositHasKnownDate = true;
+      depositDate = computed;
+      depositRelativeLabel = '';
+    } else {
+      depositRelativeLabel =
+        depositMilestone.relativeDeadlineText ||
+        `${depositMilestone.relativeDaysBeforeEvent} days prior to ${primaryEvent?.name ?? 'event'} (date TBD)`;
+    }
+  } else if (depositMilestone?.relativeDeadlineText) {
+    depositRelativeLabel = depositMilestone.relativeDeadlineText;
+  } else if (depositMilestone?.dueDate && depositMilestone.dueDate.trim()) {
+    depositRelativeLabel = depositMilestone.dueDate.trim();
+  }
+
+  // Balance due date: explicit dueDate -> relativeDaysBeforeEvent -> relativeDeadlineText -> unresolved
+  let balanceHasKnownDate = false;
+  let balanceDueDate = '';
+  let balanceRelativeLabel = 'Balance due date TBD';
+  const explicitBalanceIso = normalizeIsoDate(balanceMilestone?.dueDate);
+  if (explicitBalanceIso) {
+    balanceHasKnownDate = true;
+    balanceDueDate = explicitBalanceIso;
+    balanceRelativeLabel = '';
+  } else if (balanceMilestone?.relativeDaysBeforeEvent !== undefined) {
+    const computed = resolveRelativeDeadlineDate(
+      primaryEvent?.date,
+      balanceMilestone.relativeDaysBeforeEvent
+    );
+    if (computed) {
+      balanceHasKnownDate = true;
+      balanceDueDate = computed;
+      balanceRelativeLabel = '';
+    } else {
+      balanceRelativeLabel =
+        balanceMilestone.relativeDeadlineText ||
+        `${balanceMilestone.relativeDaysBeforeEvent} days prior to ${primaryEvent?.name ?? 'event'} (date TBD)`;
+    }
+  } else if (balanceMilestone?.relativeDeadlineText) {
+    balanceRelativeLabel = balanceMilestone.relativeDeadlineText;
+  } else if (balanceMilestone?.dueDate && balanceMilestone.dueDate.trim()) {
+    balanceRelativeLabel = balanceMilestone.dueDate.trim();
+  }
+
+  return {
+    depositAmount,
+    depositHasKnownDate,
+    depositDate,
+    depositRelativeLabel,
+    balanceHasKnownDate,
+    balanceDueDate,
+    balanceRelativeLabel,
+  };
+}
+
 export interface BuildBookingMilestonesInput {
   contractTotal: number;
+  existingPaidAmount?: number;
   depositAmount: number;
   depositAlreadyPaid?: boolean;
+  depositHasKnownDate?: boolean;
   depositDate: string;
+  depositRelativeLabel?: string;
   depositPayer: string;
   coupleNames: string;
   balanceHasKnownDate: boolean;
@@ -490,10 +1426,13 @@ export function buildBookingMilestones(
 ): Array<
   Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
 > {
-  const totalNum = Math.max(0, input.contractTotal);
-  const depositNum = Math.min(totalNum, Math.max(0, input.depositAmount));
-  const remainingNum = Math.max(0, Math.round((totalNum - depositNum) * 100) / 100);
+  const alreadyPaid = Math.max(0, input.existingPaidAmount ?? 0);
+  const schedulableTotal = Math.max(0, Math.round((input.contractTotal - alreadyPaid) * 100) / 100);
+  const depositNum = Math.min(schedulableTotal, Math.max(0, input.depositAmount));
+  const remainingNum = Math.max(0, Math.round((schedulableTotal - depositNum) * 100) / 100);
   const depositPaid = input.depositAlreadyPaid ?? DEFAULT_DEPOSIT_ALREADY_PAID;
+  const depositKnownDate =
+    input.depositHasKnownDate !== undefined ? input.depositHasKnownDate : Boolean(input.depositDate);
 
   const milestones: Array<
     Omit<PaymentMilestone, 'id' | 'vendorId' | 'vendorName' | 'eventId' | 'eventLabel'>
@@ -503,30 +1442,35 @@ export function buildBookingMilestones(
     milestones.push({
       label: 'Booking Deposit',
       amount: depositNum,
-      dueDate: input.depositDate || null,
-      status: depositPaid ? 'Paid' : 'Upcoming',
-      paidDate: depositPaid ? input.depositDate : undefined,
+      dueDate: depositKnownDate ? input.depositDate || null : null,
+      relativeDueLabel:
+        !depositPaid && !depositKnownDate
+          ? input.depositRelativeLabel || 'Due upon signing'
+          : undefined,
+      status: depositPaid ? 'Paid' : depositKnownDate && input.depositDate ? 'Upcoming' : 'Date TBD',
+      paidDate: depositPaid ? input.depositDate || new Date().toISOString().slice(0, 10) : undefined,
       payer: input.depositPayer,
       paidBy: depositPaid
         ? input.depositPayer === 'Unassigned'
           ? input.coupleNames
           : input.depositPayer
         : undefined,
-      reminderEnabled: !depositPaid && Boolean(input.depositDate),
+      reminderEnabled: !depositPaid && depositKnownDate && Boolean(input.depositDate),
     });
   }
 
   if (remainingNum > 0) {
+    const balanceKnown = input.balanceHasKnownDate && Boolean(input.balanceDueDate);
     milestones.push({
       label: 'Final Balance',
       amount: remainingNum,
-      dueDate: input.balanceHasKnownDate ? input.balanceDueDate || null : null,
-      relativeDueLabel: input.balanceHasKnownDate
+      dueDate: balanceKnown ? input.balanceDueDate : null,
+      relativeDueLabel: balanceKnown
         ? undefined
-        : input.balanceRelativeLabel,
-      status: input.balanceHasKnownDate ? 'Upcoming' : 'Date TBD',
+        : input.balanceRelativeLabel || 'Balance due date TBD',
+      status: balanceKnown ? 'Upcoming' : 'Date TBD',
       payer: input.balancePayer,
-      reminderEnabled: input.balanceHasKnownDate && Boolean(input.balanceDueDate),
+      reminderEnabled: balanceKnown,
     });
   }
 

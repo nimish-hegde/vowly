@@ -893,5 +893,385 @@
         }
       ]
     }
+  },
+  {
+    "id": "dev-uat-case-a-missing-gratuity",
+    "split": "dev",
+    "description": "UAT Case A: Banquet venue quote with 13% HST, unknown gratuity percentage, 150 guest min, and structured inclusions",
+    "rawMessage": "Our banquet package is $55 per person plus 13% HST and gratuity. Minimum 150 guests. Includes 4 appetizers, 3 main dishes, 2 desserts and unlimited soft drinks.",
+    "calcContext": {
+      "guestCount": 150
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 8250,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 2,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": null,
+      "gratuityBasis": "unknown",
+      "lineItems": [
+        {
+          "label": "Banquet package",
+          "pricingType": "per_person",
+          "amount": 55,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Our banquet package is $55 per person"
+        }
+      ],
+      "inclusions": [
+        { "category": "food", "name": "Appetizers", "quantity": 4, "unit": "appetizers" },
+        { "category": "food", "name": "Main dishes", "quantity": 3, "unit": "main dishes" },
+        { "category": "food", "name": "Desserts", "quantity": 2, "unit": "desserts" },
+        { "category": "beverage", "name": "Unlimited soft drinks" }
+      ],
+      "venueDetails": {
+        "minGuests": 150
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm the gratuity percentage and what it applies to.",
+          "reason": "missing_price",
+          "sourceExcerpt": "plus 13% HST and gratuity"
+        },
+        {
+          "question": "Confirm whether quoted prices are in CAD or USD.",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "$55 per person"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-uat-case-b-negotiated-photo",
+    "split": "dev",
+    "description": "UAT Case B: Negotiated photography quote with $100 savings, 6 hours coverage, $200 deposit, and no false conflict",
+    "rawMessage": "I normally charge $1,000 for 6 hours of photography, but I can do $900 for your engagement. Includes edited photos and an online gallery. $200 deposit to confirm.",
+    "calcContext": {
+      "hours": 6
+    },
+    "expected": {
+      "category": "photographer",
+      "currency": "UNKNOWN",
+      "quoteKind": "initial",
+      "knownSubtotal": 900,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "photographer",
+      "events": [
+        "Engagement"
+      ],
+      "quoteKind": "initial",
+      "currency": "UNKNOWN",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 6,
+      "lineItems": [
+        {
+          "label": "6-hour engagement photography",
+          "pricingType": "flat",
+          "amount": 900,
+          "originalAmount": 1000,
+          "hours": 6,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "I normally charge $1,000 for 6 hours of photography, but I can do $900 for your engagement"
+        }
+      ],
+      "inclusions": [
+        { "category": "photography", "name": "Photography coverage", "quantity": 6, "unit": "hours" },
+        { "category": "photography", "name": "Edited photos" },
+        { "category": "photography", "name": "Online gallery" }
+      ],
+      "photographerDetails": {
+        "hoursIncluded": 6
+      },
+      "paymentTerms": {
+        "depositAmount": 200,
+        "methodRule": "unknown",
+        "scheduleNotes": "$200 deposit to confirm."
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm whether quoted prices are in CAD or USD.",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "$900 for your engagement"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-uat-case-c-complex-venue",
+    "split": "dev",
+    "description": "UAT Case C: Complex CAD venue quote with 150 min, 200 max, food-only 10% gratuity, 13% HST, third-party AV, 1:75 bartenders, and 30% deposit",
+    "rawMessage": "Our banquet package is CAD $60 per guest with a minimum guarantee of 150 guests. Includes 5 appetizers, 4 main dishes, 2 desserts and unlimited soft drinks. Maximum capacity is 200 guests. HST is 13% and gratuity is 10% of the food subtotal. AV is provided by our preferred third-party supplier for $750. Bartenders cost $250 each, with one required per 75 guests. A 30% deposit is required to secure the date, with the remaining balance due 30 days before the event.",
+    "calcContext": {
+      "guestCount": 175
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 12000,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "venue",
+      "events": [
+        "Reception"
+      ],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 10,
+      "gratuityBasis": "food_subtotal",
+      "lineItems": [
+        {
+          "label": "Banquet package",
+          "pricingType": "per_person",
+          "amount": 60,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Our banquet package is CAD $60 per guest with a minimum guarantee of 150 guests"
+        },
+        {
+          "label": "AV package",
+          "pricingType": "flat",
+          "amount": 750,
+          "isThirdParty": true,
+          "thirdPartyProvider": "Preferred third-party supplier",
+          "isFoodItem": false,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "AV is provided by our preferred third-party supplier for $750"
+        },
+        {
+          "label": "Bartenders",
+          "pricingType": "per_guest_ratio",
+          "amount": 250,
+          "ratioGuests": 75,
+          "unitLabel": "bartender",
+          "isFoodItem": false,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Bartenders cost $250 each, with one required per 75 guests"
+        }
+      ],
+      "inclusions": [
+        { "category": "food", "name": "Appetizers", "quantity": 5, "unit": "appetizers" },
+        { "category": "food", "name": "Main dishes", "quantity": 4, "unit": "main dishes" },
+        { "category": "food", "name": "Desserts", "quantity": 2, "unit": "desserts" },
+        { "category": "beverage", "name": "Unlimited soft drinks" }
+      ],
+      "venueDetails": {
+        "minGuests": 150,
+        "maxCapacity": 200
+      },
+      "paymentTerms": {
+        "depositPercent": 30,
+        "methodRule": "unknown",
+        "scheduleNotes": "30% deposit to secure the date; remaining balance due 30 days before the event.",
+        "milestones": [
+          { "label": "Deposit", "percent": 30 },
+          {
+            "label": "Remaining balance",
+            "percent": 70,
+            "relativeDaysBeforeEvent": 30,
+            "relativeDeadlineText": "30 days before the event"
+          }
+        ]
+      },
+      "openQuestions": [
+        {
+          "question": "Confirm the event date to calculate the 30-day remaining balance deadline.",
+          "reason": "missing_date",
+          "sourceExcerpt": "remaining balance due 30 days before the event"
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-uat-multi-package-venue",
+    "split": "dev",
+    "description": "Anonymized UAT: Multi-package venue brochure (Royal vs Imperial) with per-package minimums, inclusions, and repeated extra-guest phrasing must not sum packages",
+    "rawMessage": "Palace Banquet Hall (CAD): We offer two wedding reception packages. Royal Package is $55/person (minimum 150 guests, additional guests $55/person) and includes 4 appetizers, 3 main dishes, and open soft drink bar. Imperial Package is $65/person (minimum 100 guests, additional guests $65/person) and includes 6 appetizers, 5 main dishes, and deluxe dessert table. All packages are plus 13% HST and 10% gratuity.",
+    "calcContext": {
+      "guestCount": 175
+    },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 0,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded",
+      "expectedPackageCount": 2,
+      "expectUnresolvedPackageSelection": true
+    },
+    "mockExtraction": {
+      "vendorName": "Palace Banquet Hall",
+      "category": "venue",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 10,
+      "gratuityBasis": "entire_subtotal",
+      "selectedPackageId": null,
+      "packages": [
+        {
+          "id": "royal-package",
+          "name": "Royal Package",
+          "pricingType": "per_person",
+          "amount": 55,
+          "minGuests": 150,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "Appetizers", "quantity": 4, "unit": "appetizers" },
+            { "name": "Main dishes", "quantity": 3, "unit": "main dishes" },
+            { "name": "Open soft drink bar" }
+          ],
+          "sourceExcerpt": "Royal Package is $55/person (minimum 150 guests, additional guests $55/person)"
+        },
+        {
+          "id": "imperial-package",
+          "name": "Imperial Package",
+          "pricingType": "per_person",
+          "amount": 65,
+          "minGuests": 100,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "Appetizers", "quantity": 6, "unit": "appetizers" },
+            { "name": "Main dishes", "quantity": 5, "unit": "main dishes" },
+            { "name": "Deluxe dessert table" }
+          ],
+          "sourceExcerpt": "Imperial Package is $65/person (minimum 100 guests, additional guests $65/person)"
+        }
+      ],
+      "lineItems": [],
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-uat-photo-overtime-default-zero",
+    "split": "dev",
+    "description": "Anonymized UAT: Photography package ($900 for 5 hours) + $250/hr additional hours defaults to $900 with 0 extra hours and unknown tax",
+    "rawMessage": "CAD $900 photography package includes 5 hours of wedding coverage, edited high-resolution photos, and an online gallery. Additional hours are $250/hour.",
+    "calcContext": {},
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 900,
+      "unknownItemLabels": [],
+      "taxStatus": "unknown"
+    },
+    "mockExtraction": {
+      "vendorName": null,
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 5,
+      "lineItems": [
+        {
+          "label": "5-hour photography package",
+          "pricingType": "flat",
+          "amount": 900,
+          "hours": 5,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "CAD $900 photography package includes 5 hours of wedding coverage"
+        },
+        {
+          "label": "Additional hourly coverage",
+          "pricingType": "per_hour",
+          "amount": 250,
+          "chargeType": "conditional",
+          "sourceExcerpt": "Additional hours are $250/hour"
+        }
+      ],
+      "inclusions": [
+        { "name": "Wedding coverage", "quantity": 5, "unit": "hours" },
+        { "name": "Edited high-resolution photos" },
+        { "name": "Online gallery" }
+      ],
+      "photographerDetails": { "hoursIncluded": 5, "extraHourRate": 250 },
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-uat-photo-second-shooter-delivery",
+    "split": "dev",
+    "description": "Anonymized UAT: $3,500 photography studio package with 2nd photographer 5-hour coverage and explicit delivery turnaround terms",
+    "rawMessage": "Northstar Photo Studio (CAD): Full wedding collection is $3,500. Includes 8 hours lead photographer, second photographer for 5 hours, and full printing rights. Sneak peeks delivered within 48 hours and full online gallery delivered in 6-8 weeks.",
+    "calcContext": {},
+    "expected": {
+      "category": "photographer",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 3500,
+      "unknownItemLabels": [],
+      "taxStatus": "unknown"
+    },
+    "mockExtraction": {
+      "vendorName": "Northstar Photo Studio",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "unknown",
+      "gratuityStatus": "unknown",
+      "serviceDurationHours": 8,
+      "lineItems": [
+        {
+          "label": "Full wedding collection",
+          "pricingType": "flat",
+          "amount": 3500,
+          "hours": 8,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Full wedding collection is $3,500"
+        }
+      ],
+      "inclusions": [
+        { "name": "Lead photographer", "quantity": 1, "unit": "photographer", "durationHours": 8 },
+        { "name": "Second photographer", "quantity": 1, "unit": "photographer", "durationHours": 5 },
+        { "name": "Full printing rights" }
+      ],
+      "deliveryTerms": [
+        "Sneak peeks delivered within 48 hours",
+        "Full online gallery delivered in 6-8 weeks"
+      ],
+      "photographerDetails": { "hoursIncluded": 8, "teamSize": 2 },
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": []
+    }
   }
 ]

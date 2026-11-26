@@ -6,6 +6,7 @@ import type {
   OpenQuestion,
   OpenQuestionReason,
   PaymentMethodRule,
+  PercentageBasis,
   PricingType,
   QuoteKind,
   TaxOrGratuityStatus,
@@ -29,9 +30,19 @@ const VALID_TAX_STATUS = new Set<TaxOrGratuityStatus>(['included', 'excluded', '
 const VALID_PRICING_TYPES = new Set<PricingType>([
   'flat',
   'per_person',
+  'per_extra_guest',
   'per_hour',
   'per_guest_ratio',
+  'percentage',
   'included',
+  'unknown',
+]);
+const VALID_PACKAGE_PRICING_TYPES = new Set(['flat', 'per_person', 'unknown']);
+const VALID_PERCENTAGE_BASES = new Set<PercentageBasis>([
+  'specific_line_items',
+  'food_subtotal',
+  'entire_subtotal',
+  'custom_amount',
   'unknown',
 ]);
 const VALID_PAYMENT_RULES = new Set<PaymentMethodRule>([
@@ -84,7 +95,11 @@ function checkOptionalNumber(
   }
 }
 
-export function validateExtractedQuote(raw: unknown, rawMessage?: string): ValidationResult {
+export function validateExtractedQuote(
+  raw: unknown,
+  rawMessage?: string,
+  options?: { hasAttachments?: boolean },
+): ValidationResult {
   const schemaErrors: string[] = [];
   const sourceErrors: string[] = [];
 
@@ -92,8 +107,8 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
     return { valid: false, schemaErrors: ['Response must be a JSON object'], sourceErrors: [] };
   }
 
-  if (typeof raw.vendorName !== 'string' || raw.vendorName.trim() === '') {
-    schemaErrors.push('vendorName must be a non-empty string');
+  if (raw.vendorName !== null && typeof raw.vendorName !== 'string') {
+    schemaErrors.push('vendorName must be a string or null');
   }
   if (!VALID_CATEGORIES.has(raw.category as VendorCategory)) {
     schemaErrors.push(
@@ -117,8 +132,19 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
       `gratuityStatus must be included|excluded|unknown (got ${String(raw.gratuityStatus)})`,
     );
   }
+  checkOptionalNumber(raw, 'taxPercent', 'quote', schemaErrors);
+  checkOptionalNumber(raw, 'gratuityPercent', 'quote', schemaErrors);
+  checkOptionalNumber(raw, 'serviceDurationHours', 'quote', schemaErrors);
+  if (
+    raw.gratuityBasis !== undefined &&
+    raw.gratuityBasis !== null &&
+    !VALID_PERCENTAGE_BASES.has(raw.gratuityBasis as PercentageBasis)
+  ) {
+    schemaErrors.push(`gratuityBasis is invalid (got ${String(raw.gratuityBasis)})`);
+  }
 
-  const rawNorm = rawMessage ? normalizeText(rawMessage) : undefined;
+  const hasAttachments = options?.hasAttachments === true;
+  const rawNorm = !hasAttachments && rawMessage && rawMessage.trim() ? normalizeText(rawMessage) : undefined;
 
   // Validate lineItems
   if (!Array.isArray(raw.lineItems)) {
@@ -148,8 +174,25 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
         }
       }
       checkOptionalNumber(entry, 'minGuests', path, schemaErrors);
+      checkOptionalNumber(entry, 'guestThreshold', path, schemaErrors);
       checkOptionalNumber(entry, 'ratioGuests', path, schemaErrors);
       checkOptionalNumber(entry, 'hours', path, schemaErrors);
+      checkOptionalNumber(entry, 'percentageRate', path, schemaErrors);
+      checkOptionalNumber(entry, 'customBasisAmount', path, schemaErrors);
+      checkOptionalNumber(entry, 'originalAmount', path, schemaErrors);
+      if (entry.pricingType === 'percentage') {
+        const rate = entry.percentageRate ?? entry.amount;
+        if (!isFiniteNumber(rate) || rate < 0) {
+          schemaErrors.push(`${path}.percentageRate or amount must be a non-negative number for percentage items`);
+        }
+      }
+      if (
+        entry.percentageBasis !== undefined &&
+        entry.percentageBasis !== null &&
+        !VALID_PERCENTAGE_BASES.has(entry.percentageBasis as PercentageBasis)
+      ) {
+        schemaErrors.push(`${path}.percentageBasis is invalid (got ${String(entry.percentageBasis)})`);
+      }
       if (entry.chargeType !== undefined) {
         if (!VALID_CHARGE_TYPES.has(entry.chargeType as ChargeRequirement)) {
           schemaErrors.push(
@@ -197,13 +240,97 @@ export function validateExtractedQuote(raw: unknown, rawMessage?: string): Valid
         }
       }
       if (typeof entry.sourceExcerpt !== 'string' || entry.sourceExcerpt.trim() === '') {
-        schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+        if (hasAttachments && typeof entry.pageReference === 'string' && entry.pageReference.trim() !== '') {
+          // Document evidence tracked via pageReference; warn if snippet itself is missing
+          sourceErrors.push(
+            `Line item "${String(entry.label)}" has page reference (${entry.pageReference}) but no visible source snippet — verify against uploaded document`,
+          );
+        } else {
+          schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+        }
       } else if (rawNorm && !rawNorm.includes(normalizeText(entry.sourceExcerpt))) {
         sourceErrors.push(
           `Unsupported line item "${String(entry.label)}" — sourceExcerpt not found verbatim in raw message`,
         );
+      } else if (hasAttachments && entry.sourceExcerpt.trim().length < 3) {
+        sourceErrors.push(
+          `Line item "${String(entry.label)}" has insufficient document evidence — verify against uploaded document`,
+        );
       }
     });
+  }
+
+  // Validate optional packages (mutually exclusive tiers)
+  if (raw.packages !== undefined && raw.packages !== null) {
+    if (!Array.isArray(raw.packages)) {
+      schemaErrors.push('packages must be an array when present');
+    } else {
+      raw.packages.forEach((pkg, idx) => {
+        const path = `packages[${idx}]`;
+        if (!isObject(pkg)) {
+          schemaErrors.push(`${path} must be an object`);
+          return;
+        }
+        if (typeof pkg.id !== 'string' || pkg.id.trim() === '') {
+          schemaErrors.push(`${path}.id must be a non-empty string`);
+        }
+        if (typeof pkg.name !== 'string' || pkg.name.trim() === '') {
+          schemaErrors.push(`${path}.name must be a non-empty string`);
+        }
+        if (!VALID_PACKAGE_PRICING_TYPES.has(String(pkg.pricingType))) {
+          schemaErrors.push(`${path}.pricingType is invalid (got ${String(pkg.pricingType)})`);
+        }
+        if (pkg.amount !== null && !isFiniteNumber(pkg.amount)) {
+          schemaErrors.push(`${path}.amount must be a number or null`);
+        }
+        if (pkg.pricingType === 'unknown' && pkg.amount !== null) {
+          schemaErrors.push(`${path}.amount must be null when pricingType is "unknown"`);
+        }
+        checkOptionalNumber(pkg, 'minGuests', path, schemaErrors);
+        checkOptionalNumber(pkg, 'includedGuests', path, schemaErrors);
+        checkOptionalNumber(pkg, 'extraGuestRate', path, schemaErrors);
+        checkOptionalNumber(pkg, 'maxCapacity', path, schemaErrors);
+        checkOptionalNumber(pkg, 'hours', path, schemaErrors);
+        checkOptionalNumber(pkg, 'taxPercent', path, schemaErrors);
+        checkOptionalNumber(pkg, 'gratuityPercent', path, schemaErrors);
+        if (
+          pkg.taxStatus !== undefined &&
+          pkg.taxStatus !== null &&
+          !VALID_TAX_STATUS.has(pkg.taxStatus as TaxOrGratuityStatus)
+        ) {
+          schemaErrors.push(`${path}.taxStatus is invalid (got ${String(pkg.taxStatus)})`);
+        }
+        if (
+          pkg.gratuityStatus !== undefined &&
+          pkg.gratuityStatus !== null &&
+          !VALID_TAX_STATUS.has(pkg.gratuityStatus as TaxOrGratuityStatus)
+        ) {
+          schemaErrors.push(
+            `${path}.gratuityStatus is invalid (got ${String(pkg.gratuityStatus)})`,
+          );
+        }
+        if (typeof pkg.sourceExcerpt !== 'string' || pkg.sourceExcerpt.trim() === '') {
+          if (hasAttachments && typeof pkg.pageReference === 'string' && pkg.pageReference.trim() !== '') {
+            sourceErrors.push(
+              `Package "${String(pkg.name)}" has page reference (${pkg.pageReference}) but no visible source snippet — verify against uploaded document`,
+            );
+          } else {
+            schemaErrors.push(`${path}.sourceExcerpt must be a non-empty string`);
+          }
+        } else if (rawNorm && !rawNorm.includes(normalizeText(pkg.sourceExcerpt))) {
+          sourceErrors.push(
+            `Unsupported package "${String(pkg.name)}" — sourceExcerpt not found verbatim in raw message`,
+          );
+        }
+      });
+    }
+  }
+
+  // Validate optional deliveryTerms
+  if (raw.deliveryTerms !== undefined && raw.deliveryTerms !== null) {
+    if (!Array.isArray(raw.deliveryTerms) || !raw.deliveryTerms.every((d) => typeof d === 'string')) {
+      schemaErrors.push('deliveryTerms must be an array of strings when present');
+    }
   }
 
   // Validate openQuestions (required array, even when empty)

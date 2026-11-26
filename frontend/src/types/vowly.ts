@@ -13,6 +13,7 @@ export type TaxHandling =
   | 'included'
   | 'excluded_plus_hst'
   | 'unspecified_ontario_assumed'
+  | 'unspecified'
   | 'tax_exempt';
 
 export type VendorCategory =
@@ -67,7 +68,75 @@ export interface WeddingEvent {
   notes?: string;
 }
 
-export type LineItemPricingModel = 'flat' | 'per_person' | 'hourly' | 'guest_ratio';
+export type LineItemPricingModel =
+  | 'flat'
+  | 'per_person'
+  | 'per_extra_guest'
+  | 'hourly'
+  | 'guest_ratio'
+  | 'percentage';
+
+export type PercentageBasis =
+  | 'specific_line_items'
+  | 'food_subtotal'
+  | 'entire_subtotal'
+  | 'custom_amount'
+  | 'unknown';
+
+export interface StructuredInclusion {
+  category?: string;
+  name: string;
+  quantity?: number;
+  unit?: string;
+  durationHours?: number;
+  packageId?: string;
+  sourceExcerpt?: string;
+}
+
+export interface QuotePackageOption {
+  id: string;
+  name: string;
+  pricingModel: 'flat' | 'per_person' | 'unknown';
+  unitPrice: number | null;
+  minGuests?: number;
+  includedGuests?: number;
+  extraGuestRate?: number;
+  maxCapacity?: number;
+  hours?: number;
+  isFoodItem?: boolean;
+  fees?: QuoteLineItem[];
+  taxHandling?: TaxHandling;
+  taxPercent?: number | null;
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  inclusions: string[];
+  structuredInclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  paymentTermsSummary?: string;
+  paymentMilestones?: QuotePaymentMilestone[];
+  depositAmount?: number;
+  depositPercent?: number;
+  evidenceId?: string;
+  pageReference?: string;
+}
+
+export interface QuotePaymentMilestone {
+  label: string;
+  amount?: number;
+  percent?: number;
+  dueDate?: string;
+  relativeDaysBeforeEvent?: number;
+  relativeDeadlineText?: string;
+  sourceExcerpt?: string;
+}
+
+export interface QuoteAttachmentPreview {
+  fileName: string;
+  mimeType: string;
+  dataUrl: string;
+  sizeBytes: number;
+}
 
 export interface QuoteLineItem {
   id: string;
@@ -75,10 +144,23 @@ export interface QuoteLineItem {
   pricingModel: LineItemPricingModel;
   unitPrice: number;
   quantity?: number; // hours for hourly, or fixed count
-  ratioDivisor?: number; // e.g., 10 guests per table for guest_ratio
+  isConditionalOvertime?: boolean; // conditional extra/overtime hourly rate (defaults to 0 hrs)
+  includedPackageHours?: number; // included base package hours before overtime applies
+  ratioDivisor?: number; // e.g., 75 guests per bartender for guest_ratio
+  unitLabel?: string; // e.g., "bartender", "table"
+  percentageBasis?: PercentageBasis;
+  percentageTargetLabels?: string[];
+  customBasisAmount?: number;
+  originalUnitPrice?: number; // explicit negotiated standard price (not a conflict)
+  isThirdParty?: boolean;
+  thirdPartyProvider?: string;
+  isFoodItem?: boolean;
   eventId?: string; // binds per_person or guest_ratio to a specific event
   minGuests?: number; // minimum guest floor if per_person
+  guestThreshold?: number; // included guest threshold for per_extra_guest
+  packageId?: string; // optional package option scope
   evidenceId?: string;
+  pageReference?: string;
   note?: string;
 }
 
@@ -87,6 +169,16 @@ export interface QuoteAddOn {
   label: string;
   description: string;
   pricePreTax: number;
+  pricingModel?: LineItemPricingModel;
+  quantity?: number;
+  ratioDivisor?: number;
+  unitLabel?: string;
+  minGuests?: number;
+  eventId?: string;
+  packageId?: string;
+  percentageBasis?: PercentageBasis;
+  percentageTargetLabels?: string[];
+  customBasisAmount?: number;
   selected: boolean;
   evidenceId?: string;
 }
@@ -98,6 +190,7 @@ export interface QuoteUnconfirmedFee {
   mandatory: boolean;
   status: 'unconfirmed' | 'confirmed_amount' | 'waived_or_included';
   confirmedAmount?: number;
+  packageId?: string;
   evidenceId?: string;
 }
 
@@ -106,6 +199,7 @@ export interface QuoteConflictOption {
   label: string;
   sourceLabel: string;
   amount: number;
+  pricingModel?: LineItemPricingModel;
   evidenceId?: string;
 }
 
@@ -166,9 +260,15 @@ export interface Quote {
   currencySource: CurrencySource;
   locationContext?: string; // e.g., "Mississauga, ON, Canada"
   taxHandling: TaxHandling;
-  gratuityPercent?: number;
+  taxPercent?: number | null;
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+  serviceDurationHours?: number;
   minGuests?: number;
   maxCapacity?: number;
+  packages?: QuotePackageOption[];
+  selectedPackageId?: string | null;
   lineItems: QuoteLineItem[];
   addOns: QuoteAddOn[];
   unconfirmedFees: QuoteUnconfirmedFee[];
@@ -176,13 +276,27 @@ export interface Quote {
   paymentOptions?: QuotePaymentOption[];
   selectedPaymentOptionId?: string;
   inclusions: string[];
+  structuredInclusions?: StructuredInclusion[];
+  deliveryTerms?: string[];
+  exclusions?: string[];
+  restrictions?: string[];
+  legacyReviewAcknowledged?: boolean;
   cateringAndBarSummary?: string;
   avAndStaffingSummary?: string;
   paymentTermsSummary: string;
+  paymentMilestones?: QuotePaymentMilestone[];
   depositAmount?: number;
   depositPercent?: number;
   clarificationQuestions: string[];
   evidenceSpans: QuoteEvidenceSpan[];
+  sourceWarnings?: string[];
+  sourceWarningsAcknowledged?: boolean;
+  attachmentPreview?: QuoteAttachmentPreview;
+  vendorContact?: {
+    name?: string;
+    email?: string;
+    phone?: string;
+  };
   brochureReference?: BrochureReference;
   revisions?: QuoteRevisionRecord[];
 }

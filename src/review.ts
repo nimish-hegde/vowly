@@ -241,9 +241,36 @@ export function acknowledgeSourceWarnings(session: QuoteReviewSession): QuoteRev
   return session;
 }
 
+export function selectPackage(
+  session: QuoteReviewSession,
+  packageId: string,
+): QuoteReviewSession {
+  if (session.status !== 'pending_review') {
+    throw new Error('Cannot change package selection after a quote has been approved or dismissed.');
+  }
+  const pkgs = session.draftQuote.packages ?? [];
+  const chosen = pkgs.find((p) => p.id === packageId);
+  if (!chosen) {
+    throw new Error(`Package "${packageId}" not found on this quote.`);
+  }
+  if (session.draftQuote.selectedPackageId !== chosen.id) {
+    session.draftQuote.selectedPackageId = chosen.id;
+    session.correctionsByField.selectedPackageId =
+      (session.correctionsByField.selectedPackageId ?? 0) + 1;
+  }
+  session.calculation = calculateQuoteTotal(session.draftQuote, {
+    guestCount: session.guestCount,
+    hours: session.hours,
+  });
+  return session;
+}
+
 /** Reasons the quote cannot be approved yet. Empty means it is safe to approve. */
 export function getApprovalBlockers(session: QuoteReviewSession): string[] {
   const blockers: string[] = [];
+  if (session.calculation.unresolvedPackageSelection) {
+    blockers.push('Select one package option before adding this quote to the budget.');
+  }
   if (session.draftQuote.currency === 'UNKNOWN') {
     blockers.push('Confirm the quote currency before adding it to the budget.');
   }
@@ -261,6 +288,11 @@ export function getApprovalBlockers(session: QuoteReviewSession): string[] {
   if (session.calculation.unknownItems.length > 0) {
     blockers.push(
       `Resolve mandatory TBD costs (${session.calculation.unknownItems.join(', ')}) before adding this quote to the budget.`,
+    );
+  }
+  if (session.calculation.gratuityUnresolved) {
+    blockers.push(
+      'Resolve the missing gratuity percentage or calculation basis before adding this quote to the budget.',
     );
   }
   if (session.sourceWarnings.length > 0 && !session.sourceWarningsAcknowledged) {
@@ -302,7 +334,7 @@ export function approveQuote(
       ...budget.approvedQuotes,
       {
         id: session.id,
-        vendorName: session.draftQuote.vendorName,
+        vendorName: session.draftQuote.vendorName ?? 'Unnamed vendor',
         currency: session.draftQuote.currency,
         knownSubtotal: calc.knownSubtotal,
         approvedAt: new Date().toISOString(),

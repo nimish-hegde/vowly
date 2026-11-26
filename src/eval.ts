@@ -163,6 +163,24 @@ export function gradeExtraction(
     }
   }
 
+  // Multi-package tier checks
+  if (testCase.expected.expectedPackageCount !== undefined) {
+    const gotPackages = extracted.packages?.length ?? 0;
+    if (gotPackages < testCase.expected.expectedPackageCount) {
+      releaseBlockers.push(
+        `Multi-package extraction failed: got ${gotPackages} packages, expected at least ${testCase.expected.expectedPackageCount}`,
+      );
+    }
+  }
+  if (
+    testCase.expected.expectUnresolvedPackageSelection === true &&
+    !calc.unresolvedPackageSelection
+  ) {
+    releaseBlockers.push(
+      'Multi-package quote did not block approval with unresolvedPackageSelection',
+    );
+  }
+
   // Open questions check
   if (
     testCase.expected.minOpenQuestions !== undefined &&
