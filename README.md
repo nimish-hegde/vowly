@@ -74,7 +74,9 @@ npm run ui
 ## Project documentation
 
 - [Product requirements and design concepts](docs/PRODUCT_SPEC.md)
+- [Roadmap, acceptance criteria & decision log](docs/ROADMAP.md)
 - [AI quote extraction eval report (`v0.3`)](docs/EVAL_REPORT.md)
+- [Agent project instructions (`AGENTS.md`)](AGENTS.md)
 - [Frontend prototype README](frontend/README.md)
 - [Changelog](CHANGELOG.md) · [Pilot backlog](https://github.com/nimish-hegde/vowly/issues)
 
