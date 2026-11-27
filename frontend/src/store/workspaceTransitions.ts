@@ -3,6 +3,7 @@ import {
   getVendorActiveQuote,
   getVendorBookingEligibility,
 } from '../engine/financialCalculator.ts';
+import { findAmbiguousLegacyOvertimeItems } from '../engine/legacyOvertimeReview.ts';
 import type {
   FollowUpTask,
   PaymentMilestone,
@@ -116,6 +117,13 @@ export function applySaveDraftQuote(
   };
 }
 
+export interface ApproveQuoteTransitionResult {
+  approved: boolean;
+  blockingReasons: string[];
+  workspace: WeddingWorkspace;
+  vendorName: string;
+}
+
 export function applyApproveQuote(
   ws: WeddingWorkspace,
   vendorId: string | null,
@@ -123,7 +131,7 @@ export function applyApproveQuote(
   approvedQuote: Quote,
   targetId: string,
   revisionNote?: string
-): { workspace: WeddingWorkspace; vendorName: string } {
+): ApproveQuoteTransitionResult {
   const existingVendor = vendorId
     ? ws.vendors.find((v) => v.id === vendorId)
     : undefined;
@@ -132,6 +140,23 @@ export function applyApproveQuote(
     existingVendor?.draftVendorMetadata?.name?.trim() ||
     existingVendor?.name ||
     'Vendor';
+
+  const eventIds =
+    newVendorPayload?.eventIds ??
+    existingVendor?.draftVendorMetadata?.eventIds ??
+    existingVendor?.eventIds ??
+    (ws.events[0] ? [ws.events[0].id] : []);
+  const nextCalc = calculateQuoteFinancials(approvedQuote, ws.events, eventIds);
+  const blockingReasons = [...nextCalc.blockingReasons];
+  if (findAmbiguousLegacyOvertimeItems(approvedQuote).length > 0) {
+    blockingReasons.push('Confirm the hourly quantity or mark the rate as conditional before approving.');
+  }
+  if (existingVendor?.draftQuote && existingVendor.draftQuote.id !== approvedQuote.id) {
+    blockingReasons.push('Resolve the pending draft quote before approving a different quote.');
+  }
+  if (blockingReasons.length > 0) {
+    return { approved: false, blockingReasons, workspace: ws, vendorName };
+  }
 
   let cleanQuote: Quote = {
     ...approvedQuote,
@@ -158,11 +183,6 @@ export function applyApproveQuote(
 
       if (isEditingExistingApproved && previousActive) {
         const prevCalc = calculateQuoteFinancials(previousActive, ws.events, v.eventIds);
-        const nextCalc = calculateQuoteFinancials(
-          cleanQuote,
-          ws.events,
-          newVendorPayload?.eventIds ?? v.draftVendorMetadata?.eventIds ?? v.eventIds
-        );
         const revRecord: QuoteRevisionRecord = {
           id: `rev-${Date.now()}`,
           date: new Date().toISOString().slice(0, 10),
@@ -248,6 +268,8 @@ export function applyApproveQuote(
   );
 
   return {
+    approved: true,
+    blockingReasons: [],
     vendorName,
     workspace: {
       ...ws,
@@ -287,6 +309,15 @@ export function applyConfirmBooking(
     };
   }
 
+  if (vendor.status === 'Booked') {
+    return {
+      booked: false,
+      blockingReasons: ['This vendor is already booked.'],
+      workspace: ws,
+      vendorName: vendor.name,
+    };
+  }
+
   const eligibility = getVendorBookingEligibility(vendor, ws.events);
   if (!eligibility.canBook) {
     return {
@@ -322,6 +353,20 @@ export function applyConfirmBooking(
   const existingPaidForVendor = ws.payments.filter(
     (p) => p.vendorId === input.vendorId && p.status === 'Paid'
   );
+
+  const scheduledAmounts = [...existingPaidForVendor, ...input.milestones].map((p) => p.amount);
+  const scheduledCents = scheduledAmounts.reduce((total, amount) => total + Math.round(amount * 100), 0);
+  if (
+    scheduledAmounts.some((amount) => !Number.isFinite(amount) || amount < 0) ||
+    scheduledCents !== Math.round(input.contractTotal * 100)
+  ) {
+    return {
+      booked: false,
+      blockingReasons: ['Existing payments and new installments must add up to the agreed contract total.'],
+      workspace: ws,
+      vendorName: vendor.name,
+    };
+  }
 
   const createdMilestones: PaymentMilestone[] = input.milestones.map((m, idx) => ({
     ...m,

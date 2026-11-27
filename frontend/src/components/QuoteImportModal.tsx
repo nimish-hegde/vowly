@@ -25,9 +25,11 @@ import {
   formatShortCad,
   getEffectiveQuoteDeliveryTerms,
   getEffectiveQuoteInclusions,
+  getSelectedPackageOption,
   getVendorActiveQuote,
   resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
+import { findAmbiguousLegacyOvertimeItems } from '../engine/legacyOvertimeReview';
 import {
   ExtractionAttachmentInput,
   liveQuoteExtractor,
@@ -41,6 +43,7 @@ import {
   LineItemPricingModel,
   PercentageBasis,
   Quote,
+  QuoteLineItem,
   TaxHandling,
   Vendor,
   VendorCategory,
@@ -349,7 +352,10 @@ export function QuoteImportModal({
     vendorName.trim().length > 0 &&
     !GENERIC_VENDOR_NAMES.has(vendorName.trim().toLowerCase());
 
-  const canApproveWithVendor = Boolean(calc?.canApprove && isVendorNameValid);
+  const legacyOvertimeItems = draftQuote ? findAmbiguousLegacyOvertimeItems(draftQuote) : [];
+  const canApproveWithVendor = Boolean(calc?.canApprove && isVendorNameValid && !legacyOvertimeItems.length);
+  const selectedPackage = draftQuote ? getSelectedPackageOption(draftQuote).selectedPackage : undefined;
+  const editableLineItems = [...(draftQuote?.lineItems ?? []), ...(selectedPackage?.fees ?? [])];
 
   const handleSelectPreset = (presetId: string) => {
     const preset = SAMPLE_QUOTE_PRESETS.find((p) => p.id === presetId);
@@ -522,6 +528,19 @@ export function QuoteImportModal({
     setDraftQuote((prev) => (prev ? updater(prev) : prev));
   };
 
+  const updateQuoteLineItem = (id: string, patch: Partial<QuoteLineItem>) => {
+    const updateLine = (item: QuoteLineItem) => item.id === id ? { ...item, ...patch } : item;
+    updateQuote((q) => ({
+      ...q,
+      lineItems: q.lineItems.map(updateLine),
+      packages: q.packages?.map((pkg) =>
+        pkg.fees?.some((fee) => fee.id === id)
+          ? { ...pkg, fees: pkg.fees.map(updateLine) }
+          : pkg
+      ),
+    }));
+  };
+
   const updateEffectiveTaxHandling = (nextTax: TaxHandling, nextPercent?: number) => {
     updateQuote((q) => {
       const updatedPackages = q.packages?.map((pkg) => {
@@ -589,12 +608,13 @@ export function QuoteImportModal({
     if (asDraft) {
       saveDraftQuote(linkedVendorId, newVendorPayload, draftQuote);
     } else {
-      approveQuote(
+      const approvedVendorId = approveQuote(
         linkedVendorId,
         newVendorPayload,
         draftQuote,
         editApprovedForVendorId ? (revisionNote.trim() || 'Manual quote edit') : undefined
       );
+      if (!approvedVendorId) return;
     }
     onClose();
   };
@@ -636,6 +656,7 @@ export function QuoteImportModal({
     (calc?.unresolvedMandatoryFeesCount ?? 0) +
     (calc?.unresolvedConflictsCount ?? 0) +
     (calc?.unresolvedPercentageCount ?? 0) +
+    legacyOvertimeItems.length +
     (draftQuote?.sourceWarnings &&
     draftQuote.sourceWarnings.length > 0 &&
     !draftQuote.sourceWarningsAcknowledged
@@ -1173,6 +1194,31 @@ export function QuoteImportModal({
                       </div>
                     )}
 
+                    {legacyOvertimeItems.map((item) => (
+                      <div key={item.id} className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
+                        <div className="text-xs font-semibold text-[#22201D]">Confirm hours for {item.label}</div>
+                        <p className="text-[11px] text-[#6B655C]">
+                          Your saved estimate includes one hour. Confirm that hour or treat this as a rate for extra hours.
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => updateQuoteLineItem(item.id, { isConditionalOvertime: false, quantity: 1 })}
+                            className="rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs font-semibold"
+                          >
+                            Keep one hour
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => updateQuoteLineItem(item.id, { isConditionalOvertime: true, quantity: undefined })}
+                            className="rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs font-semibold"
+                          >
+                            Treat as overtime
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
                     {/* Mutually Exclusive Package Selection Required */}
                     {calc.unresolvedPackageSelection && draftQuote.packages && (
                       <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
@@ -1618,9 +1664,10 @@ export function QuoteImportModal({
                     {/* Clean Readable Breakdown */}
                     <div className="divide-y divide-[#F0EAE0] text-xs">
                       {calc.lineItemBreakdowns.map((row) => {
-                        const matchingOvertimeItem = draftQuote.lineItems.find(
-                          (li) => li.id === row.id && li.isConditionalOvertime
-                        );
+                        const matchingOvertimeItem = row.conditionalOvertime
+                          ? editableLineItems.find((li) => li.id === row.id)
+                          : undefined;
+                        const extraHours = row.billableHours ?? matchingOvertimeItem?.quantity ?? 0;
                         return (
                           <div
                             key={row.id}
@@ -1644,14 +1691,7 @@ export function QuoteImportModal({
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      updateQuote((q) => ({
-                                        ...q,
-                                        lineItems: q.lineItems.map((li) =>
-                                          li.id === matchingOvertimeItem.id
-                                            ? { ...li, quantity: Math.max(0, (li.quantity ?? 0) - 1) }
-                                            : li
-                                        ),
-                                      }))
+                                      updateQuoteLineItem(matchingOvertimeItem.id, { quantity: Math.max(0, extraHours - 1) })
                                     }
                                     className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
                                     aria-label="Decrease extra hours"
@@ -1659,19 +1699,12 @@ export function QuoteImportModal({
                                     −
                                   </button>
                                   <span className="font-num font-semibold min-w-[1.5rem] text-center">
-                                    {matchingOvertimeItem.quantity ?? 0}
+                                    {extraHours}
                                   </span>
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      updateQuote((q) => ({
-                                        ...q,
-                                        lineItems: q.lineItems.map((li) =>
-                                          li.id === matchingOvertimeItem.id
-                                            ? { ...li, quantity: (li.quantity ?? 0) + 1 }
-                                            : li
-                                        ),
-                                      }))
+                                      updateQuoteLineItem(matchingOvertimeItem.id, { quantity: extraHours + 1 })
                                     }
                                     className="w-6 h-6 rounded border border-[#E5DED2] bg-[#FAF8F4] font-semibold cursor-pointer"
                                     aria-label="Increase extra hours"
@@ -1847,7 +1880,10 @@ export function QuoteImportModal({
                         </div>
                       </div>
 
-                      {draftQuote.lineItems.map((item) => (
+                      {draftQuote.lineItems.map((item) => {
+                        const row = calc.lineItemBreakdowns.find((line) => line.id === item.id);
+                        const conditional = row?.conditionalOvertime ?? item.isConditionalOvertime ?? false;
+                        return (
                         <div
                           key={item.id}
                           onClick={() =>
@@ -2063,11 +2099,11 @@ export function QuoteImportModal({
                               {item.pricingModel === 'hourly' && (
                                 <div className="flex flex-wrap items-center gap-3">
                                   <label className="inline-flex items-center gap-1.5">
-                                    <span>Planned hours:</span>
+                                    <span>{conditional ? 'Extra hours:' : 'Planned hours:'}</span>
                                     <input
                                       type="number"
                                       min="0"
-                                      value={item.quantity ?? (item.isConditionalOvertime ? 0 : 1)}
+                                      value={row?.billableHours ?? item.quantity ?? (conditional ? 0 : item.extractedHours ?? 1)}
                                       onChange={(e) => {
                                         const val = parseFloat(e.target.value);
                                         updateQuote((q) => ({
@@ -2085,7 +2121,7 @@ export function QuoteImportModal({
                                   <label className="inline-flex items-center gap-1.5 cursor-pointer text-[#22201D]">
                                     <input
                                       type="checkbox"
-                                      checked={Boolean(item.isConditionalOvertime)}
+                                      checked={conditional}
                                       onChange={(e) => {
                                         const checked = e.target.checked;
                                         updateQuote((q) => ({
@@ -2094,12 +2130,10 @@ export function QuoteImportModal({
                                             li.id === item.id
                                               ? {
                                                   ...li,
-                                                  isConditionalOvertime: checked || undefined,
+                                                  isConditionalOvertime: checked,
                                                   quantity: checked
                                                     ? 0
-                                                    : li.quantity && li.quantity > 0
-                                                      ? li.quantity
-                                                      : 1,
+                                                    : Math.max(1, row?.billableHours ?? li.quantity ?? 1),
                                                 }
                                               : li
                                           ),
@@ -2127,7 +2161,8 @@ export function QuoteImportModal({
                             </button>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
 
                       <button
                         type="button"
