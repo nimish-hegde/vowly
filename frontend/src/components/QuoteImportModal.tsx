@@ -26,10 +26,10 @@ import {
   getEffectiveQuoteDeliveryTerms,
   getEffectiveQuoteInclusions,
   getSelectedPackageOption,
-  getVendorActiveQuote,
   resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import { findAmbiguousLegacyOvertimeItems } from '../engine/legacyOvertimeReview';
+import { buildQuoteRevisionPreview, getApprovedRevisionBaseline } from '../engine/revisionPreview';
 import {
   ExtractionAttachmentInput,
   liveQuoteExtractor,
@@ -44,12 +44,14 @@ import {
   PercentageBasis,
   Quote,
   QuoteLineItem,
+  RevisionDecision,
   TaxHandling,
   Vendor,
   VendorCategory,
 } from '../types/vowly';
 import { DemoDataNote } from './DemoLabel';
 import { ImageLightboxModal } from './ImageLightboxModal';
+import { QuoteRevisionReview } from './QuoteRevisionReview';
 
 interface QuoteImportModalProps {
   isOpen: boolean;
@@ -128,6 +130,11 @@ function readFileAsAttachment(file: File): Promise<ExtractionAttachmentInput> {
   });
 }
 
+function newRevisionDraft(vendor: Vendor | undefined, mode: 'partial' | 'manual'): Quote['revisionDraft'] {
+  const approved = vendor && getApprovedRevisionBaseline(vendor);
+  return approved?.approvalState === 'approved' ? { baselineQuoteId: approved.id, mode } : undefined;
+}
+
 export function QuoteImportModal({
   isOpen,
   onClose,
@@ -171,11 +178,10 @@ export function QuoteImportModal({
   const [showLineItemEditor, setShowLineItemEditor] = useState(false);
   const [showVendorDetails, setShowVendorDetails] = useState(false);
   const [vendorNamePromptOpen, setVendorNamePromptOpen] = useState(false);
-  const [revisionNote, setRevisionNote] = useState('');
+  const [showRevisionDetails, setShowRevisionDetails] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [newInclusionText, setNewInclusionText] = useState('');
   const [newDeliveryTermText, setNewDeliveryTermText] = useState('');
-  const [editingBookedVendor, setEditingBookedVendor] = useState(false);
   const [pkgPriceInput, setPkgPriceInput] = useState('');
   const [pkgPriceModel, setPkgPriceModel] = useState<'flat' | 'per_person'>('flat');
   const [taxPercentInput, setTaxPercentInput] = useState('');
@@ -204,18 +210,17 @@ export function QuoteImportModal({
     setShowLineItemEditor(false);
     setShowVendorDetails(false);
     setVendorNamePromptOpen(false);
-    setRevisionNote('');
+    setShowRevisionDetails(false);
     setLightboxOpen(false);
     setNewInclusionText('');
     setNewDeliveryTermText('');
-    setEditingBookedVendor(false);
     isExtractingRef.current = false;
 
     if (editApprovedForVendorId) {
       const existingVendor = activeWorkspace.vendors.find(
         (v) => v.id === editApprovedForVendorId
       );
-      const active = existingVendor ? getVendorActiveQuote(existingVendor) : undefined;
+      const active = existingVendor ? getApprovedRevisionBaseline(existingVendor) : undefined;
       if (existingVendor && active) {
         setLinkedVendorId(existingVendor.id);
         setVendorName(existingVendor.name);
@@ -223,9 +228,9 @@ export function QuoteImportModal({
         setVendorLocation(existingVendor.location);
         setIsDemoVenue(Boolean(existingVendor.isDemoVenue));
         setSelectedEventIds(existingVendor.eventIds);
-        setEditingBookedVendor(existingVendor.status === 'Booked');
         const cloned = structuredClone(active);
-        setDraftQuote(cloned);
+        setDraftQuote({ ...cloned, approvalState: 'draft', revisionDraft: newRevisionDraft(existingVendor, 'manual') });
+        setShowRevisionDetails(true);
         setGratuityPercentInput(
           cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
             ? String(cloned.gratuityPercent)
@@ -254,9 +259,13 @@ export function QuoteImportModal({
         setVendorLocation(staged?.location ?? existingVendor.location);
         setIsDemoVenue(Boolean(staged?.isDemoVenue ?? existingVendor.isDemoVenue));
         setSelectedEventIds(staged?.eventIds ?? existingVendor.eventIds);
-        setEditingBookedVendor(existingVendor.status === 'Booked');
         const cloned = structuredClone(existingVendor.draftQuote);
-        setDraftQuote(cloned);
+        const active = getApprovedRevisionBaseline(existingVendor);
+        const revisionDraft = cloned.revisionDraft
+          ?? newRevisionDraft(existingVendor, cloned.id === active?.id ? 'manual' : 'partial');
+        setDraftQuote({ ...cloned, revisionDraft });
+        setShowRevisionDetails(revisionDraft?.mode === 'manual');
+        setShowLineItemEditor(revisionDraft?.mode === 'manual');
         setGratuityPercentInput(
           cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
             ? String(cloned.gratuityPercent)
@@ -274,6 +283,7 @@ export function QuoteImportModal({
     setFeeInputs({});
     setGratuityPercentInput('');
     setLinkedVendorId(initialVendorId ?? null);
+    setSelectedEventIds(activeWorkspace.vendors.find((vendor) => vendor.id === initialVendorId)?.eventIds ?? []);
     setUploadedAttachment(null);
 
     if (initialPresetId) {
@@ -322,6 +332,16 @@ export function QuoteImportModal({
     onboardingPlannedGuests,
   ]);
 
+  const linkedVendor = activeWorkspace.vendors.find((vendor) => vendor.id === linkedVendorId);
+  const revisionDraft = draftQuote?.revisionDraft;
+  const bookedRevision = Boolean(revisionDraft && linkedVendor?.status === 'Booked');
+  const revisionPreview = useMemo(
+    () => draftQuote?.revisionDraft && linkedVendor
+      ? buildQuoteRevisionPreview(activeWorkspace, linkedVendor, draftQuote, selectedEventIds, vendorCategory)
+      : null,
+    [activeWorkspace, draftQuote, linkedVendor, selectedEventIds, vendorCategory],
+  );
+
   const calc = useMemo(() => {
     if (!draftQuote) return null;
     return calculateQuoteFinancials(
@@ -353,7 +373,22 @@ export function QuoteImportModal({
     !GENERIC_VENDOR_NAMES.has(vendorName.trim().toLowerCase());
 
   const legacyOvertimeItems = draftQuote ? findAmbiguousLegacyOvertimeItems(draftQuote) : [];
-  const canApproveWithVendor = Boolean(calc?.canApprove && isVendorNameValid && !legacyOvertimeItems.length);
+  const revisionBlockers: string[] = [];
+  if (revisionPreview && findAmbiguousLegacyOvertimeItems(revisionPreview.quote).length > 0) {
+    revisionBlockers.push('Confirm the hourly quantity or mark the rate as conditional before approving.');
+  }
+  if (revisionDraft && !isVendorNameValid) revisionBlockers.push('Enter a vendor name in quote details.');
+  if (!onCompleteForOnboarding && linkedVendor?.draftQuote && linkedVendor.draftQuote.id !== draftQuote?.id) {
+    revisionBlockers.push('Resume the saved draft before approving a different quote.');
+  }
+  const canApproveWithVendor = Boolean(isVendorNameValid && (
+    revisionDraft
+      ? revisionPreview && (revisionPreview.duplicate || (
+          !revisionPreview.stale && revisionPreview.proposedCalc.canApprove
+          && !revisionPreview.blockingReasons.length && !revisionBlockers.length
+        ))
+      : calc?.canApprove && !legacyOvertimeItems.length && !revisionBlockers.length
+  ));
   const selectedPackage = draftQuote ? getSelectedPackageOption(draftQuote).selectedPackage : undefined;
   const editableLineItems = [...(draftQuote?.lineItems ?? []), ...(selectedPackage?.fees ?? [])];
 
@@ -435,7 +470,6 @@ export function QuoteImportModal({
       setVendorCategory(result.suggestedCategory);
       setVendorLocation(result.suggestedLocation);
       setIsDemoVenue(result.isDemoVenue);
-      setDraftQuote(result.quote);
       setGratuityPercentInput(
         result.quote.gratuityPercent !== undefined &&
           result.quote.gratuityPercent !== null
@@ -496,7 +530,16 @@ export function QuoteImportModal({
         );
       }
 
+      const importedRevision = onCompleteForOnboarding
+        ? undefined
+        : newRevisionDraft(resolvedVendor, 'partial');
+      setDraftQuote({ ...result.quote, revisionDraft: importedRevision });
+      setShowRevisionDetails(false);
       if (resolvedVendor) {
+        if (importedRevision) {
+          setVendorCategory(resolvedVendor.category);
+          setVendorLocation(result.suggestedLocation || resolvedVendor.location);
+        }
         setLinkedVendorId(resolvedVendor.id);
         setSelectedEventIds(resolvedVendor.eventIds);
       } else {
@@ -526,6 +569,53 @@ export function QuoteImportModal({
 
   const updateQuote = (updater: (q: Quote) => Quote) => {
     setDraftQuote((prev) => (prev ? updater(prev) : prev));
+  };
+
+  const updateRevisionDecision = (changeId: string, decision?: RevisionDecision) => {
+    updateQuote((quote) => {
+      if (!quote.revisionDraft) return quote;
+      const decisions = { ...quote.revisionDraft.decisions };
+      if (decision) decisions[changeId] = decision;
+      else delete decisions[changeId];
+      return { ...quote, revisionDraft: { ...quote.revisionDraft, decisions } };
+    });
+  };
+
+  const updateRevisionNote = (note: string) => {
+    updateQuote((quote) => quote.revisionDraft
+      ? { ...quote, revisionDraft: { ...quote.revisionDraft, note } }
+      : quote);
+  };
+
+  const latestApprovedQuote = linkedVendor && getApprovedRevisionBaseline(linkedVendor);
+  const refreshRevisionBaseline = () => {
+    if (!linkedVendor || latestApprovedQuote?.approvalState !== 'approved' || !revisionDraft) return;
+    const manual = revisionDraft.mode === 'manual';
+    updateQuote((quote) => ({
+      ...(manual ? { ...structuredClone(latestApprovedQuote), id: quote.id, approvalState: 'draft' as const } : quote),
+      revisionDraft: {
+        baselineQuoteId: latestApprovedQuote.id,
+        mode: revisionDraft.mode,
+        note: manual ? undefined : revisionDraft.note,
+      },
+    }));
+    if (manual) {
+      setVendorName(linkedVendor.name);
+      setVendorCategory(linkedVendor.category);
+      setVendorLocation(linkedVendor.location);
+      setSelectedEventIds(linkedVendor.eventIds);
+      setGratuityPercentInput(String(latestApprovedQuote.gratuityPercent ?? ''));
+      setFeeInputs({});
+      setActiveEvidenceId(null);
+    }
+  };
+
+  const handleVendorLinkChange = (vendorId: string | null) => {
+    setLinkedVendorId(vendorId);
+    const vendor = activeWorkspace.vendors.find((candidate) => candidate.id === vendorId);
+    const nextRevision = newRevisionDraft(vendor, 'partial');
+    updateQuote((quote) => ({ ...quote, revisionDraft: nextRevision }));
+    if (vendor) setSelectedEventIds(vendor.eventIds);
   };
 
   const updateQuoteLineItem = (id: string, patch: Partial<QuoteLineItem>) => {
@@ -612,7 +702,7 @@ export function QuoteImportModal({
         linkedVendorId,
         newVendorPayload,
         draftQuote,
-        editApprovedForVendorId ? (revisionNote.trim() || 'Manual quote edit') : undefined
+        revisionDraft?.note?.trim() || (revisionDraft?.mode === 'manual' ? 'Manual quote edit' : undefined)
       );
       if (!approvedVendorId) return;
     }
@@ -680,7 +770,7 @@ export function QuoteImportModal({
                   ? 'Import Vendor Quote'
                   : step === 'extracting'
                     ? 'Analyzing Your Quote'
-                    : 'Review Extracted Quote'}
+                    : revisionDraft ? 'Review quote revision' : 'Review Extracted Quote'}
               </h2>
               {step === 'review' && isDemoVenue && <DemoDataNote />}
               {step === 'review' && extractionMetaLabel && (
@@ -694,7 +784,9 @@ export function QuoteImportModal({
                 ? 'Paste a vendor message or upload a screenshot/PDF. Vowly extracts prices, inclusions, and payment terms.'
                 : step === 'extracting'
                   ? 'Extracting structured pricing, inclusions, and fine print.'
-                  : 'Resolve only what needs your attention, then approve into your projected budget.'}
+                  : revisionDraft
+                    ? 'Review changes against the previous approved quote.'
+                    : 'Resolve only what needs your attention, then approve into your projected budget.'}
             </p>
           </div>
           <button
@@ -1063,37 +1155,53 @@ export function QuoteImportModal({
                   mobilePane === 'extracted' ? 'block' : 'hidden lg:block'
                 }`}
               >
-                {editingBookedVendor && (
-                  <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/60 p-3 text-xs text-[#92400E]">
-                    <strong>Booked vendor safeguard:</strong> Saving edits creates a new quote
-                    revision and preserves prior versions. Your confirmed booking total and paid
-                    milestones will not be changed automatically.
-                  </div>
-                )}
-
-                {editApprovedForVendorId && (
-                  <div className="rounded-xl bg-[#FAF8F4] border border-[#E5DED2] p-3 space-y-1.5">
-                    <label className="block text-xs font-semibold text-[#22201D]">
-                      Revision note (optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={revisionNote}
-                      onChange={(e) => setRevisionNote(e.target.value)}
-                      placeholder="e.g. Confirmed Imperial package & 13% HST with vendor"
-                      className="w-full rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs text-[#22201D]"
-                    />
-                  </div>
-                )}
-
                 {unlinkedNotice && (
                   <div className="rounded-xl bg-[#EEF4FB] border border-[#B5D3EE] p-3 text-xs text-[#214869]">
                     {unlinkedNotice}
                   </div>
                 )}
 
+                {revisionDraft && (
+                  <>
+                    {revisionPreview ? (
+                      <QuoteRevisionReview
+                        vendorName={linkedVendor?.name ?? vendorName}
+                        preview={revisionPreview}
+                        decisions={revisionDraft.decisions}
+                        note={revisionDraft.note}
+                        onDecision={updateRevisionDecision}
+                        onNoteChange={updateRevisionNote}
+                        onRefresh={latestApprovedQuote?.approvalState === 'approved' ? refreshRevisionBaseline : undefined}
+                        restartManual={revisionDraft.mode === 'manual'}
+                        isBooked={bookedRevision}
+                        additionalBlockers={revisionBlockers}
+                      />
+                    ) : (
+                      <div role="status" className="space-y-2 rounded-xl border border-[#F59E0B]/60 bg-[#FFFBEB] p-3 text-xs text-[#92400E]">
+                        <p>The approved quote for this revision is unavailable. You can save the draft for review.</p>
+                        {latestApprovedQuote?.approvalState === 'approved' && (
+                          <button type="button" onClick={refreshRevisionBaseline} className="rounded-md border border-[#D49A49] bg-white px-2.5 py-1.5 font-semibold">
+                            {revisionDraft.mode === 'manual' ? 'Restart from latest approved quote' : 'Use latest approved quote'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      aria-expanded={showRevisionDetails}
+                      aria-controls="quote-revision-details"
+                      onClick={() => setShowRevisionDetails((current) => !current)}
+                      className="rounded-lg border border-[#E5DED2] bg-white px-3 py-2 text-xs font-semibold text-[#486755]"
+                    >
+                      {showRevisionDetails ? 'Hide quote details' : 'Open quote details'}
+                    </button>
+                  </>
+                )}
+
+                <div id={revisionDraft ? 'quote-revision-details' : undefined}
+                  hidden={Boolean(revisionDraft && !showRevisionDetails)} className="space-y-4">
                 {/* 1. PROMINENT SUMMARY CARD: Vendor identity + Estimated Total */}
-                <div className="rounded-2xl bg-white border border-[#E5DED2] p-5 space-y-3">
+                {!revisionDraft && <div className="rounded-2xl bg-white border border-[#E5DED2] p-5 space-y-3">
                   <div className="flex flex-wrap items-start justify-between gap-4">
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">
@@ -1149,7 +1257,7 @@ export function QuoteImportModal({
                       )}
                     </div>
                   </div>
-                </div>
+                </div>}
 
                 {/* 2. NEEDS YOUR ATTENTION (only shown when items require user action) */}
                 {needsAttentionCount > 0 && (
@@ -2461,6 +2569,7 @@ export function QuoteImportModal({
                           </label>
                           <select
                             value={vendorCategory}
+                            disabled={bookedRevision}
                             onChange={(e) =>
                               setVendorCategory(e.target.value as VendorCategory)
                             }
@@ -2490,12 +2599,14 @@ export function QuoteImportModal({
                             />
                           </div>
                           <div>
-                            <label className="block text-[11px] font-medium text-[#6B655C] mb-1">
-                              Save as new or link to existing vendor
+                            <label htmlFor="quote-vendor-link" className="block text-[11px] font-medium text-[#6B655C] mb-1">
+                              {revisionDraft?.mode === 'manual' ? 'Linked vendor' : 'Save as new or link to existing vendor'}
                             </label>
                             <select
+                              id="quote-vendor-link"
                               value={linkedVendorId ?? ''}
-                              onChange={(e) => setLinkedVendorId(e.target.value || null)}
+                              disabled={revisionDraft?.mode === 'manual'}
+                              onChange={(e) => handleVendorLinkChange(e.target.value || null)}
                               className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs text-[#22201D]"
                             >
                               <option value="">Create as new vendor</option>
@@ -2521,6 +2632,8 @@ export function QuoteImportModal({
                                 <button
                                   key={evt.id}
                                   type="button"
+                                  disabled={bookedRevision}
+                                  aria-pressed={checked}
                                   onClick={() =>
                                     setSelectedEventIds((prev) =>
                                       checked
@@ -2544,15 +2657,20 @@ export function QuoteImportModal({
                     </div>
                   )}
                 </div>
+                </div>
               </div>
             </div>
 
             {/* Bottom Review Action Footer */}
             <div className="px-5 py-3.5 bg-white border-t border-[#E5DED2] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
               <div className="text-xs text-[#6B655C]">
-                {canApproveWithVendor
-                  ? 'Approving adds this quote to your projected budget. Booking is confirmed separately.'
-                  : 'Resolve the items under “Needs your attention” to approve, or save as a Draft.'}
+                {revisionDraft
+                  ? canApproveWithVendor
+                    ? 'Approving updates the active quote and preserves its revision history.'
+                    : 'Resolve the revision for approval or save your review as a draft.'
+                  : canApproveWithVendor
+                    ? 'Approving adds this quote to your projected budget. Booking is confirmed separately.'
+                    : 'Resolve the items under “Needs your attention” to approve, or save as a Draft.'}
               </div>
               <div className="flex items-center gap-2.5 justify-end shrink-0">
                 <button
@@ -2561,7 +2679,7 @@ export function QuoteImportModal({
                   className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl border border-[#D7CBEB] bg-[#EFEAF8] text-[#4C3B70] hover:bg-[#E5DCF4] whitespace-nowrap cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
-                  Save as Draft
+                  {revisionDraft ? 'Save revision draft' : 'Save as Draft'}
                 </button>
                 <button
                   type="button"
@@ -2574,7 +2692,7 @@ export function QuoteImportModal({
                   }`}
                 >
                   <Check className="w-3.5 h-3.5" />
-                  {editApprovedForVendorId ? 'Approve Changes' : 'Approve Quote'}
+                  {revisionDraft ? 'Approve revision' : 'Approve Quote'}
                 </button>
               </div>
             </div>

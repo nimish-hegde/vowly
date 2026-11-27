@@ -247,7 +247,54 @@ export interface QuoteEvidenceSpan {
   sourceLabel: string;
 }
 
+export type RevisionDecision =
+  | { action: 'retain' | 'accept' | 'remove' }
+  | { action: 'replace'; targetId: string }
+  | { action: 'manual'; value: string };
+
+export interface RevisionChange {
+  id: string;
+  field: string;
+  scope?: string;
+  previous: string | null;
+  proposed: string | null;
+  kind: 'added' | 'changed' | 'removed' | 'carried' | 'ambiguous';
+  previousEvidence?: string;
+  proposedEvidence?: string;
+  needsDecision?: boolean;
+  candidates?: Array<{ id: string; label: string; value: string; evidence?: string }>;
+  canAccept?: boolean;
+  canRemove?: boolean;
+  canEditAmount?: boolean;
+}
+
+export interface QuoteRevisionDraft {
+  baselineQuoteId: string;
+  mode: 'partial' | 'manual';
+  decisions?: Record<string, RevisionDecision>;
+  note?: string;
+}
+
+export interface QuoteRevisionChangeRecord {
+  id: string;
+  field: string;
+  scope?: string;
+  previous: string | null;
+  proposed: string | null;
+  kind: 'added' | 'changed' | 'removed';
+  previousEvidence?: string;
+  proposedEvidence?: string;
+}
+
 export interface QuoteRevisionRecord {
+  revisionKey?: string;
+  baselineQuoteId?: string;
+  previousCurrency?: CurrencyCode;
+  newCurrency?: CurrencyCode;
+  previousAllInTotal?: number | null;
+  newAllInTotal?: number | null;
+  projectedDelta?: number | null;
+  changes?: QuoteRevisionChangeRecord[];
   id: string;
   date: string;
   summary: string;
@@ -312,6 +359,7 @@ export interface Quote {
   };
   brochureReference?: BrochureReference;
   revisions?: QuoteRevisionRecord[];
+  revisionDraft?: QuoteRevisionDraft;
 }
 
 export interface DraftVendorMetadata {

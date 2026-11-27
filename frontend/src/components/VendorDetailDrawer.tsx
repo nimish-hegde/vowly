@@ -782,14 +782,58 @@ export function VendorDetailDrawer({
                             <span>{rev.summary}</span>
                             <span className="text-[#6B655C]">{rev.date}</span>
                           </div>
-                          <div className="font-num text-[11px] flex items-center gap-3">
-                            <span className="text-[#6B655C] line-through">
-                              {formatShortCad(rev.previousPreTaxTotal)}
-                            </span>
-                            <span className="text-[#234733] font-semibold">
-                              {formatShortCad(rev.newPreTaxTotal)} pre-tax
-                            </span>
-                          </div>
+                          <dl className="space-y-1 text-[11px]">
+                            <div className="flex flex-wrap gap-x-2">
+                              <dt>Pre-tax</dt>
+                              <dd className="font-num">
+                                {formatCurrency(rev.previousPreTaxTotal, rev.previousCurrency ?? activeQuote.currency, { decimals: 2 })}
+                                {' → '}
+                                {formatCurrency(rev.newPreTaxTotal, rev.newCurrency ?? activeQuote.currency, { decimals: 2 })}
+                              </dd>
+                            </div>
+                            {rev.previousAllInTotal !== undefined && (
+                              <div className="flex flex-wrap gap-x-2">
+                                <dt>All-in</dt>
+                                <dd className="font-num">
+                                  {rev.previousAllInTotal === null ? 'Unavailable' : formatCurrency(rev.previousAllInTotal, rev.previousCurrency ?? activeQuote.currency, { decimals: 2 })}
+                                  {' → '}
+                                  {rev.newAllInTotal == null ? 'Unavailable' : formatCurrency(rev.newAllInTotal, rev.newCurrency ?? activeQuote.currency, { decimals: 2 })}
+                                </dd>
+                              </div>
+                            )}
+                            {rev.projectedDelta !== undefined && (
+                              <div className="flex flex-wrap gap-x-2">
+                                <dt>Projected budget impact at approval</dt>
+                                <dd>{rev.projectedDelta === null ? 'Unavailable' : rev.projectedDelta === 0 ? 'No change' :
+                                  `${rev.projectedDelta > 0 ? '+' : '−'}${formatCurrency(Math.abs(rev.projectedDelta), rev.newCurrency ?? activeQuote.currency, { decimals: 2 })}`}</dd>
+                              </div>
+                            )}
+                          </dl>
+                          {!!rev.changes?.length && (
+                            <details>
+                              <summary className="cursor-pointer font-medium text-[#486755]">Changed fields and sources ({rev.changes.length})</summary>
+                              <ul className="space-y-2 pt-2">
+                                {rev.changes.map((change) => (
+                                  <li key={change.id} className="border-t border-[#E5DED2] pt-1.5">
+                                    <strong>{change.field}{change.scope ? ` · ${change.scope}` : ''}</strong>
+                                    <dl className="mt-1 grid gap-2 sm:grid-cols-2">
+                                      <div className="min-w-0">
+                                        <dt className="text-[#6B655C]">Previous</dt>
+                                        <dd className="break-words">{change.previous ?? 'Not stated'}</dd>
+                                        {change.previousEvidence && <dd className="break-words"><q>{change.previousEvidence}</q></dd>}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <dt className="text-[#6B655C]">Approved change</dt>
+                                        <dd className="break-words">{change.proposed ?? (change.kind === 'removed' ? 'Removed' : 'Not stated')}</dd>
+                                        {change.proposedEvidence ? <dd className="break-words"><q>{change.proposedEvidence}</q></dd>
+                                          : <dd className="text-[#6B655C]">Manually reviewed</dd>}
+                                      </div>
+                                    </dl>
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
                           <div className="text-[11px] text-[#234733]">{rev.note}</div>
                         </div>
                       ))}

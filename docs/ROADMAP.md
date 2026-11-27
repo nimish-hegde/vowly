@@ -41,7 +41,8 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 
 ### Open Issue Audit Status
 - **Closed / Shipped:** `#3` (venue comparison & `$500` break-even regression verified and closed on `85e00a9`), `#15` (30-case multimodal holdout & Gemini model benchmark shipped via `#22`, `b76c67c`), `#16` (shared deterministic financial engine shipped via `#23`, `a9b89c0`), `#21` (extraction accuracy for cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous categories shipped via `#24`).
-- **Partially complete (targeted gaps remain):** `#1` (pre-approval revision diff preview & duplicate-revision idempotency) and `#7` (scratch-onboarding currency selector & `"Continue with manual entry"` fallback on extraction failure).
+- **Pending review:** `#1` (pre-approval revision review, partial updates, and replay protection).
+- **Partially complete (targeted gaps remain):** `#7` (scratch-onboarding currency selector & `"Continue with manual entry"` fallback on extraction failure).
 - **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
 
 ### Tracked Follow-Up Workstreams
@@ -168,3 +169,12 @@ Record significant product, architecture, and model decisions here as they are m
 - **PR #25 follow-up:** Separately itemized overtime, AV, and staffing appear under extras across categories. The comparison reuses the existing calculated amounts and keeps workspace state unchanged. Hourly-only offers with a saved duration respond to hypothetical hours. The follow-up passes 39 frontend tests, 66 backend tests, 70 mock evals, 30/30 frozen multimodal parity cases, type-check, and build.
 - **Future improvements:** Improve classification of bundled venue and catering charges when quotes do not itemize them. Make key-difference banners name the specific fee or term that differs.
 - **Decision:** Hold for explicit PM merge approval.
+
+### D-011 — Issue #1 pre-approval quote revision review
+
+- **Hypothesis:** Comparing the proposed revision with an approved quote helps couples verify changes without losing omitted charges or changing a confirmed contract.
+- **Changes:** The existing quote modal shows previous and proposed values, scoped changes, source excerpts, and choices to retain or accept values, match ambiguous charges, or enter confirmed amounts. Drafts store their reviewed baseline and decisions. The shared financial engine prices the snapshots and previews the workspace impact where calculable. Approval appends a dated record with the changed fields and available evidence.
+- **Safeguards:** Carry omitted fees and sibling tiers forward. Reject mixed-currency partial pricing and stale approvals. Replayed revisions are no-ops. Approved quote revisions keep saved contract commitments and payment records intact. A legacy booked record without a confirmed amount requires confirmation before approval.
+- **Offline verification:** 53 frontend tests (14 dedicated revision tests), 66 backend tests, 70 mock evals with zero critical financial errors or blockers, 30/30 frozen multimodal parity cases, frontend type-check, and production build. Synthetic tests cover amendments, omitted fees, replays after reload, deliberate reversals, stale drafts, package scope, and booked records.
+- **Browser verification:** Local Chrome at 1440 px and 360 px showed Juniper-style AV savings with an omitted bartender fee still blocking approval, saved the draft, and approved a separate booked quote revision while preserving the contract and paid deposit. Opened the dated change history at 360 px. Used one local fixture response and no live extraction.
+- **Decision:** Hold for independent review and explicit PM merge approval.
