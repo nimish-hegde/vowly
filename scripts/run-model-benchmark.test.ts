@@ -144,4 +144,18 @@ test('Issue #21: unresolved price conflict with higher provisional candidate pas
   assert.equal(spuriousResult.endToEndPassed, false);
   assert.equal(spuriousResult.criticalFinancialError, true);
   assert.equal(spuriousResult.inventedChargesCount, 1);
+
+  // Codex P2: preceding optional item must NOT break higher-provisional conflict line lookup
+  const optionalBeforeHigher = structuredClone(higherProvisional);
+  optionalBeforeHigher.lineItems.unshift({
+    label: 'Optional tasting',
+    pricingType: 'flat',
+    amount: 200,
+    chargeType: 'optional',
+    optionalAddon: true,
+    sourceExcerpt: 'catering is $1,800 flat for the evening.',
+  });
+  const optResult = gradeBenchmarkCase(t07, optionalBeforeHigher, 100, 100, 0, undefined, 1);
+  assert.equal(optResult.endToEndPassed, true);
+  assert.equal(optResult.criticalFinancialError, false);
 });

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { calculateQuoteTotal } from './calculator.ts';
+import { calculateQuoteTotal, normalizeConflictingOptions } from './calculator.ts';
+import { calculateQuote } from '../shared/finance/calculator.ts';
 import {
   buildMockMap,
   ExtractionError,
@@ -134,8 +135,9 @@ export function gradeExtraction(
     testCase.expected.gratuityStatus &&
     extracted.gratuityStatus !== testCase.expected.gratuityStatus
   ) {
-    failures.push(
-      `gratuityStatus: got "${extracted.gratuityStatus}", expected "${testCase.expected.gratuityStatus}"`,
+    criticalFinancialError = true;
+    releaseBlockers.push(
+      `Critical financial error: gratuityStatus got "${extracted.gratuityStatus}", expected "${testCase.expected.gratuityStatus}"`,
     );
   }
   if (testCase.expected.gratuityPercent !== undefined) {
@@ -181,14 +183,34 @@ export function gradeExtraction(
   // expected discrepancy (blocking approval until explicit human resolution), neither candidate
   // is authoritative — accept the higher candidate total ONLY when the conflicting line item itself
   // carries the higher provisional candidate (never when spurious extra charges inflate the subtotal).
-  const conflictLineProvisionalTotal =
-    matchedConflict !== undefined ? calc.itemTotals[matchedConflict.lineItemIndex]?.amount : undefined;
+  // Match via shared calculateQuote lines (immune to preceding optional items or reordered percentage items).
+  const sharedCalc =
+    matchedConflict !== undefined
+      ? calculateQuote(extracted, {
+          ...(testCase.calcContext ?? {}),
+          selectedPackageId:
+            testCase.calcContext?.selectedPackageId ?? extracted.selectedPackageId ?? undefined,
+        })
+      : undefined;
   const conflictingLineUsesHigherCandidate =
     matchedConflict !== undefined &&
     matchedConflict.maxTotal !== null &&
-    conflictLineProvisionalTotal !== null &&
-    conflictLineProvisionalTotal !== undefined &&
-    Math.abs(conflictLineProvisionalTotal - matchedConflict.maxTotal) < 0.01;
+    sharedCalc !== undefined &&
+    sharedCalc.lines.some((line) => {
+      if (line.total === null || Math.abs(line.total - matchedConflict.maxTotal!) >= 0.01) {
+        return false;
+      }
+      if (line.item.label !== matchedConflict.label) return false;
+      const opts = normalizeConflictingOptions(line.item);
+      return (
+        opts.length === matchedConflict.options.length &&
+        opts.every(
+          (o, idx) =>
+            o.pricingType === matchedConflict.options[idx]?.pricingType &&
+            Math.abs(o.amount - (matchedConflict.options[idx]?.unitAmount ?? NaN)) < 0.01,
+        )
+      );
+    });
   const subtotalMatches =
     Math.abs(calc.knownSubtotal - testCase.expected.knownSubtotal) < 0.01 ||
     (conflictingLineUsesHigherCandidate &&
