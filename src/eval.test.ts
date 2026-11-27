@@ -393,12 +393,29 @@ test('grades expectedPriceConflictDiscrepancy strictly without loosening subtota
   );
 });
 
-test('parseEvalArgs and resolveEvalProvider honor --provider, reject unknown flags, and never silently fall back to mock', () => {
+test('parseEvalArgs and resolveEvalProvider honor --provider, --model, reject unknown flags, and never silently fall back to mock', () => {
   const parsed = parseEvalArgs(['--split', 'dev', '--provider', 'gemini', '--show-raw']);
-  assert.deepEqual(parsed, { split: 'dev', provider: 'gemini', delayMs: undefined, showRaw: true });
+  assert.deepEqual(parsed, {
+    split: 'dev',
+    provider: 'gemini',
+    model: undefined,
+    delayMs: undefined,
+    showRaw: true,
+  });
 
-  const inline = parseEvalArgs(['--split=held-out-v2', '--provider=mock', '--delay-ms=250']);
-  assert.deepEqual(inline, { split: 'held-out-v2', provider: 'mock', delayMs: 250, showRaw: false });
+  const inline = parseEvalArgs([
+    '--split=held-out-v2',
+    '--provider=mock',
+    '--model=gemini-4-hydrogen',
+    '--delay-ms=250',
+  ]);
+  assert.deepEqual(inline, {
+    split: 'held-out-v2',
+    provider: 'mock',
+    model: 'gemini-4-hydrogen',
+    delayMs: 250,
+    showRaw: false,
+  });
 
   assert.throws(() => parseEvalArgs(['--unknown-flag']), /Unsupported CLI argument/);
   assert.throws(() => parseEvalArgs(['--provider', 'openai']), /Unsupported --provider/);

@@ -251,7 +251,7 @@ export function scoreExtractionError(testCase: EvalCase, err: unknown): CaseScor
   };
 }
 
-export function summarizeScores(scores: CaseScore[]) {
+export function summarizeScores(scores: CaseScore[], model?: string) {
   const total = scores.length;
   const apiErrors = scores.filter((s) => s.apiError !== undefined).length;
   const parseErrors = scores.filter((s) => s.parseError !== undefined).length;
@@ -279,11 +279,14 @@ export function summarizeScores(scores: CaseScore[]) {
   const endToEndSuccessRate = total > 0 ? passedCount / total : 0;
   const promptTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.promptTokens ?? 0), 0);
   const outputTokens = scores.reduce((sum, s) => sum + (s.tokenUsage?.outputTokens ?? 0), 0);
-  const estPaidCostUsd = estimateExtractionCostUsd({
-    promptTokens,
-    outputTokens,
-    totalTokens: promptTokens + outputTokens,
-  });
+  const estPaidCostUsd = estimateExtractionCostUsd(
+    {
+      promptTokens,
+      outputTokens,
+      totalTokens: promptTokens + outputTokens,
+    },
+    model,
+  );
 
   return {
     total,
@@ -311,6 +314,7 @@ export function summarizeScores(scores: CaseScore[]) {
 export function summarizeByGroup(
   scores: CaseScore[],
   keyFn: (score: CaseScore) => string,
+  model?: string,
 ): Record<string, ReturnType<typeof summarizeScores>> {
   const grouped = new Map<string, CaseScore[]>();
   for (const score of scores) {
@@ -321,7 +325,7 @@ export function summarizeByGroup(
   }
   const result: Record<string, ReturnType<typeof summarizeScores>> = {};
   for (const [key, list] of grouped.entries()) {
-    result[key] = summarizeScores(list);
+    result[key] = summarizeScores(list, model);
   }
   return result;
 }
@@ -332,6 +336,7 @@ const VALID_PROVIDERS = new Set<ProviderName>(['mock', 'ollama', 'gemini']);
 export interface ParsedEvalArgs {
   split: string;
   provider?: ProviderName;
+  model?: string;
   delayMs?: number;
   showRaw: boolean;
 }
@@ -339,6 +344,7 @@ export interface ParsedEvalArgs {
 export function parseEvalArgs(argv: string[]): ParsedEvalArgs {
   let split = 'all';
   let provider: ProviderName | undefined;
+  let model: string | undefined;
   let delayMs: number | undefined;
   let showRaw = false;
 
@@ -373,6 +379,12 @@ export function parseEvalArgs(argv: string[]): ParsedEvalArgs {
         );
       }
       provider = val;
+    } else if (flag === '--model') {
+      const val = readValue().trim();
+      if (!val) {
+        throw new Error(`Invalid --model value. Expected a non-empty model ID.`);
+      }
+      model = val;
     } else if (flag === '--delay-ms') {
       const val = Number(readValue());
       if (!Number.isFinite(val) || val < 0) {
@@ -386,12 +398,12 @@ export function parseEvalArgs(argv: string[]): ParsedEvalArgs {
       showRaw = true;
     } else {
       throw new Error(
-        `Unsupported CLI argument "${raw}". Supported flags: --split, --provider, --delay-ms, --show-raw`,
+        `Unsupported CLI argument "${raw}". Supported flags: --split, --provider, --model, --delay-ms, --show-raw`,
       );
     }
   }
 
-  return { split, provider, delayMs, showRaw };
+  return { split, provider, model, delayMs, showRaw };
 }
 
 export function resolveEvalProvider(
@@ -451,6 +463,7 @@ async function main() {
     try {
       const res = await extractQuote(c.rawMessage, {
         provider: effectiveProvider,
+        model: parsedArgs.model,
         mockLookup: mockMap[c.id],
         onRetry: (info) => {
           const secs = Math.round(info.delayMs / 1000);
@@ -511,7 +524,8 @@ async function main() {
     }
   }
 
-  const summary = summarizeScores(scores);
+  const pricingModel = resolvedModelVersion || usedModel || parsedArgs.model;
+  const summary = summarizeScores(scores, pricingModel);
   const telSummary = telemetry.getSummary();
   const fmtPct = (rate: number) => `${(rate * 100).toFixed(1)}%`;
 
@@ -555,11 +569,11 @@ async function main() {
     }
   };
 
-  const bySplit = summarizeByGroup(scores, (s) => s.split);
+  const bySplit = summarizeByGroup(scores, (s) => s.split, pricingModel);
   if (Object.keys(bySplit).length > 1) {
     printBreakdown('By split:', bySplit);
   }
-  const byCategory = summarizeByGroup(scores, (s) => s.category);
+  const byCategory = summarizeByGroup(scores, (s) => s.category, pricingModel);
   printBreakdown('By vendor category:', byCategory);
   console.log('');
 

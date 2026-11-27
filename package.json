@@ -7,7 +7,7 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "node --test src/calculator.test.ts src/validator.test.ts src/eval.test.ts src/extractor.test.ts src/telemetry.test.ts src/review.test.ts src/extract-handler.test.ts src/v05-uat.test.ts",
+    "test": "node --test src/calculator.test.ts src/validator.test.ts src/eval.test.ts src/extractor.test.ts src/telemetry.test.ts src/review.test.ts src/extract-handler.test.ts src/v05-uat.test.ts scripts/run-model-benchmark.test.ts",
     "eval": "node src/eval.ts",
     "eval:dev": "node src/eval.ts --split dev",
     "eval:regression": "node src/eval.ts --split regression",
