@@ -502,6 +502,10 @@ export function gradeBenchmarkCase(
     if (!gotUnknowns.some((g) => g.includes(target))) {
       missedChargesCount++;
       aiCorrections++;
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error: omitted mandatory/TBD charge matching "${expUnk}" (got: [${baseCalc.unknownItems.join(', ')}])`,
+      );
       failures.push(`missed TBD/unknown charge matching "${expUnk}" (got: [${baseCalc.unknownItems.join(', ')}])`);
     }
   }

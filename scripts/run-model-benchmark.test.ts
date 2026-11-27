@@ -98,3 +98,15 @@ test('Codex P2: partial decimal matches ($85 vs $85.50, 5% vs 15.5%) fail financ
     true,
   );
 });
+
+test('Codex P2: omitting an expected mandatory TBD fee (T08 rigging fee) flags criticalFinancialError and releaseBlockers', () => {
+  const t08 = getCase('T08');
+  const bad = structuredClone(t08.mockExtraction);
+  bad.lineItems = bad.lineItems.filter((li) => !li.label.toLowerCase().includes('rigging'));
+
+  const result = gradeBenchmarkCase(t08, bad, 100, 100, 0, undefined, 1);
+  assert.equal(result.endToEndPassed, false);
+  assert.equal(result.criticalFinancialError, true);
+  assert.equal(result.missedChargesCount, 1);
+  assert.ok(result.releaseBlockers.some((b) => b.includes('rigging')));
+});
