@@ -253,6 +253,10 @@ export interface EvalCase {
     unknownItemLabels: string[];
     minOpenQuestions?: number;
     taxStatus?: TaxOrGratuityStatus;
+    taxPercent?: number | null;
+    gratuityStatus?: TaxOrGratuityStatus;
+    gratuityPercent?: number | null;
+    gratuityBasis?: PercentageBasis;
     paymentMethodRule?: PaymentMethodRule;
     /** Expected numeric discrepancy when the case contains conflicting prices for one service. */
     expectedPriceConflictDiscrepancy?: number;

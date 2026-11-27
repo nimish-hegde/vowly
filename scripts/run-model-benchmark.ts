@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { calculateQuoteTotal } from '../src/calculator.ts';
+import { calculateQuoteTotal, normalizeConflictingOptions } from '../src/calculator.ts';
+import { calculateQuote } from '../shared/finance/calculator.ts';
 import { extractQuote, ExtractionError, type ProviderName } from '../src/extractor.ts';
 import { estimateExtractionCostUsd, getModelPricingRates } from '../src/telemetry.ts';
 import type { ExtractedQuote, ExtractionAttachment, TokenUsage } from '../src/types.ts';
@@ -356,7 +357,51 @@ export function gradeBenchmarkCase(
     hours: isMultiPkgExpected ? undefined : bc.calcContext.hours,
   });
 
-  if (Math.abs(baseCalc.knownSubtotal - bc.expected.knownSubtotal) >= 0.01) {
+  const expectedDiff = bc.expected.expectedPriceConflictDiscrepancy;
+  const matchedConflict =
+    expectedDiff !== undefined
+      ? baseCalc.priceConflicts.find(
+          (c) => c.discrepancy !== null && Math.abs(c.discrepancy - expectedDiff) < 0.01,
+        )
+      : undefined;
+  // For properly detected unresolved price conflicts (blocking approval until explicit human resolution),
+  // neither candidate is authoritative: accept the higher candidate total ONLY when the conflicting
+  // line item itself carries the higher provisional candidate (rejecting spurious extra charges).
+  // Match via shared calculateQuote lines (immune to preceding optional items or reordered percentage items).
+  const sharedBaseCalc =
+    matchedConflict !== undefined
+      ? calculateQuote(q, {
+          guestCount: bc.calcContext.guestCount,
+          hours: isMultiPkgExpected ? undefined : bc.calcContext.hours,
+          selectedPackageId: q.selectedPackageId ?? undefined,
+        })
+      : undefined;
+  const conflictingLineUsesHigherCandidate =
+    matchedConflict !== undefined &&
+    matchedConflict.maxTotal !== null &&
+    sharedBaseCalc !== undefined &&
+    sharedBaseCalc.lines.some((line) => {
+      if (line.total === null || Math.abs(line.total - matchedConflict.maxTotal!) >= 0.01) {
+        return false;
+      }
+      if (line.item.label !== matchedConflict.label) return false;
+      const opts = normalizeConflictingOptions(line.item);
+      return (
+        opts.length === matchedConflict.options.length &&
+        opts.every(
+          (o, idx) =>
+            o.pricingType === matchedConflict.options[idx]?.pricingType &&
+            Math.abs(o.amount - (matchedConflict.options[idx]?.unitAmount ?? NaN)) < 0.01,
+        )
+      );
+    });
+  const baseSubtotalMatches =
+    Math.abs(baseCalc.knownSubtotal - bc.expected.knownSubtotal) < 0.01 ||
+    (conflictingLineUsesHigherCandidate &&
+      expectedDiff !== undefined &&
+      Math.abs(baseCalc.knownSubtotal - (bc.expected.knownSubtotal + expectedDiff)) < 0.01);
+
+  if (!baseSubtotalMatches) {
     criticalFinancialError = true;
     aiCorrections++;
     releaseBlockers.push(
@@ -546,10 +591,12 @@ export function gradeBenchmarkCase(
     );
   }
 
-  if (baseCalc.knownSubtotal > bc.expected.knownSubtotal + 0.01) {
-    inventedChargesCount++;
-  } else if (baseCalc.knownSubtotal < bc.expected.knownSubtotal - 0.01) {
-    missedChargesCount++;
+  if (!baseSubtotalMatches) {
+    if (baseCalc.knownSubtotal > bc.expected.knownSubtotal + 0.01) {
+      inventedChargesCount++;
+    } else if (baseCalc.knownSubtotal < bc.expected.knownSubtotal - 0.01) {
+      missedChargesCount++;
+    }
   }
 
   // --- True Multimodal Source Grounding ---

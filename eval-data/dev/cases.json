@@ -1273,5 +1273,249 @@
       "paymentTerms": { "methodRule": "unknown" },
       "openQuestions": []
     }
+  },
+  {
+    "id": "dev-issue21-conflict-dated-pricing-models",
+    "split": "dev",
+    "description": "Issue #21 Cat 1: Dated cross-channel messages with conflicting flat vs per-person pricing models require explicit human resolution",
+    "rawMessage": "Forwarding two quotes from Saffron & Sage Caterers (CAD) for our 120-guest reception at Oakridge Community Hall.\nText message (April 4): \"Our dinner catering is $2,400 flat for the evening.\"\nEmail quote (April 9): \"Reception buffet catering: $42 per person for 120 guests. Serving chafers fee TBD once kitchen layout is shared. Plus 13% HST.\"",
+    "calcContext": { "guestCount": 120 },
+    "expected": {
+      "category": "catering",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 2400,
+      "unknownItemLabels": ["chafer"],
+      "minOpenQuestions": 2,
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "expectedPriceConflictDiscrepancy": 2640
+    },
+    "mockExtraction": {
+      "vendorName": "Saffron & Sage Caterers",
+      "category": "catering",
+      "events": ["Reception"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "unknown",
+      "gratuityPercent": null,
+      "lineItems": [
+        {
+          "label": "Reception dinner catering",
+          "pricingType": "flat",
+          "amount": 2400,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "conflictingOptions": [
+            {
+              "sourceLabel": "Text message (April 4)",
+              "pricingType": "flat",
+              "amount": 2400,
+              "sourceExcerpt": "Our dinner catering is $2,400 flat for the evening."
+            },
+            {
+              "sourceLabel": "Email quote (April 9)",
+              "pricingType": "per_person",
+              "amount": 42,
+              "sourceExcerpt": "Reception buffet catering: $42 per person for 120 guests."
+            }
+          ],
+          "sourceExcerpt": "Our dinner catering is $2,400 flat for the evening."
+        },
+        {
+          "label": "Serving chafers fee",
+          "pricingType": "unknown",
+          "amount": null,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Serving chafers fee TBD once kitchen layout is shared."
+        }
+      ],
+      "paymentTerms": { "methodRule": "unknown" },
+      "openQuestions": [
+        {
+          "question": "Which catering pricing applies: $2,400 flat (text message) or $42/person (email)?",
+          "reason": "conflict",
+          "sourceExcerpt": "Reception buffet catering: $42 per person for 120 guests."
+        },
+        {
+          "question": "What is the serving chafers fee?",
+          "reason": "missing_price",
+          "sourceExcerpt": "Serving chafers fee TBD once kitchen layout is shared."
+        }
+      ]
+    }
+  },
+  {
+    "id": "dev-issue21-explicit-footer-tax-gratuity-multipkg",
+    "split": "dev",
+    "description": "Issue #21 Cat 2: Multi-package venue quote preserves explicit footer 13% HST and 16% food-only service charge",
+    "rawMessage": "Cedarwood Banquet Hall (Markham, ON, CAD):\nTier 1 - Classic Feast: $64/person (minimum 140 guests). Includes 3 starters and plated dinner.\nTier 2 - Premier Feast: $82/person (minimum 100 guests). Includes 5 starters, live carving station, and late-night sweets.\nShared mandatory projector & audio fee: $600 flat.\nFooter terms applying to all packages: 13% HST and 16% service charge on food subtotal only. $2,000 CAD deposit to reserve.",
+    "calcContext": { "guestCount": 140 },
+    "expected": {
+      "category": "venue",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 600,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 16,
+      "gratuityBasis": "food_subtotal",
+      "expectedPackageCount": 2,
+      "expectUnresolvedPackageSelection": true
+    },
+    "mockExtraction": {
+      "vendorName": "Cedarwood Banquet Hall",
+      "vendorLocation": "Markham, ON",
+      "category": "venue",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "excluded",
+      "gratuityPercent": 16,
+      "gratuityBasis": "food_subtotal",
+      "packages": [
+        {
+          "id": "classic-feast",
+          "name": "Classic Feast",
+          "pricingType": "per_person",
+          "amount": 64,
+          "minGuests": 140,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "3 starters" },
+            { "name": "plated dinner" }
+          ],
+          "sourceExcerpt": "Tier 1 - Classic Feast: $64/person (minimum 140 guests)."
+        },
+        {
+          "id": "premier-feast",
+          "name": "Premier Feast",
+          "pricingType": "per_person",
+          "amount": 82,
+          "minGuests": 100,
+          "isFoodItem": true,
+          "inclusions": [
+            { "name": "5 starters" },
+            { "name": "live carving station" },
+            { "name": "late-night sweets" }
+          ],
+          "sourceExcerpt": "Tier 2 - Premier Feast: $82/person (minimum 100 guests)."
+        }
+      ],
+      "lineItems": [
+        {
+          "label": "Projector & audio fee",
+          "pricingType": "flat",
+          "amount": 600,
+          "isFoodItem": false,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Shared mandatory projector & audio fee: $600 flat."
+        }
+      ],
+      "paymentTerms": { "depositAmount": 2000, "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-issue21-unstated-tax-rate-no-hallucination",
+    "split": "dev",
+    "description": "Issue #21 Cat 2 guardrail: Required nullable taxPercent/gratuityPercent must stay null when rate is genuinely unstated",
+    "rawMessage": "Harbor Light Photography (Seattle, WA, USD): Full wedding photography is $4,100 USD for 9 hours with 1 lead photographer. Plus applicable sales tax. $1,000 retainer due on booking.",
+    "calcContext": { "hours": 9 },
+    "expected": {
+      "category": "photographer",
+      "currency": "USD",
+      "quoteKind": "initial",
+      "knownSubtotal": 4100,
+      "unknownItemLabels": [],
+      "taxStatus": "excluded",
+      "taxPercent": null,
+      "gratuityStatus": "unknown",
+      "gratuityPercent": null
+    },
+    "mockExtraction": {
+      "vendorName": "Harbor Light Photography",
+      "vendorLocation": "Seattle, WA",
+      "category": "photographer",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "USD",
+      "taxStatus": "excluded",
+      "taxPercent": null,
+      "gratuityStatus": "unknown",
+      "gratuityPercent": null,
+      "serviceDurationHours": 9,
+      "lineItems": [
+        {
+          "label": "Full wedding photography",
+          "pricingType": "flat",
+          "amount": 4100,
+          "hours": 9,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "Full wedding photography is $4,100 USD for 9 hours"
+        }
+      ],
+      "photographerDetails": { "hoursIncluded": 9, "teamSize": 1 },
+      "paymentTerms": { "depositAmount": 1000, "methodRule": "unknown" },
+      "openQuestions": []
+    }
+  },
+  {
+    "id": "dev-issue21-category-ambiguous-hospitality-onsite",
+    "split": "dev",
+    "description": "Issue #21 Cat 3: Generic Hospitality & Events quote with dinner service, glassware, and on-site coordinator preserves unknown category",
+    "rawMessage": "Crestline Hospitality & Events (CAD): For your wedding celebration (130 guests), our Evening Celebration Package is $76 CAD per person plus 13% HST. Includes full dinner service, china & glassware, linen napkins, and an on-site event coordinator. $1,200 deposit to reserve.",
+    "calcContext": { "guestCount": 130 },
+    "expected": {
+      "category": "unknown",
+      "currency": "CAD",
+      "quoteKind": "initial",
+      "knownSubtotal": 9880,
+      "unknownItemLabels": [],
+      "minOpenQuestions": 1,
+      "taxStatus": "excluded",
+      "taxPercent": 13
+    },
+    "mockExtraction": {
+      "vendorName": "Crestline Hospitality & Events",
+      "category": "unknown",
+      "events": ["Wedding"],
+      "quoteKind": "initial",
+      "currency": "CAD",
+      "taxStatus": "excluded",
+      "taxPercent": 13,
+      "gratuityStatus": "unknown",
+      "gratuityPercent": null,
+      "lineItems": [
+        {
+          "label": "Evening Celebration Package",
+          "pricingType": "per_person",
+          "amount": 76,
+          "isFoodItem": true,
+          "chargeType": "mandatory",
+          "sourceExcerpt": "our Evening Celebration Package is $76 CAD per person plus 13% HST."
+        }
+      ],
+      "inclusions": [
+        { "name": "full dinner service" },
+        { "name": "china & glassware" },
+        { "name": "linen napkins" },
+        { "name": "on-site event coordinator" }
+      ],
+      "paymentTerms": { "depositAmount": 1200, "methodRule": "unknown" },
+      "openQuestions": [
+        {
+          "question": "Does Crestline Hospitality & Events provide the physical event venue space or off-site catering/coordination only?",
+          "reason": "ambiguous_rule",
+          "sourceExcerpt": "our Evening Celebration Package is $76 CAD per person plus 13% HST."
+        }
+      ]
+    }
   }
 ]

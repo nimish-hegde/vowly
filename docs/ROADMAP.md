@@ -1,13 +1,13 @@
 # Vowly Roadmap & Decision Log
 
-**Last updated:** November 26, 2026  
+**Last updated:** November 27, 2026  
 **Related docs:** [Product spec](PRODUCT_SPEC.md) · [AI eval report](EVAL_REPORT.md) · [Changelog](../CHANGELOG.md) · [Agent instructions](../AGENTS.md)
 
 This document is the single living tracker for Vowly milestones, PM-owned acceptance criteria, unit-economics observations, and versioned ship/hold decisions. Avoid duplicating detailed benchmark tables from [EVAL_REPORT.md](EVAL_REPORT.md) or release bullet points from [CHANGELOG.md](../CHANGELOG.md); link to them instead.
 
 ---
 
-## Living Milestone & Acceptance-Criteria Tracker (Nov 26, 2026)
+## Living Milestone & Acceptance-Criteria Tracker (Nov 27, 2026)
 
 | Milestone | Scope | Measurable Acceptance Criteria (PM Gate) | Status | Ship / Hold |
 |---|---|---|---|---|
@@ -16,8 +16,8 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 | **v0.4** | Interactive React frontend prototype (`frontend/`, mock mode) & financial safeguards | Production build + type-check pass; centralized booking eligibility across all entry points; draft revision isolation; unpaid-by-default deposits; 0 secrets/personal data. | Done (`#12`) | Shipped |
 | **v0.4.x (Framework)** | Reusable Antigravity development framework (`AGENTS.md`, 4 workflow skills, roadmap/decision log, PR template) | Persistent rules cover architecture, financial safeguards, eval standards, UX metrics, agent orchestration, and PM gates; zero application code changes. | Done (`#14`) | Shipped |
 | **v0.5** | Real multimodal AI quote import & progressive-disclosure quote review | Real Gemini text/image/PDF extraction via server-side API; mutually exclusive packages & package-scoped terms; conditional overtime & extra-guest thresholds; unknown tax booking gate; manual editing with revision history; live Gemini evals with **0 critical financial errors** and **0 currency guesses**; browser E2E UAT passing. | Done (`#13`) | **Shipped** (`a0b942c`) — `53/53` backend, `17/17` frontend, `66/66` mock & `66/66` live Gemini (`0` blockers) |
-| **v0.6** | Private pilot readiness: shared financial engine, category-aware comparison, follow-up delegation, backend persistence & partner collaboration | Shared backend/frontend deterministic engine; category-aware vendor & package comparison; fresh multimodal holdout & model benchmarking; auth, persistence, and helper-link delegation (`#4`, `#5`). | Issue #16 implemented. Other v0.6 work is planned. | Hold for independent review and PM approval |
-| **v0.7+** | Vendor/event/budget UX polish & scale | Vendor archiving & duplicate management, event/budget setup improvements, Google Places autocomplete, and multi-installment booking schedules. | Planned | Not started |
+| **v0.6** | Private pilot readiness: multimodal holdout & model benchmark (`#15`), shared deterministic financial engine (`#16`), extraction accuracy (`#21`), category-aware comparison (`#17`), follow-up delegation (`#4`), backend persistence & partner collaboration (`#20`, `#5`) | Shared backend/frontend deterministic engine (`30/30` parity); frozen 30-case multimodal benchmark; `0` critical financial errors on live evals; category-aware vendor & package comparison; auth, persistence, and helper-link delegation (`#4`, `#5`). | **In Progress** (`#15`, `#16` & `#21` shipped; `#17`–`#20`, `#4`, `#5` planned) | In progress |
+| **v0.7+** | Vendor/event/budget UX polish & scale | Vendor archiving & duplicate management (`#18`), event/budget setup improvements (`#19`), Google Places autocomplete, and multi-installment booking schedules. | Planned | Not started |
 
 ---
 
@@ -40,17 +40,18 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 ## Post-v0.5 Follow-Up Backlog (Audited Against `main` `a0b942c`)
 
 ### Open Issue Audit Status
-- **Close candidate:** `#3` (venue comparison, hypothetical attendance, minimums, capacity flags, and break-even callout implemented; category/package comparison enhancements tracked below).
+- **Closed / Shipped:** `#3` (venue comparison & `$500` break-even regression verified and closed on `85e00a9`), `#15` (30-case multimodal holdout & Gemini model benchmark shipped via `#22`, `b76c67c`), `#16` (shared deterministic financial engine shipped via `#23`, `a9b89c0`), `#21` (extraction accuracy for cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous categories shipped via `#24`).
 - **Partially complete (targeted gaps remain):** `#1` (pre-approval revision diff preview & duplicate-revision idempotency) and `#7` (scratch-onboarding currency selector & `"Continue with manual entry"` fallback on extraction failure).
 - **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
 
 ### Tracked Follow-Up Workstreams
-1. **Model benchmarking & fresh multimodal holdout dataset (`v0.6`):** Build a new versioned multimodal holdout split (real-pattern screenshots & PDFs across multi-package venues, photography, decor, and catering) without modifying locked `regression/`, `held-out/`, or `held-out-v2/` sets, and benchmark candidate Gemini/local models on accuracy, latency, and cost per accepted quote.
-2. **Shared deterministic financial engine (`v0.6`):** Consolidate `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts` into a single shared TypeScript calculation module so backend and frontend share one source of truth instead of parity fixtures alone.
-3. **Category-aware vendor & package comparison (`v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
-4. **Vendor archiving & duplicate management (`v0.6+`):** Allow archiving declined/superseded vendors, merging or linking duplicate vendor records, and surfacing duplicate-revision idempotency checks.
-5. **Event & budget setup improvements (`v0.6+`):** Add currency selection in scratch onboarding (`#7`), `"Continue with manual entry"` fallback when AI extraction fails (`#7`), and multi-installment (`>2` milestones) custom payment schedules in `BookingModal`.
-6. **Authentication, persistence & partner collaboration (`v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
+1. **Model benchmarking & fresh multimodal holdout dataset (`#15`, Shipped via `#22`):** Frozen 30-case synthetic multimodal holdout (`eval-data/held-out-v3-multimodal/`) and 10-dimension benchmark harness shipped; PM approved retaining `gemini-3.5-flash-lite` as default.
+2. **Shared deterministic financial engine (`#16`, Shipped via `#23`):** Consolidated calculation logic into `shared/finance/calculator.ts` with `30/30` frozen multimodal parity (including `I04` multi-package conditional overtime).
+3. **Extraction accuracy follow-up (`#21`, Shipped via `#24`):** Cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous vendor categories improved on `gemini-3.5-flash-lite` (`29/30` strict all-in multimodal, `0` critical financial errors across all 100 live cases).
+4. **Category-aware vendor & package comparison (`#17`, Planned for `v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
+5. **Vendor archiving & duplicate management (`#18`, Planned for `v0.6+`):** Allow archiving declined/superseded vendors, merging or linking duplicate vendor records, and surfacing duplicate-revision idempotency checks.
+6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add currency selection in scratch onboarding (`#7`), `"Continue with manual entry"` fallback when AI extraction fails (`#7`), and multi-installment (`>2` milestones) custom payment schedules in `BookingModal`.
+7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
 
 ---
 
@@ -142,4 +143,17 @@ Record significant product, architecture, and model decisions here as they are m
 - **Intentional corrections:** Calculate shared overtime from the selected tier's included hours. I04 Full Collection totals CAD 3,100 before tax at eight hours, with zero overtime. Validate current financial and source blockers when approving. Require source acknowledgement and exact-cent reconciliation of new installments plus existing paid milestones when booking.
 - **Saved workspaces:** Keep the v1 storage key. An ambiguous historical one-hour default retains its prior amount until explicitly confirmed or corrected. Confirmed contract amounts and paid milestones govern booked costs.
 - **Acceptance evidence:** Both calculation paths agree on all 30 frozen mock inputs. The 66-case offline suite and both test suites pass. The v1 demo workspace preserves projected, committed, and paid totals after serialization. Local Chrome verified I04 import, tier selection, overtime edits, and draft persistence. [Verification details](EVAL_REPORT.md#15-issue-16-deterministic-financial-parity)
-- **Decision:** Hold for independent review and explicit PM approval. Issue #21 tracks the separate extraction findings.
+- **Decision:** **Shipped (`#23`, `a9b89c0`).** Issue #21 tracks the separate extraction findings.
+
+### D-009 — Issue #21 Extraction Accuracy Follow-Up (`fix/issue-21-extraction-accuracy`)
+
+- **Hypothesis:** Requiring nullable `taxPercent`/`gratuityPercent`/`gratuityBasis` in `GEMINI_RESPONSE_SCHEMA`, tightening `SYSTEM_PROMPT` Rules 4, 5, 7, 9, and 11 (ambiguous hospitality categories, footer/multi-page tax & gratuity scanning without fabrication, non-authoritative cross-channel pricing-model conflicts with verbatim open-question excerpts), and hardening deterministic conflict/single-package normalization will substantially improve `gemini-3.5-flash-lite` strict all-in multimodal accuracy without changing the default model or tuning against frozen holdouts.
+- **Changes:**
+  - `src/extractor.ts`: Added nullable `taxPercent`, `gratuityPercent`, and `gratuityBasis` to `GEMINI_RESPONSE_SCHEMA.required`; tightened `SYSTEM_PROMPT` Rules 4, 5, 7, 9, 11; added deterministic normalizer guard aligning mismatched provisional `pricingType` to its matching `conflictingOptions` entry and preserving explicit multi-package `null` overrides.
+  - `src/eval.ts` & `scripts/run-model-benchmark.ts`: Added optional `taxPercent`/`gratuityStatus`/`gratuityPercent`/`gratuityBasis` checks on `EvalCase`; updated conflict subtotal grading so neither conflicting option is treated as authoritative when `conflictingOptions` preserves both options and exact discrepancy (while keeping double-counting and undetected conflicts as critical financial errors).
+  - `eval-data/dev/cases.json`: Added 4 independent synthetic `dev-issue21-*` cases covering all 3 categories + unstated-tax no-hallucination guardrail; frozen `held-out-v3-multimodal/` and all 66 original locked cases remained untouched.
+- **Live Verification (`gemini-3.5-flash-lite`, `$0` actual spend on free tier):**
+  - **Frozen 30-case multimodal holdout (`held-out-v3-multimodal`, strict all-in grading):** Improved from **`22/30` (`73.3%`, `7` critical financial errors)** to **`29/30` (`96.7%`, `0` critical financial errors, `0` currency guesses)**; field accuracy `99.1%` (`218/220`), FE/BE parity `30/30` (`100%`), AI corrections/quote dropped `52%` (`0.70` → `0.33`), true local-span grounding `89/95` (`93.7%`), avg no-retry latency `2,555 ms`, est. paid cost `$0.08988` (`$0.00310`/extraction). Only remaining failure: `P07` (`quoteKind: revision` vs `initial`, `0` financial errors).
+  - **Legacy suite (reported separately):** Original 66 cases **`63/66` (`95.5%`, `0` critical financial errors, `0` currency guesses, `0` release blockers)**; new 4 `dev-issue21-*` cases **`4/4` (`100.0%`)**; combined `67/70` (`95.7%`), avg no-retry latency `1,989 ms` (`3` retries), est. paid cost `$0.17356` (`$0.00259`/extraction). Remaining 3 non-blocking failures documented honestly (`dev-uat-case-a-missing-gratuity` `category`, `venue-conflict-brochure-vs-note` `quoteKind`, and `heldout2-catering-unpriced-dish-surcharge` missed `"goat biryani"` conditional fee).
+- **Known Residual Risk (Conditional Surcharge Extraction):** Unpriced conditional menu/dish surcharges (e.g., `"rate on request"` in `heldout2-catering-unpriced-dish-surcharge`) can exhibit stochastic omission on `gemini-3.5-flash-lite`: if the model omits the item from `lineItems`, the UI has no `unconfirmedFees` blocker and would present the estimate as complete unless caught during manual quote review (targeted replay extracted the item cleanly and blocked approval/booking as intended). Monitor via review telemetry and human correction rate in pilot UAT.
+- **Decision:** **Approved by PM and shipped (`#24`).** [Verification details](EVAL_REPORT.md#16-issue-21-extraction-accuracy-follow-up)

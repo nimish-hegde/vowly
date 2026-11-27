@@ -360,6 +360,172 @@ test('grades expectedPriceConflictDiscrepancy strictly without loosening subtota
   );
   assert.equal(singleAltConflict.passed, true);
 
+  // Neither conflicting candidate is authoritative: higher provisional candidate with lower
+  // candidate preserved in conflictingOptions (blocking approval) also passes
+  const higherProvisionalConflict = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3600,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'PDF contract says $3,600',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(higherProvisionalConflict.passed, true);
+  assert.equal(higherProvisionalConflict.criticalFinancialError, false);
+
+  // Codex P2: keeping the lower provisional candidate while adding a spurious $400 charge
+  // equal to the discrepancy must FAIL as a critical financial error
+  const spuriousExtraCharge = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+        {
+          label: 'Spurious extra fee',
+          pricingType: 'flat',
+          amount: 400,
+          chargeType: 'mandatory',
+          sourceExcerpt: 'PDF contract says $3,600',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(spuriousExtraCharge.passed, false);
+  assert.equal(spuriousExtraCharge.criticalFinancialError, true);
+
+  // Codex P2: preceding optional item must NOT break higher-provisional conflict line lookup
+  const optionalBeforeConflict = gradeExtraction(
+    {
+      ...conflictEvalCase,
+      rawMessage: `Optional heirloom album $500. ${conflictEvalCase.rawMessage}`,
+    },
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Heirloom album',
+          pricingType: 'flat',
+          amount: 500,
+          chargeType: 'optional',
+          optionalAddon: true,
+          sourceExcerpt: 'Optional heirloom album $500.',
+        },
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3600,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'PDF contract says $3,600',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(optionalBeforeConflict.passed, true);
+  assert.equal(optionalBeforeConflict.criticalFinancialError, false);
+
+  // Codex P2: wrong gratuityStatus (excluded -> included) must flag criticalFinancialError
+  const wrongGratuityStatus = gradeExtraction(
+    {
+      ...conflictEvalCase,
+      rawMessage: 'Hall $1,000 CAD plus 16% service charge on food subtotal.',
+      expected: {
+        category: 'venue',
+        currency: 'CAD',
+        quoteKind: 'initial',
+        knownSubtotal: 1000,
+        unknownItemLabels: [],
+        gratuityStatus: 'excluded',
+        gratuityPercent: 16,
+        gratuityBasis: 'food_subtotal',
+      },
+    },
+    {
+      vendorName: 'Hall',
+      category: 'venue',
+      events: ['Wedding'],
+      quoteKind: 'initial',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'included',
+      gratuityPercent: 16,
+      gratuityBasis: 'food_subtotal',
+      lineItems: [
+        {
+          label: 'Hall rental',
+          pricingType: 'flat',
+          amount: 1000,
+          chargeType: 'mandatory',
+          sourceExcerpt: 'Hall $1,000 CAD',
+        },
+      ],
+      openQuestions: [],
+    },
+    500,
+    0,
+  );
+  assert.equal(wrongGratuityStatus.passed, false);
+  assert.equal(wrongGratuityStatus.criticalFinancialError, true);
+  assert.ok(wrongGratuityStatus.releaseBlockers.some((b) => b.includes('gratuityStatus')));
+
   // Undetected unresolved conflict (no conflictingOptions) is a release blocker
   const undetected = gradeExtraction(
     conflictEvalCase,

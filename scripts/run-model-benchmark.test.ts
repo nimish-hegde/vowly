@@ -110,3 +110,52 @@ test('Codex P2: omitting an expected mandatory TBD fee (T08 rigging fee) flags c
   assert.equal(result.missedChargesCount, 1);
   assert.ok(result.releaseBlockers.some((b) => b.includes('rigging')));
 });
+
+test('Issue #21: unresolved price conflict with higher provisional candidate passes when both options and exact discrepancy are preserved', () => {
+  const t07 = getCase('T07');
+  const higherProvisional = structuredClone(t07.mockExtraction);
+  higherProvisional.lineItems[0]!.pricingType = 'per_person';
+  higherProvisional.lineItems[0]!.amount = 45;
+  higherProvisional.lineItems[0]!.sourceExcerpt = 'Marriott reception dinner buffet: $45 per person';
+
+  const result = gradeBenchmarkCase(t07, higherProvisional, 100, 100, 0, undefined, 1);
+  assert.equal(result.endToEndPassed, true);
+  assert.equal(result.criticalFinancialError, false);
+  assert.equal(result.inventedChargesCount, 0);
+
+  // Double-counting or dropping conflictingOptions must still fail critically
+  const undetected = structuredClone(higherProvisional);
+  delete undetected.lineItems[0]!.conflictingOptions;
+  const badResult = gradeBenchmarkCase(t07, undetected, 100, 100, 0, undefined, 1);
+  assert.equal(badResult.endToEndPassed, false);
+  assert.equal(badResult.criticalFinancialError, true);
+
+  // Codex P2: retaining lower provisional candidate ($1,800) while adding a spurious $2,700 fee
+  // equal to the discrepancy must FAIL critically and count as an invented charge
+  const spuriousExtra = structuredClone(t07.mockExtraction);
+  spuriousExtra.lineItems.push({
+    label: 'Spurious extra catering fee',
+    pricingType: 'flat',
+    amount: 2700,
+    chargeType: 'mandatory',
+    sourceExcerpt: 'Marriott reception dinner buffet: $45 per person',
+  });
+  const spuriousResult = gradeBenchmarkCase(t07, spuriousExtra, 100, 100, 0, undefined, 1);
+  assert.equal(spuriousResult.endToEndPassed, false);
+  assert.equal(spuriousResult.criticalFinancialError, true);
+  assert.equal(spuriousResult.inventedChargesCount, 1);
+
+  // Codex P2: preceding optional item must NOT break higher-provisional conflict line lookup
+  const optionalBeforeHigher = structuredClone(higherProvisional);
+  optionalBeforeHigher.lineItems.unshift({
+    label: 'Optional tasting',
+    pricingType: 'flat',
+    amount: 200,
+    chargeType: 'optional',
+    optionalAddon: true,
+    sourceExcerpt: 'catering is $1,800 flat for the evening.',
+  });
+  const optResult = gradeBenchmarkCase(t07, optionalBeforeHigher, 100, 100, 0, undefined, 1);
+  assert.equal(optResult.endToEndPassed, true);
+  assert.equal(optResult.criticalFinancialError, false);
+});

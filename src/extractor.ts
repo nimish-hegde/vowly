@@ -95,16 +95,23 @@ Follow these rules strictly:
    - If the vendor name is NOT stated in the source, set "vendorName": null. Do NOT invent a placeholder name or use an uploaded filename as the vendor name.
    - Only set "vendorLocation" or "vendorContact" if explicitly stated in the source.
 4. Classify vendor "category" by the vendor's commercial role and supporting evidence:
-   - "venue": ONLY when there is explicit evidence that the vendor provides the physical event space or banquet facility (such as a hall, ballroom, banquet facility, banquet package, convention centre, estate, hotel, room name, room rental, room capacity / maximum capacity, parking, or in-house space). When the vendor is a confirmed venue, bundled food, dinner menus, appetizers, open bar, staffing, or extra surcharges still stay "venue" — food words alone do NOT make a venue a caterer.
-   - "catering": ONLY when there is explicit evidence that the vendor is an independent food-and-beverage provider (such as "Catering"/"Caterers" in the vendor name, off-site catering, food delivery/chafing dishes, or catering at a separate named venue).
+   - "venue": ONLY when there is explicit evidence that the vendor provides the physical event space or banquet facility (such as a hall, ballroom, banquet hall/facility, banquet package, convention centre, manor, estate, hotel, pavilion, room name, room/space rental, room capacity / maximum capacity, parking/valet/freight access, or in-house space). When the vendor is a confirmed venue, bundled food, dinner menus, appetizers, open bar, staffing, or extra surcharges still stay "venue" — food words alone do NOT make a venue a caterer.
+   - "catering": ONLY when there is explicit evidence that the vendor is an independent food-and-beverage provider (such as "Catering"/"Caterers" in the vendor name, off-site catering, food delivery/chafing dishes/warming setup, or catering at a separate named venue).
    - "photographer", "dj", "decor", "entertainment", "other": Use when the message clearly states that service.
-   - "unknown": A generic dinner or reception package, per-person pricing, setup fee, or minimum guest count ALONE (without "banquet", maximum/room capacity, or physical-space cues, e.g., generic "Events" or "Hospitality" names) does NOT prove the vendor provides the physical event space or is an independent caterer. Set "category" to "unknown" and add an "ambiguous_rule" open question asking the couple to confirm the vendor's role.
-5. Never invent a price, tax rate, gratuity rate, or currency:
+   - "unknown": Generic "Events", "Hospitality", or "Hospitality & Events" vendor names offering an evening/reception/dinner package, per-person pricing, dinner service, glassware, linens, setup fee, minimum guest count, or an "on-site coordinator" ALONE (without explicit physical-space cues like hall, ballroom, room rental, or max capacity, and without independent-caterer cues) do NOT prove whether the vendor owns a physical venue space or provides external catering/coordination. Set "category" to "unknown" and add an "ambiguous_rule" open question (with a verbatim "sourceExcerpt") asking the couple to confirm the vendor's role.
+5. Extract explicitly stated tax & gratuity rates/bases accurately — NEVER fabricate unstated values:
    - If the source only uses "$" without explicitly stating CAD, CA$, USD, or US$, set "currency" to "UNKNOWN". Never guess currency from city names, taxes like HST, or venue names.
    - Never infer tax treatment from payment method (for example, cash does NOT imply tax-free).
-   - If the quote does NOT explicitly mention tax, HST, GST, PST, VAT, "tax included", or "no tax / tax-exempt", you MUST set "taxStatus": "unknown" and omit "taxPercent". NEVER assume "included" when tax is unstated.
-   - Extract "taxPercent" (e.g., 13 for "13% HST") and "gratuityPercent" (e.g., 10 for "10% gratuity", 15 for "15% service charge") ONLY when stated. Set "gratuityBasis" ("food_subtotal", "entire_subtotal", "specific_line_items", or "unknown") when gratuity or a percentage service charge is mentioned.
-   - Keep taxes (HST/GST/PST), gratuities, AND percentage service charges (e.g., "plus 15% service charge", "10% gratuity") ONLY in top-level "taxStatus"/"taxPercent" and "gratuityStatus"/"gratuityPercent"/"gratuityBasis". NEVER also add them as a separate "lineItems" entry. If gratuity is stated as extra/excluded without a percentage (e.g., "plus 13% HST and gratuity"), set "gratuityStatus": "excluded", "gratuityPercent": null, and add an "openQuestions" entry with "reason": "missing_price" asking for the gratuity percentage.
+   - Scan the ENTIRE source — including headers, footers, fine print, shared-terms notes, and secondary pages of PDFs — for explicitly stated tax rates (e.g., "13% HST" -> "taxStatus": "excluded", "taxPercent": 13), gratuity/service-charge rates (e.g., "15% service charge" -> "gratuityStatus": "excluded", "gratuityPercent": 15; "18% gratuity" -> "gratuityPercent": 18), and gratuity bases ("on food subtotal" / "on food only" -> "food_subtotal"; "on entire subtotal" / "on total subtotal" / "on all charges" -> "entire_subtotal").
+   - Although "taxPercent", "gratuityPercent", and "gratuityBasis" are required keys, you MUST output null whenever a rate or basis is NOT explicitly stated — NEVER guess 13, 15, or any regional default:
+     a) Tax never mentioned at all -> "taxStatus": "unknown", "taxPercent": null.
+     b) Tax stated as extra with NO numeric rate (e.g., "plus tax", "plus applicable local tax", "plus HST" with no percent) -> "taxStatus": "excluded", "taxPercent": null.
+     c) Tax stated as included with no separate percent -> "taxStatus": "included", "taxPercent": null.
+     d) Gratuity / service charge never mentioned -> "gratuityStatus": "unknown", "gratuityPercent": null, "gratuityBasis": null.
+     e) Gratuity / service charge stated as extra with NO percentage (e.g., "plus gratuity") -> "gratuityStatus": "excluded", "gratuityPercent": null, "gratuityBasis": "unknown" (or the stated basis), and add a "missing_price" open question asking for the gratuity percentage.
+     f) Gratuity percentage stated with NO basis wording -> set "gratuityBasis": "unknown".
+   - Package-specific tax/gratuity overrides: When a multi-package quote states a package-specific tax or gratuity override (different from the quote-level default, including explicitly no gratuity or tax included), set those override fields on that "packages[]" entry. When tax/gratuity applies uniformly to all packages (e.g., in a shared footer), populate the top-level fields and do NOT invent contradictory package-level overrides.
+   - Keep taxes (HST/GST/PST), gratuities, AND percentage service charges (e.g., "plus 15% service charge", "10% gratuity") ONLY in top-level (or package-level) tax/gratuity fields. NEVER also add them as a separate "lineItems" entry.
 6. Extract EVERY distinct stated charge, surcharge, third-party fee, or additional cost:
    - Never drop a stated additional charge just because it has no numeric price or is mentioned inside a sentence about a menu item, package, setup, or condition.
    - Whenever a stated charge has no numeric price (e.g., "TBD", "costs extra", "extra charge", "additional fee", "priced separately", "pricing on request", or depends on setup/selection/distance), include it in "lineItems" with "pricingType": "unknown" and "amount": null.
@@ -119,7 +126,7 @@ Follow these rules strictly:
    - Always populate "paymentTerms" with "methodRule" ("cash_only", "etransfer", "card", "any", or "unknown" if unstated), plus any stated "depositAmount", "depositPercent", "scheduleNotes", and "milestones" (with "relativeDaysBeforeEvent" and "relativeDeadlineText"). Never add a deposit as a separate price in "lineItems".
 7. Negotiated prices vs. genuine price conflicts (CRITICAL):
    - EXPLICIT NEGOTIATED PRICE: When a vendor states their normal/standard price alongside an explicitly discounted or negotiated price for the couple (e.g., "I normally charge $1,000, but I can do $900 for your engagement"), set "amount" to the active negotiated price (900) and "originalAmount" to the normal price (1000). Omit "originalAmount" when no separate original price was quoted. Do NOT populate "conflictingOptions" and do NOT create a conflict open question.
-   - GENUINE PRICE CONFLICT: When two sources or documents state different prices for the SAME service without a clear explanation of which applies (e.g., an Instagram DM vs. a PDF contract), represent that service as ONE line item — NEVER two separate billable line items. Set "amount" to the earlier/agreed price, record ALL conflicting candidate prices in "conflictingOptions", and add a "conflict" entry in "openQuestions".
+   - GENUINE PRICE CONFLICT (REQUIRES EXPLICIT HUMAN RESOLUTION): When two sources, channels, or dated messages (for example, an Instagram DM and an email, or an email and a PDF/contract/invoice) state different prices OR different pricing models (such as flat vs. per-person or per-hour) for the SAME service without the vendor explicitly stating that the newer message supersedes, updates, or replaces the earlier offer, NEVER silently resolve the conflict, NEVER treat either offer as authoritative, and NEVER emit two separate billable line items. Represent that service as ONE line item with ALL conflicting candidates recorded in "conflictingOptions" (each with its own "sourceLabel", "pricingType", "amount", and verbatim "sourceExcerpt"), and add a "conflict" entry in "openQuestions" so the couple must explicitly resolve it before approval. Always keep each candidate's "pricingType" paired with its own "amount" (never mix a flat dollar amount with "per_person") on both the line item and every entry in "conflictingOptions".
 8. Classify mutually exclusive packages, extra-guest tiers, staffing ratios, guest minimums, overtime hours, structured inclusions, and delivery terms accurately:
    - MUTUALLY EXCLUSIVE PACKAGES / TIERS: When a vendor brochure, menu, or message presents TWO OR MORE alternative base packages/tiers for the couple to choose between (for example, "Royal Package $55/person, min 150 guests" vs. "Imperial Package $65/person, min 100 guests", or Silver / Gold / Platinum tiers), populate "packages" with one object per tier (each having "id", "name", "pricingType", "amount", "minGuests", "includedGuests", "extraGuestRate", "inclusions", "sourceExcerpt", and any package-specific "taxStatus"/"taxPercent", "gratuityStatus"/"gratuityPercent", or "deliveryTerms"). Put any package-specific fee in "lineItems" with "packageId" set to that tier's "id", and keep shared charges in "lineItems" without "packageId". Do NOT put mutually exclusive package tiers into "lineItems" and NEVER sum alternative packages together. Leave "selectedPackageId" null unless the couple explicitly confirmed one package. For single-package quotes, set "packages": [] and put the single package in "lineItems" as usual.
    - EXTRA-GUEST PRICING VS. REPEATED PER-PERSON RATES: If a per-person package already states "$55/person (min 150 guests)" and simply restates "$55/person for additional guests", do NOT emit a duplicate second "$55/person" line item. Use "pricingType": "per_extra_guest" with "guestThreshold" (or "extraGuestRate" on a flat package with "includedGuests") ONLY when an incremental rate applies strictly to guests ABOVE an included threshold (e.g., "$8,250 flat up to 150 guests, $55 per extra guest above 150") or when the per-guest rate above a threshold differs from the base rate.
@@ -129,8 +136,8 @@ Follow these rules strictly:
    - Preserve structured "inclusions" with plain-language "name", optional "quantity", "unit", "durationHours", and "sourceExcerpt" where stated (e.g., 4 appetizers, 3 main dishes, 6 hours of photography, online gallery). Never output internal schema or snake_case tokens (such as "photography_coverage", "deliverables", or "included") in "name" or "unit". When a team member or service has its own coverage duration (e.g., "Second photographer for 5 hours"), set "name": "Second photographer", "quantity": 1, "unit": "photographer", and "durationHours": 5.
    - Extract delivery timelines, sneak-peek windows, gallery/USB delivery formats, print rights, and RAW file policies into "deliveryTerms". Also preserve "exclusions", "restrictions", and "serviceDurationHours" when stated.
 9. Classify "quoteKind":
-   - Use "revision" ONLY when the message updates an earlier quote previously sent to this couple or notes a conflict with a printed brochure, draft contract, or earlier offer.
-   - Use "initial" for a standalone first quote — even if the vendor mentions a standard price and offers a negotiated rate in that first message.
+   - Use "revision" ONLY when (a) the vendor explicitly states they are revising, updating, lowering, or superseding an earlier quote, OR (b) a formal contract, invoice, or printed brochure conflicts with an earlier quote.
+   - If the source does NOT mention a contract, invoice, printed brochure, or explicit revision/update wording — including a standalone first quote or forwarding two conflicting initial messages/proposals (e.g., DM/text + email proposal) with different dates — you MUST set "quoteKind": "initial".
 10. Open questions — actionable only, never noisy:
     - Always add an entry in "openQuestions" whenever ANY of these holds:
       a) A "mandatory" or "conditional" charge has no price, or gratuity is excluded/extra with no stated percentage ("reason": "missing_price").
@@ -140,7 +147,7 @@ Follow these rules strictly:
       e) Vendor category is "unknown" ("reason": "ambiguous_rule", asking to confirm vendor category).
     - Do NOT invent unnecessary open questions for complete quotes.
 11. Source evidence:
-    - For pasted text, copy "sourceExcerpt" character-for-character from the raw message, including punctuation, for every line item, every conflicting option, and every open question.
+    - For pasted text, copy "sourceExcerpt" character-for-character from the raw message, including punctuation, for every line item, every conflicting option, and every open question. For conflict open questions, copy ONE verbatim snippet from the raw message (such as one of the conflicting price phrases) — NEVER write a synthesized summary sentence into "sourceExcerpt".
     - For uploaded images or PDFs, copy the exact visible text snippet into "sourceExcerpt" and include "pageReference" (e.g., "Page 1", "Screenshot") whenever available.
 12. Do not calculate totals or subtotals; only extract the stated inputs.`;
 
@@ -153,7 +160,10 @@ const GEMINI_RESPONSE_SCHEMA = {
     'quoteKind',
     'currency',
     'taxStatus',
+    'taxPercent',
     'gratuityStatus',
+    'gratuityPercent',
+    'gratuityBasis',
     'packages',
     'lineItems',
     'paymentTerms',
@@ -193,6 +203,7 @@ const GEMINI_RESPONSE_SCHEMA = {
     gratuityPercent: { type: 'NUMBER', nullable: true },
     gratuityBasis: {
       type: 'STRING',
+      nullable: true,
       enum: ['specific_line_items', 'food_subtotal', 'entire_subtotal', 'custom_amount', 'unknown'],
     },
     serviceDurationHours: { type: 'NUMBER' },
@@ -626,6 +637,9 @@ export function normalizeProviderResponse(parsed: unknown): unknown {
     return parsed;
   }
   const obj = parsed as Record<string, unknown>;
+  if (obj.gratuityBasis === null) {
+    delete obj.gratuityBasis;
+  }
   if (
     typeof obj.photographerDetails === 'object' &&
     obj.photographerDetails !== null &&
@@ -653,6 +667,31 @@ export function normalizeProviderResponse(parsed: unknown): unknown {
         if (li.percentageRate === 0) delete li.percentageRate;
         if (li.percentageBasis === 'unknown') delete li.percentageBasis;
       }
+      // If top-level lineItem.amount matches a conflictingOptions entry uniquely by amount
+      // but carries the wrong pricingType from another option (e.g., flat $2,400 labeled per_person),
+      // align the provisional pricingType with its matching option.
+      if (Array.isArray(li.conflictingOptions) && typeof li.amount === 'number') {
+        const opts = li.conflictingOptions.filter(
+          (o): o is Record<string, unknown> =>
+            typeof o === 'object' &&
+            o !== null &&
+            typeof (o as Record<string, unknown>).amount === 'number' &&
+            typeof (o as Record<string, unknown>).pricingType === 'string',
+        );
+        const exactMatch = opts.some(
+          (o) =>
+            o.pricingType === li.pricingType &&
+            Math.abs((o.amount as number) - (li.amount as number)) < 0.01,
+        );
+        if (!exactMatch) {
+          const sameAmountMatches = opts.filter(
+            (o) => Math.abs((o.amount as number) - (li.amount as number)) < 0.01,
+          );
+          if (sameAmountMatches.length === 1) {
+            li.pricingType = sameAmountMatches[0]!.pricingType;
+          }
+        }
+      }
     }
   }
   const sanitizeInclusions = (list: unknown) => {
@@ -672,13 +711,51 @@ export function normalizeProviderResponse(parsed: unknown): unknown {
   if (Array.isArray(obj.packages)) {
     for (const rawPkg of obj.packages) {
       if (typeof rawPkg === 'object' && rawPkg !== null && !Array.isArray(rawPkg)) {
-        sanitizeInclusions((rawPkg as Record<string, unknown>).inclusions);
+        const pkgObj = rawPkg as Record<string, unknown>;
+        if (pkgObj.gratuityBasis === null) {
+          delete pkgObj.gratuityBasis;
+        }
+        sanitizeInclusions(pkgObj.inclusions);
       }
     }
     // Single-package quotes belong in lineItems (packages[] is strictly for >= 2 mutually exclusive tiers).
     // If the model put a single package in packages[], fold it into lineItems only if not already duplicated.
     if (obj.packages.length === 1 && Array.isArray(obj.lineItems)) {
       const onlyPkg = obj.packages[0] as Record<string, unknown>;
+      // Propagate package-level tax/gratuity onto top-level ONLY when top-level was unset/unknown
+      if (
+        (obj.taxStatus === undefined || obj.taxStatus === 'unknown') &&
+        typeof onlyPkg.taxStatus === 'string' &&
+        onlyPkg.taxStatus !== 'unknown'
+      ) {
+        obj.taxStatus = onlyPkg.taxStatus;
+      }
+      if (
+        (obj.taxPercent === undefined || obj.taxPercent === null) &&
+        typeof onlyPkg.taxPercent === 'number'
+      ) {
+        obj.taxPercent = onlyPkg.taxPercent;
+      }
+      if (
+        (obj.gratuityStatus === undefined || obj.gratuityStatus === 'unknown') &&
+        typeof onlyPkg.gratuityStatus === 'string' &&
+        onlyPkg.gratuityStatus !== 'unknown'
+      ) {
+        obj.gratuityStatus = onlyPkg.gratuityStatus;
+      }
+      if (
+        (obj.gratuityPercent === undefined || obj.gratuityPercent === null) &&
+        typeof onlyPkg.gratuityPercent === 'number'
+      ) {
+        obj.gratuityPercent = onlyPkg.gratuityPercent;
+      }
+      if (
+        typeof onlyPkg.gratuityBasis === 'string' &&
+        (obj.gratuityBasis === undefined ||
+          (obj.gratuityBasis === 'unknown' && onlyPkg.gratuityBasis !== 'unknown'))
+      ) {
+        obj.gratuityBasis = onlyPkg.gratuityBasis;
+      }
       const alreadyInLineItems = obj.lineItems.some((rawLi) => {
         if (typeof rawLi !== 'object' || rawLi === null) return false;
         const li = rawLi as Record<string, unknown>;

@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { calculateQuoteTotal } from './calculator.ts';
+import { calculateQuoteTotal, normalizeConflictingOptions } from './calculator.ts';
+import { calculateQuote } from '../shared/finance/calculator.ts';
 import {
   buildMockMap,
   ExtractionError,
@@ -118,6 +119,48 @@ export function gradeExtraction(
       `taxStatus: got "${extracted.taxStatus}", expected "${testCase.expected.taxStatus}"`,
     );
   }
+  if (testCase.expected.taxPercent !== undefined) {
+    const ok =
+      testCase.expected.taxPercent === null
+        ? extracted.taxPercent === null || extracted.taxPercent === undefined
+        : extracted.taxPercent === testCase.expected.taxPercent;
+    if (!ok) {
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error: taxPercent got ${extracted.taxPercent}, expected ${testCase.expected.taxPercent}`,
+      );
+    }
+  }
+  if (
+    testCase.expected.gratuityStatus &&
+    extracted.gratuityStatus !== testCase.expected.gratuityStatus
+  ) {
+    criticalFinancialError = true;
+    releaseBlockers.push(
+      `Critical financial error: gratuityStatus got "${extracted.gratuityStatus}", expected "${testCase.expected.gratuityStatus}"`,
+    );
+  }
+  if (testCase.expected.gratuityPercent !== undefined) {
+    const ok =
+      testCase.expected.gratuityPercent === null
+        ? extracted.gratuityPercent === null || extracted.gratuityPercent === undefined
+        : extracted.gratuityPercent === testCase.expected.gratuityPercent;
+    if (!ok) {
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error: gratuityPercent got ${extracted.gratuityPercent}, expected ${testCase.expected.gratuityPercent}`,
+      );
+    }
+  }
+  if (
+    testCase.expected.gratuityBasis !== undefined &&
+    extracted.gratuityBasis !== testCase.expected.gratuityBasis
+  ) {
+    criticalFinancialError = true;
+    releaseBlockers.push(
+      `Critical financial error: gratuityBasis got "${extracted.gratuityBasis}", expected "${testCase.expected.gratuityBasis}"`,
+    );
+  }
   if (
     testCase.expected.paymentMethodRule &&
     extracted.paymentTerms?.methodRule !== testCase.expected.paymentMethodRule
@@ -129,7 +172,51 @@ export function gradeExtraction(
 
   // Deterministic math check
   const calc = calculateQuoteTotal(extracted, testCase.calcContext ?? {});
-  if (calc.knownSubtotal !== testCase.expected.knownSubtotal) {
+  const expectedDiff = testCase.expected.expectedPriceConflictDiscrepancy;
+  const matchedConflict =
+    expectedDiff !== undefined
+      ? calc.priceConflicts.find(
+          (c) => c.discrepancy !== null && Math.abs(c.discrepancy - expectedDiff) < 0.01,
+        )
+      : undefined;
+  // When an unresolved price conflict is properly preserved in priceConflicts with the exact
+  // expected discrepancy (blocking approval until explicit human resolution), neither candidate
+  // is authoritative — accept the higher candidate total ONLY when the conflicting line item itself
+  // carries the higher provisional candidate (never when spurious extra charges inflate the subtotal).
+  // Match via shared calculateQuote lines (immune to preceding optional items or reordered percentage items).
+  const sharedCalc =
+    matchedConflict !== undefined
+      ? calculateQuote(extracted, {
+          ...(testCase.calcContext ?? {}),
+          selectedPackageId:
+            testCase.calcContext?.selectedPackageId ?? extracted.selectedPackageId ?? undefined,
+        })
+      : undefined;
+  const conflictingLineUsesHigherCandidate =
+    matchedConflict !== undefined &&
+    matchedConflict.maxTotal !== null &&
+    sharedCalc !== undefined &&
+    sharedCalc.lines.some((line) => {
+      if (line.total === null || Math.abs(line.total - matchedConflict.maxTotal!) >= 0.01) {
+        return false;
+      }
+      if (line.item.label !== matchedConflict.label) return false;
+      const opts = normalizeConflictingOptions(line.item);
+      return (
+        opts.length === matchedConflict.options.length &&
+        opts.every(
+          (o, idx) =>
+            o.pricingType === matchedConflict.options[idx]?.pricingType &&
+            Math.abs(o.amount - (matchedConflict.options[idx]?.unitAmount ?? NaN)) < 0.01,
+        )
+      );
+    });
+  const subtotalMatches =
+    Math.abs(calc.knownSubtotal - testCase.expected.knownSubtotal) < 0.01 ||
+    (conflictingLineUsesHigherCandidate &&
+      expectedDiff !== undefined &&
+      Math.abs(calc.knownSubtotal - (testCase.expected.knownSubtotal + expectedDiff)) < 0.01);
+  if (!subtotalMatches) {
     criticalFinancialError = true;
     releaseBlockers.push(
       `Critical financial error: knownSubtotal got ${calc.knownSubtotal}, expected ${testCase.expected.knownSubtotal}`,
