@@ -407,3 +407,50 @@ test('a multi-event venue capacity warning uses the comparison event attendance'
   assert.match(above.rows.capacity.text, /over capacity/);
   assert.doesNotMatch(below.rows.capacity.text, /over capacity/);
 });
+
+test('an hourly-only quote with saved duration responds to a coverage scenario', () => {
+  const dj = vendor('hourly-dj', 'dj', quote('hourly-dj-quote', {
+    serviceDurationHours: 4,
+    lineItems: [{ id: 'coverage', label: 'DJ coverage', pricingModel: 'hourly', unitPrice: 100, quantity: 4 }],
+  }));
+  const state = workspace(dj);
+  const before = structuredClone(state);
+  freeze(state);
+  const scenario = { category: 'dj', eventId: reception } as const;
+  const original = option(buildVendorComparison(state, scenario).entries, dj.id);
+  const revised = option(buildVendorComparison(state, { ...scenario, coverageHours: 6 }).entries, dj.id);
+  assert.equal(original.calc.preTaxTotal, 400);
+  assert.equal(revised.calc.preTaxTotal, 600);
+  assert.match(revised.rows.coverage.text, /6 hours priced/);
+  assert.doesNotMatch(revised.rows.coverage.text, /4 hours included/);
+  assert.deepEqual(revised.unresolved, []);
+  assert.deepEqual(state, before);
+});
+
+test('itemized overtime, AV and staffing stay separate from base and preserve totals across categories', () => {
+  const categories = ['venue', 'catering', 'photography', 'dj', 'decor'] as const;
+  for (const category of categories) {
+    const rated = vendor(category, category, quote(category + '-quote', {
+      taxHandling: 'excluded_plus_hst',
+      taxPercent: 13,
+      lineItems: [
+        { id: 'base', label: 'Base service with AV and staffing included', pricingModel: 'flat', unitPrice: 1000 },
+        { id: 'ot', label: 'Overtime', pricingModel: 'hourly', unitPrice: 125, quantity: 2, isConditionalOvertime: true },
+        { id: 'av', label: 'AV equipment', pricingModel: 'flat', unitPrice: 100 },
+        { id: 'staff', label: 'Servers', pricingModel: 'guest_ratio', unitPrice: 75, ratioDivisor: 50 },
+      ],
+    }));
+    const state = workspace(rated);
+    const before = structuredClone(state);
+    freeze(state);
+    const result = option(buildVendorComparison(state, { category, eventId: reception, guestCount: 100 }).entries, rated.id);
+    assert.match(result.rows.base.text, /1,000\.00/);
+    assert.doesNotMatch(result.rows.extras.text, /Base service/);
+    assert.match(result.rows.extras.text, /Overtime.*250\.00/);
+    assert.match(result.rows.extras.text, /AV equipment.*100\.00/);
+    assert.match(result.rows.extras.text, /Servers.*150\.00/);
+    assert.equal(result.calc.preTaxTotal, 1500);
+    assert.equal(result.calc.estimatedAllInTotal, 1695);
+    assert.deepEqual(state, before);
+  }
+});

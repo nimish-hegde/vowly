@@ -50,6 +50,8 @@ const DETAILS = {
 };
 
 const AUXILIARY_HOURS = /\b(set[ -]?up|tear[ -]?down|travel|security|staff(?:ing)?|bartenders?|attendants?|assistants?|second|2nd|booth|equipment|rental)\b/i;
+const SEPARATE_EXTRA = /\b(?:overtime|extra hours?|additional hours?|AV|A\/V|audio[ -]visual|sound system|equipment rental|staff(?:ing)?|servers?|bartenders?|attendants?|security|setup crew|second (?:shooter|photographer)|2nd (?:shooter|photographer))\b/i;
+const BUNDLE_LABEL = /\b(?:package|bundle)\s+(?:with|including|includes)\b|^(?:base|venue|reception|wedding|ceremony|meal|menu|catering|dinner|DJ|photography|decor)\b.*(?:\b(?:with|and|includes|including)\b|[+&])/i;
 const COVERAGE_CATEGORIES: ReadonlySet<VendorCategory> = new Set(['photography', 'videography', 'dj', 'entertainment']);
 export function supportsCoverageHours(category: VendorCategory): boolean {
   return COVERAGE_CATEGORIES.has(category);
@@ -138,7 +140,11 @@ function compareCoverage(
   quote: Quote, pkg: QuotePackageOption | undefined, calc: QuoteCalculationResult, hours?: number,
 ): { includedHours?: number; scenarioQuote: Quote; unresolved?: string } {
   const hourlyRows = calc.lineItemBreakdowns.filter((item) => item.billableHours !== undefined);
-  const includedHours = pkg?.hours ?? quote.serviceDurationHours
+  const hourly = hourlyRows.length === 1 ? hourlyRows[0] : undefined;
+  const soleHourlyService = !pkg && hourly && !hourly.conditionalOvertime && !AUXILIARY_HOURS.test(hourly.label) &&
+    !SEPARATE_EXTRA.test(hourly.label) &&
+    calc.lineItemBreakdowns.every((line) => line.id === hourly.id || line.amount === 0);
+  const includedHours = pkg?.hours ?? (soleHourlyService ? undefined : quote.serviceDurationHours)
     ?? hourlyRows.find((item) => item.conditionalOvertime)?.includedServiceHours;
   if (hours === undefined || calc.unresolvedPackageSelection || calc.unresolvedPackagePrice) return { includedHours, scenarioQuote: quote };
   if (calc.legacyReviewReasons.length > 0) {
@@ -147,11 +153,8 @@ function compareCoverage(
   if (hourlyRows.length === 0 && includedHours !== undefined && hours <= includedHours) {
     return { includedHours, scenarioQuote: quote };
   }
-  const hourly = hourlyRows.length === 1 ? hourlyRows[0] : undefined;
-  const soleService = !pkg && includedHours === undefined &&
-    calc.lineItemBreakdowns.every((line) => line.id === hourly?.id || line.amount === 0);
   if (hourly && !AUXILIARY_HOURS.test(hourly.label) &&
-      (hourly.conditionalOvertime ? includedHours !== undefined : soleService)) {
+      (hourly.conditionalOvertime ? includedHours !== undefined : soleHourlyService)) {
     const lineId = hourly.id;
     const clearQuantity = <T extends { id: string; quantity?: number }>(line: T): T =>
       line.id === lineId ? { ...line, quantity: undefined } : line;
@@ -257,10 +260,17 @@ function buildOption(
   const explicitExclusions = (selected.exclusions ?? []).map((text) => ({ text, excerpt: sourceExcerpt(selected, text) }));
   const unpricedFees = selected.unconfirmedFees.filter((fee) => fee.status === 'unconfirmed');
   const pendingFees = unpricedFees.filter((fee) => fee.mandatory);
-  const packageBase = pkg ? rowsByLineId.get(`pkg-active-${pkg.id}`)?.amount : undefined;
-  const ratedExtras = pkg
-    ? calc.lineItemBreakdowns.filter((line) => line.amount !== null && !unpricedHourlyLines.has(line.id) && line.id !== `pkg-active-${pkg.id}`)
-    : [];
+  const packageBaseId = pkg ? `pkg-active-${pkg.id}` : undefined;
+  const packageBase = packageBaseId ? rowsByLineId.get(packageBaseId)?.amount : undefined;
+  const extraLines = calc.lineItemBreakdowns.filter((line) => line.id !== packageBaseId &&
+    (Boolean(pkg) || line.conditionalOvertime || (SEPARATE_EXTRA.test(line.label) && !BUNDLE_LABEL.test(line.label))));
+  const extraLineIds = new Set(extraLines.map((line) => line.id));
+  const ratedExtras = extraLines.filter((line) => line.amount !== null && !unpricedHourlyLines.has(line.id));
+  const hasBaseLine = calc.lineItemBreakdowns.some((line) =>
+    line.amount !== null && !extraLineIds.has(line.id) && !unpricedHourlyLines.has(line.id));
+  // Reclassify displayed amounts only. The shared engine still owns the subtotal and total.
+  const basePrice = pkg ? packageBase : roundMoney(calc.baseSubtotal -
+    ratedExtras.reduce((amount, line) => amount + (line.amount ?? 0), 0));
   const extraCharges = [
     ...ratedExtras.map((line) => {
       const source = billableLines.find((item) => item.id === line.id);
@@ -328,8 +338,8 @@ function buildOption(
   );
 
   Object.assign(rows, {
-    base: value(hasPrice ? money(pkg ? packageBase ?? calc.baseSubtotal : calc.baseSubtotal, currency) : NOT_STATED,
-      pkg ? [evidence(pkg.evidenceId)] : billableLines.map((line) => line.sourceExcerpt ?? evidence(line.evidenceId))),
+    base: value(hasPrice && hasBaseLine && basePrice != null ? money(basePrice, currency) : NOT_STATED,
+      pkg ? [evidence(pkg.evidenceId)] : billableLines.filter((line) => !extraLineIds.has(line.id)).map((line) => line.sourceExcerpt ?? evidence(line.evidenceId))),
     extras: termValue(extraCharges),
     gratuity: value(calc.gratuityUnresolved ? UNPRICED_EXTRA : !unpricedHourlyLines.size && calc.gratuityAmount > 0
       ? money(calc.gratuityAmount, currency) : explicitGratuity ? `${money(explicitGratuity.amount!, currency)} · in quote charges`
