@@ -30,6 +30,7 @@ interface VendorsViewProps {
   onOpenVendor: (vendorId: string) => void;
   onOpenQuoteImport: (presetId?: string, vendorId?: string) => void;
   onOpenBooking: (vendorId: string) => void;
+  onEditApprovedQuote: (vendorId: string) => void;
 }
 
 const ALL_STATUSES: VendorStatus[] = [
@@ -48,6 +49,7 @@ export function VendorsView({
   onOpenVendor,
   onOpenQuoteImport,
   onOpenBooking,
+  onEditApprovedQuote,
 }: VendorsViewProps) {
   const { activeWorkspace, setPreferredVendor } = useWorkspace();
 
@@ -171,9 +173,10 @@ export function VendorsView({
       {mode === 'compare' ? (
         <VendorComparisonView
           initialEventId={initialCompareEventId}
+          initialCategory={categoryFilter === 'all' ? undefined : categoryFilter}
           onOpenVendor={onOpenVendor}
           onOpenQuoteImport={onOpenQuoteImport}
-          onOpenBooking={onOpenBooking}
+          onEditQuote={onEditApprovedQuote}
         />
       ) : (
         <>

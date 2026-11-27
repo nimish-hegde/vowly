@@ -43,6 +43,7 @@ export interface LineItemBreakdown {
   unresolvedBasis?: boolean;
   conditionalOvertime?: boolean;
   billableHours?: number;
+  includedServiceHours?: number;
 }
 
 export interface QuoteCalculationResult {
@@ -505,6 +506,7 @@ export function calculateQuoteFinancials(
       unresolvedBasis: unresolvedBasis || undefined,
       conditionalOvertime: item.pricingType === 'per_hour' ? line.conditional : undefined,
       billableHours: item.pricingType === 'per_hour' ? line.units : undefined,
+      includedServiceHours: item.pricingType === 'per_hour' ? line.includedHours : undefined,
     }];
   });
   const {
