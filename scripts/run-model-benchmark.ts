@@ -364,10 +364,21 @@ export function gradeBenchmarkCase(
         )
       : undefined;
   // For properly detected unresolved price conflicts (blocking approval until explicit human resolution),
-  // neither candidate is authoritative: accept either exact candidate total (min or max), never double-counting.
+  // neither candidate is authoritative: accept the higher candidate total ONLY when the conflicting
+  // line item itself carries the higher provisional candidate (rejecting spurious extra charges).
+  const conflictLineProvisionalTotal =
+    matchedConflict !== undefined
+      ? baseCalc.itemTotals[matchedConflict.lineItemIndex]?.amount
+      : undefined;
+  const conflictingLineUsesHigherCandidate =
+    matchedConflict !== undefined &&
+    matchedConflict.maxTotal !== null &&
+    conflictLineProvisionalTotal !== null &&
+    conflictLineProvisionalTotal !== undefined &&
+    Math.abs(conflictLineProvisionalTotal - matchedConflict.maxTotal) < 0.01;
   const baseSubtotalMatches =
     Math.abs(baseCalc.knownSubtotal - bc.expected.knownSubtotal) < 0.01 ||
-    (matchedConflict !== undefined &&
+    (conflictingLineUsesHigherCandidate &&
       expectedDiff !== undefined &&
       Math.abs(baseCalc.knownSubtotal - (bc.expected.knownSubtotal + expectedDiff)) < 0.01);
 

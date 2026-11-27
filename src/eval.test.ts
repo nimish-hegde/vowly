@@ -395,6 +395,48 @@ test('grades expectedPriceConflictDiscrepancy strictly without loosening subtota
   assert.equal(higherProvisionalConflict.passed, true);
   assert.equal(higherProvisionalConflict.criticalFinancialError, false);
 
+  // Codex P2: keeping the lower provisional candidate while adding a spurious $400 charge
+  // equal to the discrepancy must FAIL as a critical financial error
+  const spuriousExtraCharge = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3200,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'DM agreed to $3,200 flat',
+        },
+        {
+          label: 'Spurious extra fee',
+          pricingType: 'flat',
+          amount: 400,
+          chargeType: 'mandatory',
+          sourceExcerpt: 'PDF contract says $3,600',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(spuriousExtraCharge.passed, false);
+  assert.equal(spuriousExtraCharge.criticalFinancialError, true);
+
   // Undetected unresolved conflict (no conflictingOptions) is a release blocker
   const undetected = gradeExtraction(
     conflictEvalCase,

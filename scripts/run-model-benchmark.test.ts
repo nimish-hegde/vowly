@@ -129,4 +129,19 @@ test('Issue #21: unresolved price conflict with higher provisional candidate pas
   const badResult = gradeBenchmarkCase(t07, undetected, 100, 100, 0, undefined, 1);
   assert.equal(badResult.endToEndPassed, false);
   assert.equal(badResult.criticalFinancialError, true);
+
+  // Codex P2: retaining lower provisional candidate ($1,800) while adding a spurious $2,700 fee
+  // equal to the discrepancy must FAIL critically and count as an invented charge
+  const spuriousExtra = structuredClone(t07.mockExtraction);
+  spuriousExtra.lineItems.push({
+    label: 'Spurious extra catering fee',
+    pricingType: 'flat',
+    amount: 2700,
+    chargeType: 'mandatory',
+    sourceExcerpt: 'Marriott reception dinner buffet: $45 per person',
+  });
+  const spuriousResult = gradeBenchmarkCase(t07, spuriousExtra, 100, 100, 0, undefined, 1);
+  assert.equal(spuriousResult.endToEndPassed, false);
+  assert.equal(spuriousResult.criticalFinancialError, true);
+  assert.equal(spuriousResult.inventedChargesCount, 1);
 });

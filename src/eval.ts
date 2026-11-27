@@ -179,10 +179,19 @@ export function gradeExtraction(
       : undefined;
   // When an unresolved price conflict is properly preserved in priceConflicts with the exact
   // expected discrepancy (blocking approval until explicit human resolution), neither candidate
-  // is authoritative — accept either exact candidate baseline (min or max), never double-counting.
+  // is authoritative — accept the higher candidate total ONLY when the conflicting line item itself
+  // carries the higher provisional candidate (never when spurious extra charges inflate the subtotal).
+  const conflictLineProvisionalTotal =
+    matchedConflict !== undefined ? calc.itemTotals[matchedConflict.lineItemIndex]?.amount : undefined;
+  const conflictingLineUsesHigherCandidate =
+    matchedConflict !== undefined &&
+    matchedConflict.maxTotal !== null &&
+    conflictLineProvisionalTotal !== null &&
+    conflictLineProvisionalTotal !== undefined &&
+    Math.abs(conflictLineProvisionalTotal - matchedConflict.maxTotal) < 0.01;
   const subtotalMatches =
     Math.abs(calc.knownSubtotal - testCase.expected.knownSubtotal) < 0.01 ||
-    (matchedConflict !== undefined &&
+    (conflictingLineUsesHigherCandidate &&
       expectedDiff !== undefined &&
       Math.abs(calc.knownSubtotal - (testCase.expected.knownSubtotal + expectedDiff)) < 0.01);
   if (!subtotalMatches) {
