@@ -419,7 +419,12 @@ Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scri
 
 ### 14.3 Head-to-Head Model Comparison (`held-out-v3-multimodal`)
 
-| Metric | `gemini-3.5-flash-lite` (30/30 full) | `gemini-4-hydrogen` (12 attempted / 8 completed) |
+> **Comparison Caveats:**
+> - **`gemini-4-hydrogen` was evaluated on a smaller, non-equivalent subset** (`12` attempted / `8` completed: `T01`–`T07`, `I02`) vs. the full `30/30` suite on `gemini-3.5-flash-lite`, so percentages are not apples-to-apples across the full 30 cases.
+> - **Free-tier throttling (`429`/`503`) is not evidence of paid-tier reliability** for `gemini-4-hydrogen` or `gemini-3.8-flash`; it reflects free-tier quota and shared demand limits only.
+> - **`gemini-3.5-flash-lite` achieved `28/30` on the fresh benchmark, with one critical financial error (`T07`).**
+
+| Metric | `gemini-3.5-flash-lite` (30/30 full) | `gemini-4-hydrogen` (12 attempted / 8 completed — non-equivalent subset) |
 |---|---:|---:|
 | **API Availability** | **30/30 (100.0%)** | 8/12 (66.7%) *(aborted by `429`/`503` circuit breaker)* |
 | **Schema Validity (completed)** | **30/30 (100.0%)** | 8/8 (100.0%) |
@@ -479,14 +484,15 @@ Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scri
 
 ### 14.6 Failure Analysis & Actionable Findings
 
-1. **`T07` (Conflicting Pricing Models Across Dated Messages — failed by BOTH `gemini-3.5-flash-lite` and `gemini-4-hydrogen`):** When a forwarded message contained an earlier Instagram DM (`$1,800 flat`) and a later dated Email (`$45/person`), both models classified it as a `revision` instead of a conflicting `initial` quote, and `gemini-4-hydrogen` omitted `conflictingOptions` entirely. This is a prompt disambiguation edge case, not a Flash-Lite capability gap.
-2. **`T10` (Ambiguous Category):** `gemini-3.5-flash-lite` classified `"Horizon Hospitality & Events"` as `"venue"` instead of `"unknown"`.
-3. **Pre-Existing Frontend/Backend Parity Gap (`I04`, caught by benchmark parity check):** On a 3-tier photography rate card (`I04`) where `"Overtime is $275/hr"` is a quote-level line item and included hours live on `packages[].hours`, the backend correctly calculated `$3,100` (`0` overtime hours) while the frontend calculated `$3,375` (`+$275` for 1 default hour) because `findIncludedHoursFromBackendQuote` in `frontend/src/services/quoteExtractor.ts` did not inspect `packages[].hours`. Tracked for **Issue #16 (Shared Deterministic Financial Engine)**.
+1. **`T07` (Conflicting Pricing Models Across Dated Messages — Critical Financial Error, failed by BOTH `gemini-3.5-flash-lite` and `gemini-4-hydrogen`):** When a forwarded message contained an earlier Instagram DM (`$1,800 flat`) and a later dated Email (`$45/person`), both models classified it as a `revision` instead of a conflicting `initial` quote, and `gemini-4-hydrogen` omitted `conflictingOptions` entirely. Requires a separate extraction improvement tracked in **Issue #21** (without tuning against the frozen `held-out-v3-multimodal` expected answers).
+2. **`T10` (Ambiguous Category):** `gemini-3.5-flash-lite` classified `"Horizon Hospitality & Events"` as `"venue"` instead of `"unknown"`. Requires a separate extraction improvement tracked in **Issue #21** (preserving the frozen holdout).
+3. **Unresolved Frontend/Backend Calculation Parity Gap (`I04`):** On a 3-tier photography rate card (`I04`) where `"Overtime is $275/hr"` is a quote-level line item and included hours live on `packages[].hours`, the backend correctly calculated `$3,100` (`0` overtime hours) while the frontend calculated `$3,375` (`+$275` for 1 default hour) because `findIncludedHoursFromBackendQuote` in `frontend/src/services/quoteExtractor.ts` does not inspect `packages[].hours`. This gap **remains unresolved** and is tracked under **Issue #16 (Shared Deterministic Financial Engine)**.
 
-### 14.7 Model Selection Recommendation (Pending PM Approval)
+### 14.7 PM Model Selection Decision (Approved)
 
-- **Recommendation: KEEP `gemini-3.5-flash-lite` (`gemini-flash-lite-latest`) as Vowly's production default (HOLD on model migration).**
-- **Rationale:**
-  - `gemini-3.5-flash-lite` achieved **`10/10 (100%)` on images**, **`10/10 (100%)` on PDFs**, **`100%` API availability**, **`100%` true multimodal grounding**, **`2.57s` avg no-retry latency**, and **`$0.00316` est. paid cost per successful extraction**.
-  - `gemini-4-hydrogen` showed slightly higher field-level accuracy (`98.4%` vs `94.1%`) on the 8 cases it completed, but failed three ship gates: **API availability (`66.7%` vs `≥95%`)**, **UX latency (`12.2s` vs `<5.0s`)**, and **unit economics (`$0.03057` vs `$0.00316` per extraction — `9.7×` higher cost driven by default thinking tokens)**, while still failing `T07`.
-  - `gemini-3.8-flash` was unusable due to persistent HTTP `503` high-demand / timeout failures, and `gemini-4-neon` is unavailable on the free tier (`429`).
+- **PM Decision: Retain `gemini-3.5-flash-lite` (`gemini-flash-lite-latest`) as the current default. Defer model migration.**
+- **Rationale & Caveats:**
+  - `gemini-3.5-flash-lite` achieved **`28/30` (`93.3%`)** on the fresh benchmark (`10/10` images, `10/10` PDFs, `8/10` text) with **one critical financial error (`T07`)**, `100%` true multimodal grounding, `2.57s` avg no-retry latency, and `$0.00316` est. paid cost per successful extraction.
+  - `gemini-4-hydrogen` was evaluated on a **smaller, non-equivalent subset** (`8` completed / `12` attempted) where it showed higher field-level accuracy (`98.4%` vs `94.1%`) but still failed `T07`, ran `4.8×` slower (`12.2s` no-retry avg), and incurred `9.7×` higher estimated paid cost (`$0.03057` vs `$0.00316` per successful extraction) due to default thinking tokens. Free-tier throttling (`429`/`503`) is noted as a free-tier observation and **not** evidence of paid-tier reliability.
+  - `gemini-3.8-flash` hit recurring upstream `503`/timeout failures on the free tier, and `gemini-4-neon` is unavailable on the free tier (`429`; billing not enabled).
+  - Follow-ups tracked without modifying the frozen `held-out-v3-multimodal` dataset: **Issue #16** (unresolved `I04` calculation parity gap) and **Issue #21** (`T07` and `T10` extraction improvements).
