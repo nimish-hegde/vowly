@@ -514,3 +514,7 @@ The legacy suite contains 23 dev, 6 regression, 25 held-out, and 12 held-out-v2 
 - **Saved state:** The synthetic v1 workspace round trip preserved CAD 96,177.20 projected, CAD 30,555.20 committed, and CAD 8,000.00 paid. Dedicated fixtures cover ambiguous legacy overtime, draft isolation, mutation blockers, and booking reconciliation.
 - **Frontend:** Type-check and production build passed. Vite emitted a config deprecation notice and a chunk-size warning. A Chrome smoke used a local fixture response to exercise I04 tier selection, a one-hour edit, reverting it, and saving a draft.
 - **Execution:** Run `npm test`, `npm run eval -- --provider mock`, and `npm run test:financial-parity` from the root. No live model was resolved or called. The historical live results in Section 14 stand on their original evidence.
+
+### PR #23 review follow-up
+
+Selected optional hourly add-ons retain their quoted unit count and default to one hour when the quote contains only a rate. The regression fixture combines a selected add-on with a separate unrequested overtime rate, which still defaults to zero. The final pass recorded 62/62 backend tests, 25/25 frontend tests, 66/66 mock evaluations, and 30/30 frozen calculation parity cases (33/33 tests in the parity suite). Frontend type-check, production build, and the local I04 Chrome smoke passed.

@@ -1833,3 +1833,64 @@ test('saved v1 demo workspace round trips its projected, committed, and paid tot
   assert.equal(before.paidToDate, 8000);
   assert.deepEqual(after, before);
 });
+
+test('optional hourly add-ons retain billable units alongside unrequested overtime', () => {
+  const { quote } = mapBackendExtractionToFrontendResult(
+    {
+      session: {
+        id: 'session-hourly-add-on',
+        draftQuote: {
+          vendorName: 'Synthetic Photography',
+          events: [],
+          quoteKind: 'initial',
+          gratuityStatus: 'unknown',
+          openQuestions: [],
+          category: 'photographer',
+          currency: 'CAD',
+          taxStatus: 'excluded',
+          taxPercent: 13,
+          packages: [{
+            id: 'full',
+            name: 'Full Collection',
+            pricingType: 'flat',
+            amount: 1000,
+            hours: 8,
+            sourceExcerpt: 'Full Collection — $1,000 for 8 hours',
+          }],
+          lineItems: [
+            {
+              label: 'Overtime',
+              pricingType: 'per_hour',
+              amount: 250,
+              chargeType: 'conditional',
+              sourceExcerpt: 'Overtime is $250/hr if needed.',
+            },
+            {
+              label: 'Extra hour',
+              pricingType: 'per_hour',
+              amount: 250,
+              chargeType: 'optional',
+              sourceExcerpt: 'Optional extra hour: $250.',
+            },
+          ],
+        },
+        sourceWarnings: [],
+      },
+    },
+    { sourceType: 'pasted_message', sourceChannel: 'Regression fixture', rawText: '', guestCount: 100 },
+  );
+
+  const preview = calculateQuoteFinancials(quote, [], [], undefined, 8);
+  assert.equal(preview.preTaxTotal, 1000);
+  assert.equal(preview.lineItemBreakdowns.find((line) => line.label === 'Overtime')?.billableHours, 0);
+  assert.equal(preview.addOnImpacts[0]?.pricePreTax, 250);
+  assert.equal(preview.addOnImpacts[0]?.impactWithTax, 282.50);
+
+  const selected = { ...quote, addOns: quote.addOns.map((item) => ({ ...item, selected: true })) };
+  const estimate = calculateQuoteFinancials(selected, [], [], undefined, 8);
+  assert.equal(estimate.preTaxTotal, 1250);
+  assert.equal(estimate.estimatedAllInTotal, 1412.50);
+
+  const explicitUnits = { ...selected, addOns: selected.addOns.map((item) => ({ ...item, quantity: 2 })) };
+  assert.equal(calculateQuoteFinancials(explicitUnits, [], [], undefined, 8).preTaxTotal, 1500);
+});

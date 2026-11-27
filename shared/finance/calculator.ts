@@ -767,7 +767,11 @@ export function calculateQuote(quote: QuoteFacts, ctx: QuoteScenario = {}) {
   }
   for (const { item, selected } of addOns) {
     if (item.pricingType === 'percentage') continue;
-    const result = price(item);
+    // Selection adds the quoted hourly units, with one hour as the default.
+    const billableItem = item.pricingType === 'per_hour'
+      ? { ...item, conditionalOvertime: false, quantity: item.quantity ?? 1 }
+      : item;
+    const result = price(billableItem);
     const amount = item.pricingType === 'flat' ? item.amount : roundMoney(result.total ?? 0);
     recordAddOn(item, selected, amount);
     if (selected) bases.push({ item, total: amount });
