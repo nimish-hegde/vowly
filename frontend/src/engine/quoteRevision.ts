@@ -116,16 +116,23 @@ function withScope(cost: Cost, key: string, packageId?: string, eventId?: string
 function amendCost(previous: Cost, incoming: Cost): Cost {
   if (previous.type === 'line' && incoming.type === 'line' && previous.item.pricingModel === incoming.item.pricingModel) {
     const merged = supplied(previous.item, incoming.item);
-    if (
-      previous.item.pricingModel === 'hourly' &&
-      incoming.item.quantity === undefined &&
-      incoming.item.extractedHours !== undefined &&
-      previous.item.quantity !== undefined &&
-      incoming.item.extractedHours !== (previous.item.extractedHours ?? previous.item.quantity)
-    ) {
-      merged.quantity = undefined;
-      if (incoming.item.isConditionalOvertime === undefined && incoming.item.extractedHours > 1) {
+    if (previous.item.pricingModel === 'hourly') {
+      const hoursChanged =
+        incoming.item.extractedHours !== undefined &&
+        incoming.item.extractedHours !== (previous.item.extractedHours ?? previous.item.quantity);
+      if (incoming.item.quantity === undefined && previous.item.quantity !== undefined && hoursChanged) {
+        merged.quantity = undefined;
+      }
+      if (
+        incoming.item.isConditionalOvertime === undefined &&
+        previous.item.isConditionalOvertime === true &&
+        ((incoming.item.extractedHours !== undefined && incoming.item.extractedHours > 1) ||
+          (incoming.item.chargeType === 'mandatory' && previous.item.chargeType !== 'mandatory'))
+      ) {
         merged.isConditionalOvertime = undefined;
+        if (incoming.item.quantity === undefined && previous.item.quantity === 0) {
+          merged.quantity = undefined;
+        }
       }
     }
     return { ...incoming, item: merged };

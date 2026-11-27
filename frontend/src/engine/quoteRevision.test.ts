@@ -480,6 +480,43 @@ test('revised source hours replace a previously confirmed hourly quantity while 
   assert.equal(ratePreview.quote.lineItems[0].quantity, 3);
 });
 
+test('revising an hourly overtime override with confirmed mandatory hours clears the stale conditional flag even without prior quantity', () => {
+  const prior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    lineItems: [
+      { id: 'base', label: 'Photography package', pricingModel: 'flat', unitPrice: 900 },
+      { id: 'ot', label: 'Additional hourly coverage', pricingModel: 'hourly', unitPrice: 100, isConditionalOvertime: true },
+    ],
+  });
+  const ws = workspace(prior);
+  assert.equal(calculateQuoteFinancials(prior, ws.events, [reception]).preTaxTotal, 900);
+
+  const confirmedHours = amendment(prior.id, {
+    sourceText: 'Confirmed 4 hours of additional hourly coverage at CAD 100/hour.',
+    lineItems: [
+      { id: 'ot-new', label: 'Additional hourly coverage', pricingModel: 'hourly', unitPrice: 100, extractedHours: 4, chargeType: 'mandatory' },
+    ],
+    evidenceSpans: [{ id: 'ev-1', excerpt: 'Confirmed 4 hours of additional hourly coverage at CAD 100/hour.', sourceLabel: 'Revised email' }],
+  });
+  const preview = buildQuoteRevisionPreview(ws, ws.vendors[0], confirmedHours);
+  assert.ok(preview);
+  assert.equal(preview.proposedCalc.preTaxTotal, 1300);
+  assert.equal(preview.preTaxDelta, 400);
+  assert.equal(preview.quote.lineItems.find(({ id }) => id === 'ot')?.isConditionalOvertime, undefined);
+
+  const rateOnly = amendment(prior.id, {
+    sourceText: 'Additional hourly coverage rate is now CAD 150/hour.',
+    lineItems: [
+      { id: 'ot-rate', label: 'Additional hourly coverage', pricingModel: 'hourly', unitPrice: 150 },
+    ],
+  });
+  const ratePreview = buildQuoteRevisionPreview(ws, ws.vendors[0], rateOnly);
+  assert.ok(ratePreview);
+  assert.equal(ratePreview.proposedCalc.preTaxTotal, 900);
+  assert.equal(ratePreview.quote.lineItems.find(({ id }) => id === 'ot')?.isConditionalOvertime, true);
+});
+
 test('approving a saved duplicate revision draft clears the draft, restores status, and unblocks booking without adding a version', () => {
   const ws = workspace(original());
   const first = approve(ws, amendment());
