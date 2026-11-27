@@ -15,9 +15,9 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 | **v0.3** | AI quote extraction pipeline, 60-case eval harness, local Quote Review UI & telemetry | ≥95% live e2e accuracy on 60-case suite; **0 critical financial errors**; **0 unsupported currency guesses**; explicit human approval gate before budget mutation. | Done (`#8`, `#10`, `#11`) | Shipped (`59/60` live + overtime fix verified offline) |
 | **v0.4** | Interactive React frontend prototype (`frontend/`, mock mode) & financial safeguards | Production build + type-check pass; centralized booking eligibility across all entry points; draft revision isolation; unpaid-by-default deposits; 0 secrets/personal data. | Done (`#12`) | Shipped |
 | **v0.4.x (Framework)** | Reusable Antigravity development framework (`AGENTS.md`, 4 workflow skills, roadmap/decision log, PR template) | Persistent rules cover architecture, financial safeguards, eval standards, UX metrics, agent orchestration, and PM gates; zero application code changes. | Done (`#14`) | Shipped |
-| **v0.5** | Real multimodal AI quote import & progressive-disclosure quote review | Real Gemini text/image/PDF extraction via server-side API; structured percentage bases & inclusions; negotiated savings without false conflicts; live Gemini evals with **0 critical financial errors** and no regression vs. `v0.3`; live browser UAT passing Cases A–D with low manual correction count. | In review (`#13`) | **Hold** — automated offline (`47/47` + `10/10` + `63/63` mock), live 63-case Gemini (`63/63`, `0` blockers), and 3 multimodal PNG/PDF tests (`3/3`) passed; awaiting user manual UAT & PM approval |
-| **v0.6** | Private pilot readiness: category-specific vendor comparisons, backend persistence & partner sharing | Couples can compare vendors using structured inclusions; time to correct vendor comparison measured in pilot; partner workspace sync; cost per accepted quote tracked. | Planned | Not started |
-| **v0.7+** | Expanded vendor categories, Google Places autocomplete, payment/event UX refinements | Informed by private pilot telemetry, correction rates, and unit economics. | Planned | Not started |
+| **v0.5** | Real multimodal AI quote import & progressive-disclosure quote review | Real Gemini text/image/PDF extraction via server-side API; mutually exclusive packages & package-scoped terms; conditional overtime & extra-guest thresholds; unknown tax booking gate; manual editing with revision history; live Gemini evals with **0 critical financial errors** and **0 currency guesses**; browser E2E UAT passing. | Done (`#13`) | **Shipped** (`a0b942c`) — `53/53` backend, `17/17` frontend, `66/66` mock & `66/66` live Gemini (`0` blockers) |
+| **v0.6** | Private pilot readiness: shared financial engine, category-aware comparison, follow-up delegation, backend persistence & partner collaboration | Shared backend/frontend deterministic engine; category-aware vendor & package comparison; fresh multimodal holdout & model benchmarking; auth, persistence, and helper-link delegation (`#4`, `#5`). | Planned | Not started |
+| **v0.7+** | Vendor/event/budget UX polish & scale | Vendor archiving & duplicate management, event/budget setup improvements, Google Places autocomplete, and multi-installment booking schedules. | Planned | Not started |
 
 ---
 
@@ -33,7 +33,24 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 | Comprehension without rereading original quote | Verified for pricing, inclusions, missing info & payment terms | Browser UAT checklist |
 | Cost per successful extraction / accepted quote | Recorded per live model version; informs pilot unit economics | `src/telemetry.ts` & `src/eval.ts` |
 
-*Baseline reference (`v0.3`, `gemini-3.5-flash-lite`, 60 cases): `$0.01683` total estimated paid cost across 60 extractions (~`$0.00028` per extraction), ~`1.90s` avg latency, `59/60` (`98.3%`) live end-to-end accuracy, `0` critical financial errors. Cost per accepted quote will be populated once live `v0.5` UAT telemetry is collected.*
+*Baseline reference (`v0.3`, `gemini-3.5-flash-lite`, 60 cases): `$0.01683` total estimated paid cost across 60 extractions (~`$0.00028` per extraction), ~`1.90s` avg latency, `59/60` (`98.3%`) live end-to-end accuracy, `0` critical financial errors. Latest `v0.5` (`a0b942c`, 66 cases): `66/66 (100.0%)`, `0` critical financial errors, `1,775 ms` avg latency excl. retries, `$0.03101` est. paid cost (~`$0.000470` per extraction).*
+
+---
+
+## Post-v0.5 Follow-Up Backlog (Audited Against `main` `a0b942c`)
+
+### Open Issue Audit Status
+- **Close candidate:** `#3` (venue comparison, hypothetical attendance, minimums, capacity flags, and break-even callout implemented; category/package comparison enhancements tracked below).
+- **Partially complete (targeted gaps remain):** `#1` (pre-approval revision diff preview & duplicate-revision idempotency) and `#7` (scratch-onboarding currency selector & `"Continue with manual entry"` fallback on extraction failure).
+- **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
+
+### Tracked Follow-Up Workstreams
+1. **Model benchmarking & fresh multimodal holdout dataset (`v0.6`):** Build a new versioned multimodal holdout split (real-pattern screenshots & PDFs across multi-package venues, photography, decor, and catering) without modifying locked `regression/`, `held-out/`, or `held-out-v2/` sets, and benchmark candidate Gemini/local models on accuracy, latency, and cost per accepted quote.
+2. **Shared deterministic financial engine (`v0.6`):** Consolidate `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts` into a single shared TypeScript calculation module so backend and frontend share one source of truth instead of parity fixtures alone.
+3. **Category-aware vendor & package comparison (`v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
+4. **Vendor archiving & duplicate management (`v0.6+`):** Allow archiving declined/superseded vendors, merging or linking duplicate vendor records, and surfacing duplicate-revision idempotency checks.
+5. **Event & budget setup improvements (`v0.6+`):** Add currency selection in scratch onboarding (`#7`), `"Continue with manual entry"` fallback when AI extraction fails (`#7`), and multi-installment (`>2` milestones) custom payment schedules in `BookingModal`.
+6. **Authentication, persistence & partner collaboration (`v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
 
 ---
 

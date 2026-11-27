@@ -4,6 +4,7 @@ import { createDemoWorkspace } from '../data/demoWorkspace.ts';
 import {
   buildBookingMilestones,
   calculateQuoteFinancials,
+  calculateVendorComparison,
   calculateWorkspaceFinancials,
   DEFAULT_DEPOSIT_ALREADY_PAID,
   deriveBookingScheduleDefaults,
@@ -1523,4 +1524,100 @@ test('Codex 4 findings + combined rules: null package gratuity, conflicting pric
   assert.equal(noAddOnCalc.preTaxTotal, 1100);
   assert.equal(noAddOnCalc.gratuityAmount, 165);
   assert.equal(noAddOnCalc.estimatedAllInTotal, 1265);
+});
+
+test('Issue #3: calculateVendorComparison computes CAD 500 break-even bartender fee at 160 guests without mutating event', () => {
+  const ws = createDemoWorkspace();
+  const evt = ws.events.find((e) => e.id === ws.events[0].id)!;
+  const originalGuestCount = evt.guestCount;
+
+  const juniperVenue: Vendor = {
+    id: 'v-juniper-be',
+    name: 'Juniper Hall',
+    category: 'venue',
+    eventIds: [evt.id],
+    location: 'Mississauga, ON',
+    contactName: '',
+    contactEmail: '',
+    contactPhone: '',
+    status: 'Quoted',
+    isPreferred: false,
+    notes: '',
+    quotes: [
+      makeCleanQuote({
+        id: 'q-juniper-be',
+        legacyReviewAcknowledged: true,
+        taxHandling: 'tax_exempt',
+        minGuests: 120,
+        maxCapacity: 200,
+        lineItems: [
+          {
+            id: 'li-jun-1',
+            label: 'Reception package',
+            pricingModel: 'per_person',
+            unitPrice: 100,
+            minGuests: 120,
+          },
+          {
+            id: 'li-jun-av',
+            label: 'AV fee',
+            pricingModel: 'flat',
+            unitPrice: 300,
+          },
+        ],
+        unconfirmedFees: [
+          {
+            id: 'uf-jun-bartender',
+            label: 'Bartender staffing',
+            description: 'Bartender staffing TBD',
+            mandatory: true,
+            status: 'unconfirmed',
+          },
+        ],
+      }),
+    ],
+    activeQuoteId: 'q-juniper-be',
+  };
+
+  const mapleVenue: Vendor = {
+    ...juniperVenue,
+    id: 'v-maple-be',
+    name: 'Maple Pavilion',
+    quotes: [
+      makeCleanQuote({
+        id: 'q-maple-be',
+        legacyReviewAcknowledged: true,
+        taxHandling: 'tax_exempt',
+        minGuests: 120,
+        maxCapacity: 150,
+        lineItems: [
+          {
+            id: 'li-map-1',
+            label: 'Reception package',
+            pricingModel: 'per_person',
+            unitPrice: 105,
+            minGuests: 120,
+          },
+        ],
+        unconfirmedFees: [],
+      }),
+    ],
+    activeQuoteId: 'q-maple-be',
+  };
+
+  // At 160 guests: Juniper = $16,300 (excl. unconfirmed bartender), Maple = $16,800 (over 150 cap).
+  // Compare within-capacity at 150 guests: Juniper = $15,300, Maple = $15,750 -> $450 diff;
+  // With Maple maxCapacity 200 at 160 guests: Juniper = $16,300, Maple = $16,800 -> exact $500 break-even!
+  mapleVenue.quotes[0].maxCapacity = 200;
+  const comp = calculateVendorComparison([juniperVenue, mapleVenue], ws.events, 160);
+  assert.equal(comp.lowestKnownVendorId, 'v-juniper-be');
+  assert.ok(comp.breakEvenNote?.includes('$500'));
+  assert.ok(comp.breakEvenNote?.includes('Bartender staffing'));
+  assert.equal(evt.guestCount, originalGuestCount); // Event guest count unchanged
+
+  // Capacity exceeded flagged when hypothetical guests > maxCapacity
+  mapleVenue.quotes[0].maxCapacity = 150;
+  const capComp = calculateVendorComparison([juniperVenue, mapleVenue], ws.events, 160);
+  const mapleEntry = capComp.entries.find((e) => e.vendor.id === 'v-maple-be')!;
+  assert.equal(mapleEntry.calc.capacityExceeded, true);
 });
