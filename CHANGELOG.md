@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Quote review calculates overtime against the selected photography package. Ambiguous saved estimates retain their amount until reviewed. Offline calculation parity passed all 30 frozen cases. [Issue #16](https://github.com/nimish-hegde/vowly/issues/16)
+
 Follow the [pilot backlog](https://github.com/nimish-hegde/vowly/issues) for planned work. Add completed user-facing improvements here with a link to the PR and any measured result.
 
 ## November 24, 2026 — Interactive React frontend prototype (`v0.4`, mock mode)

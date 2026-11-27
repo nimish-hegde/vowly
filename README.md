@@ -10,7 +10,8 @@ Vowly starts with vendor decision-making. Capture a quote, compare it with anoth
 
 - `src/`, `eval-data/`, `ui/` — `v0.3` backend extraction pipeline, deterministic financial calculator, quote review safeguards, telemetry, 60-case eval harness, and local Quote Review UI (`npm run ui`).
 - `frontend/` — `v0.4` React + TypeScript + Vite + Tailwind CSS v4 interactive prototype (running in local mock mode).
-- `docs/` — Product specification and AI extraction evaluation reports.
+- `shared/finance/` — Quote calculation engine used by Node and the workspace.
+- `docs/` — Product specification, roadmap, and AI evaluation reports.
 
 ## Frontend architecture (`v0.4`)
 
@@ -18,7 +19,7 @@ The prototype in [`frontend/`](frontend/README.md) is organized into four layers
 
 - **Views & modals (`frontend/src/components/`)**: `AppShell`, `OverviewView`, `EventsView`, `BudgetView`, `VendorsView`, `VendorComparisonView`, `PaymentsView`, `VendorDetailDrawer`, `QuoteImportModal`, `BookingModal`, `OnboardingFlow`, and `QuickModals`.
 - **Workspace state (`frontend/src/store/workspaceStore.tsx`)**: Client-side React Context store seeded with a synthetic multi-event GTA wedding workspace (`frontend/src/data/demoWorkspace.ts`) and persisted in browser `localStorage`.
-- **Financial engine (`frontend/src/engine/financialCalculator.ts`)**: Per-person, minimum-guest-floor, guest-ratio, and flat-fee calculations with Ontario HST handling, add-ons, and approval gating for unconfirmed mandatory fees and price conflicts.
+- **Financial engine:** `shared/finance/calculator.ts` prices scoped packages, overtime, guest rules, add-ons, gratuity, and tax. The adapters in `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts` expose those results to review and the workspace.
 - **Extraction adapter (`frontend/src/services/quoteExtractor.ts`)**: Defines `QuoteExtractionAdapter` and currently uses `SimulatedQuoteExtractor` (presets + local heuristics) so the prototype runs completely offline without API keys.
 
 ## Local setup
@@ -50,6 +51,7 @@ From the repository root:
 ```bash
 npm test
 npm run eval -- --provider mock
+npm run test:financial-parity
 ```
 
 To launch the standalone `v0.3` Quote Review UI:

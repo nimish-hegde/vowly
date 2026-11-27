@@ -488,7 +488,7 @@ Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scri
 
 1. **`T07` (Conflicting Pricing Models Across Dated Messages — Critical Financial Error, failed by BOTH `gemini-3.5-flash-lite` and `gemini-4-hydrogen`):** When a forwarded message contained an earlier Instagram DM (`$1,800 flat`) and a later dated Email (`$45/person`), both models classified it as a `revision` instead of a conflicting `initial` quote, and `gemini-4-hydrogen` omitted `conflictingOptions` entirely. Requires a separate extraction improvement tracked in **Issue #21** (without tuning against the frozen `held-out-v3-multimodal` expected answers).
 2. **`T10` (Ambiguous Category):** `gemini-3.5-flash-lite` classified `"Horizon Hospitality & Events"` as `"venue"` instead of `"unknown"`. Requires a separate extraction improvement tracked in **Issue #21** (preserving the frozen holdout).
-3. **Unresolved Frontend/Backend Calculation Parity Gap (`I04`):** On a 3-tier photography rate card (`I04`) where `"Overtime is $275/hr"` is a quote-level line item and included hours live on `packages[].hours`, the backend correctly calculated `$3,100` (`0` overtime hours) while the frontend calculated `$3,375` (`+$275` for 1 default hour) because `findIncludedHoursFromBackendQuote` in `frontend/src/services/quoteExtractor.ts` does not inspect `packages[].hours`. This gap **remains unresolved** and is tracked under **Issue #16 (Shared Deterministic Financial Engine)**.
+3. **Unresolved Frontend/Backend Calculation Parity Gap (`I04`):** On a 3-tier photography rate card (`I04`) where `"Overtime is $275/hr"` is a quote-level line item and included hours live on `packages[].hours`, the backend correctly calculated `$3,100` (`0` overtime hours) while the frontend calculated `$3,375` (`+$275` for 1 default hour) because `findIncludedHoursFromBackendQuote` in `frontend/src/services/quoteExtractor.ts` does not inspect `packages[].hours`. Issue #16 addresses this in the deterministic replay documented in Section 15.
 
 ### 14.7 PM Model Selection Decision (Approved)
 
@@ -498,3 +498,19 @@ Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scri
   - `gemini-4-hydrogen` was evaluated on a **smaller, non-equivalent subset** (`8` completed / `12` attempted) where it showed higher field-level accuracy (`98.4%` vs `94.1%`) but still failed `T07`, ran `4.8×` slower (`12.2s` no-retry avg), and incurred `9.7×` higher estimated paid cost (`$0.03057` vs `$0.00316` per successful extraction) due to default thinking tokens. Free-tier throttling (`429`/`503`) is noted as a free-tier observation and **not** evidence of paid-tier reliability.
   - `gemini-3.8-flash` hit recurring upstream `503`/timeout failures on the free tier, and `gemini-4-neon` is unavailable on the free tier (`429`; billing not enabled).
   - Follow-ups tracked without modifying the frozen `held-out-v3-multimodal` dataset: **Issue #16** (unresolved `I04` calculation parity gap) and **Issue #21** (`T07` and `T10` extraction improvements).
+
+## 15. Issue #16 deterministic financial parity
+
+| Check | Main baseline `b76c67c` | Implementation `2956c5e` |
+|---|---:|---:|
+| Backend tests | 61/61 | 62/62 |
+| Frontend tests | 18/18 | 24/24 |
+| Legacy evaluation suite, `--provider mock` | 66/66 | 66/66 |
+| Frozen multimodal calculation parity | 29/30 | 30/30 |
+
+The legacy suite contains 23 dev, 6 regression, 25 held-out, and 12 held-out-v2 cases. It returned zero critical financial errors, unsupported currency guesses, or release blockers. The multimodal replay uses the frozen `held-out-v3-multimodal` set (10 text, 10 image, 10 PDF) and its checked-in mock extraction records. Its 33 tests cover the 30 cases, dataset identity, the I04 scenario matrix, and a combined guest-floor, staffing, gratuity, and tax boundary. The adapters are compared on subtotal, gratuity, tax, all-in, completeness, package and gratuity blocker flags, tax status, and negotiated savings. The suite pins baseline all-in amounts independently of adapter agreement.
+
+- **I04:** Baseline frontend Full Collection at eight hours was CAD 3,375.00 before tax and CAD 3,813.75 all-in. Both adapters now return CAD 3,100.00 and CAD 3,503.00 with zero overtime. At nine hours both return CAD 3,375.00 and CAD 3,813.75. Switching to Luxury at nine hours gives zero overtime and CAD 4,600.00 before tax.
+- **Saved state:** The synthetic v1 workspace round trip preserved CAD 96,177.20 projected, CAD 30,555.20 committed, and CAD 8,000.00 paid. Dedicated fixtures cover ambiguous legacy overtime, draft isolation, mutation blockers, and booking reconciliation.
+- **Frontend:** Type-check and production build passed. Vite emitted a config deprecation notice and a chunk-size warning. A Chrome smoke used a local fixture response to exercise I04 tier selection, a one-hour edit, reverting it, and saving a draft.
+- **Execution:** Run `npm test`, `npm run eval -- --provider mock`, and `npm run test:financial-parity` from the root. No live model was resolved or called. The historical live results in Section 14 stand on their original evidence.
