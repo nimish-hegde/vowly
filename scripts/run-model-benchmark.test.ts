@@ -110,3 +110,23 @@ test('Codex P2: omitting an expected mandatory TBD fee (T08 rigging fee) flags c
   assert.equal(result.missedChargesCount, 1);
   assert.ok(result.releaseBlockers.some((b) => b.includes('rigging')));
 });
+
+test('Issue #21: unresolved price conflict with higher provisional candidate passes when both options and exact discrepancy are preserved', () => {
+  const t07 = getCase('T07');
+  const higherProvisional = structuredClone(t07.mockExtraction);
+  higherProvisional.lineItems[0]!.pricingType = 'per_person';
+  higherProvisional.lineItems[0]!.amount = 45;
+  higherProvisional.lineItems[0]!.sourceExcerpt = 'Marriott reception dinner buffet: $45 per person';
+
+  const result = gradeBenchmarkCase(t07, higherProvisional, 100, 100, 0, undefined, 1);
+  assert.equal(result.endToEndPassed, true);
+  assert.equal(result.criticalFinancialError, false);
+  assert.equal(result.inventedChargesCount, 0);
+
+  // Double-counting or dropping conflictingOptions must still fail critically
+  const undetected = structuredClone(higherProvisional);
+  delete undetected.lineItems[0]!.conflictingOptions;
+  const badResult = gradeBenchmarkCase(t07, undetected, 100, 100, 0, undefined, 1);
+  assert.equal(badResult.endToEndPassed, false);
+  assert.equal(badResult.criticalFinancialError, true);
+});

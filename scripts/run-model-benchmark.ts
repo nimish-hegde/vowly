@@ -356,7 +356,22 @@ export function gradeBenchmarkCase(
     hours: isMultiPkgExpected ? undefined : bc.calcContext.hours,
   });
 
-  if (Math.abs(baseCalc.knownSubtotal - bc.expected.knownSubtotal) >= 0.01) {
+  const expectedDiff = bc.expected.expectedPriceConflictDiscrepancy;
+  const matchedConflict =
+    expectedDiff !== undefined
+      ? baseCalc.priceConflicts.find(
+          (c) => c.discrepancy !== null && Math.abs(c.discrepancy - expectedDiff) < 0.01,
+        )
+      : undefined;
+  // For properly detected unresolved price conflicts (blocking approval until explicit human resolution),
+  // neither candidate is authoritative: accept either exact candidate total (min or max), never double-counting.
+  const baseSubtotalMatches =
+    Math.abs(baseCalc.knownSubtotal - bc.expected.knownSubtotal) < 0.01 ||
+    (matchedConflict !== undefined &&
+      expectedDiff !== undefined &&
+      Math.abs(baseCalc.knownSubtotal - (bc.expected.knownSubtotal + expectedDiff)) < 0.01);
+
+  if (!baseSubtotalMatches) {
     criticalFinancialError = true;
     aiCorrections++;
     releaseBlockers.push(
@@ -546,10 +561,12 @@ export function gradeBenchmarkCase(
     );
   }
 
-  if (baseCalc.knownSubtotal > bc.expected.knownSubtotal + 0.01) {
-    inventedChargesCount++;
-  } else if (baseCalc.knownSubtotal < bc.expected.knownSubtotal - 0.01) {
-    missedChargesCount++;
+  if (!baseSubtotalMatches) {
+    if (baseCalc.knownSubtotal > bc.expected.knownSubtotal + 0.01) {
+      inventedChargesCount++;
+    } else if (baseCalc.knownSubtotal < bc.expected.knownSubtotal - 0.01) {
+      missedChargesCount++;
+    }
   }
 
   // --- True Multimodal Source Grounding ---

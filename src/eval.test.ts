@@ -360,6 +360,41 @@ test('grades expectedPriceConflictDiscrepancy strictly without loosening subtota
   );
   assert.equal(singleAltConflict.passed, true);
 
+  // Neither conflicting candidate is authoritative: higher provisional candidate with lower
+  // candidate preserved in conflictingOptions (blocking approval) also passes
+  const higherProvisionalConflict = gradeExtraction(
+    conflictEvalCase,
+    {
+      vendorName: 'Studio',
+      category: 'photographer',
+      events: ['Wedding'],
+      quoteKind: 'revision',
+      currency: 'CAD',
+      taxStatus: 'unknown',
+      gratuityStatus: 'unknown',
+      lineItems: [
+        {
+          label: 'Wedding photography',
+          pricingType: 'flat',
+          amount: 3600,
+          chargeType: 'mandatory',
+          conflictingOptions: [
+            { sourceLabel: 'DM', pricingType: 'flat', amount: 3200, sourceExcerpt: 'DM agreed to $3,200 flat' },
+            { sourceLabel: 'Contract', pricingType: 'flat', amount: 3600, sourceExcerpt: 'PDF contract says $3,600' },
+          ],
+          sourceExcerpt: 'PDF contract says $3,600',
+        },
+      ],
+      openQuestions: [
+        { question: 'Which price applies ($400 difference)?', reason: 'conflict', sourceExcerpt: 'PDF contract says $3,600' },
+      ],
+    },
+    500,
+    0,
+  );
+  assert.equal(higherProvisionalConflict.passed, true);
+  assert.equal(higherProvisionalConflict.criticalFinancialError, false);
+
   // Undetected unresolved conflict (no conflictingOptions) is a release blocker
   const undetected = gradeExtraction(
     conflictEvalCase,

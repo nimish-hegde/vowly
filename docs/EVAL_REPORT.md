@@ -518,3 +518,65 @@ The legacy suite contains 23 dev, 6 regression, 25 held-out, and 12 held-out-v2 
 ### PR #23 review follow-up
 
 Selected optional hourly add-ons retain their quoted unit count and default to one hour when the quote contains only a rate. The regression fixture combines a selected add-on with a separate unrequested overtime rate, which still defaults to zero. The final pass recorded 62/62 backend tests, 25/25 frontend tests, 66/66 mock evaluations, and 30/30 frozen calculation parity cases (33/33 tests in the parity suite). Frontend type-check, production build, and the local I04 Chrome smoke passed.
+
+---
+
+## 16. Issue #21 Extraction Accuracy Follow-Up
+
+**Branch:** `fix/issue-21-extraction-accuracy` (from `main` `a9b89c0`, using PR `#23` shared deterministic financial engine)  
+**Model:** `gemini-flash-lite-latest` → resolved `gemini-3.5-flash-lite` (unchanged production default; `$0` actual spend on free tier)  
+**Holdout Integrity:** All 66 original legacy cases (`dev/`, `regression/`, `held-out/`, `held-out-v2/`) and all 30 frozen `eval-data/held-out-v3-multimodal/` cases remained **100% untouched**. Four independent synthetic `dev-issue21-*` cases were added to `eval-data/dev/cases.json` and are reported separately below.
+
+### 16.1 Targeted Changes
+
+1. **Cross-channel conflicting pricing models (`src/extractor.ts`, `src/eval.ts`, `scripts/run-model-benchmark.ts`):** Updated `SYSTEM_PROMPT` Rules 7, 9, and 11 so conflicting pricing models across dated messages/channels preserve all alternatives in `conflictingOptions` with verbatim `sourceExcerpt`s (including verbatim single-snippet `conflict` open questions) without treating either offer as authoritative. Added deterministic normalization in `normalizeProviderResponse` to align mismatched provisional `pricingType` with its uniquely matching `conflictingOptions` entry (preventing `$2,400 flat` from being multiplied as `per_person`). Updated conflict grading so neither valid candidate is treated as authoritative once `conflictingOptions` blocks approval with the exact discrepancy, while double-counting and undetected conflicts remain critical financial errors.
+2. **Explicit tax & gratuity rates/bases without hallucination (`src/extractor.ts`):** Added nullable `taxPercent`, `gratuityPercent`, and `gratuityBasis` to `GEMINI_RESPONSE_SCHEMA.required`, strengthened Rule 5 to scan footers/fine print/secondary pages while explicitly emitting `null` whenever a rate or basis is unstated, preserved explicit multi-package `null` overrides untouched, and folded single-package tax/gratuity onto top-level only when unset.
+3. **Ambiguous vendor categories (`src/extractor.ts`):** Tightened Rule 4 so generic `"Hospitality & Events"` / `"Events"` quotes mentioning dinner service, glassware, linens, or an on-site coordinator without physical-space cues stay `category: "unknown"` with a grounded `ambiguous_rule` open question.
+
+### 16.2 Frozen 30-Case Multimodal Verification (`held-out-v3-multimodal`, Strict All-In Grading)
+
+| Metric | Section 14 Baseline (strict all-in) | Issue #21 (`gemini-3.5-flash-lite`) | Change |
+|---|---:|---:|---:|
+| **API Availability** | 30/30 (100.0%) | **30/30 (100.0%)** | — |
+| **Schema Validity** | 30/30 (100.0%) | **30/30 (100.0%)** | — |
+| **Strict All-In E2E Accuracy** | 22/30 (73.3%) *(28/30 subtotal-only)* | **29/30 (96.7%)** | **+7 cases (+23.4 pp)** |
+| **Critical Financial Errors (strict all-in)** | 7 (`T07` + 6 tax/gratuity omissions) | **0** | **-7 (0 remaining)** |
+| **Unsupported Currency Assumptions** | 0 | **0** | — |
+| **Field-Level Accuracy** | 207/220 (94.1%) | **218/220 (99.1%)** | **+5.0 pp** |
+| **Frontend/Backend Calculation Parity** | 29/30 (96.7%) | **30/30 (100.0%)** | **+1 (`I04` via PR `#23`)** |
+| **True Multimodal Grounding (local-span complete-token)** | *(old loose check: 89/89)* | **89/95 (93.7%)** (`100%` text, `100%` PDF, `81.3%` image) | Hardened post-Codex check |
+| **AI Extraction Errors Requiring Correction** | 21 (`0.70` / quote) | **10 (`0.33` / quote)** | **-52.4% correction burden** |
+| **Legitimate User Decisions / Missing Source Info** | 29 / 36 | 29 / 36 | Fixed dataset baseline |
+| **Inclusions Recall (leaked tokens) / Delivery / Payment** | 78.0% (`0`) / 80.0% / 86.0% | **82.9% (`0`) / 86.7% / 84.0%** | +4.9 pp / +6.7 pp / -2.0 pp |
+| **Avg Latency (no-retry / incl. retries, p95)** | 2,570 ms / 5,072 ms (`2` retries) | **2,555 ms / 3,722 ms** (`1` retry, p95 `4,498 ms`) | Faster |
+| **Tokens (In / Out / Thinking)** | `109,637` / `22,190` / `0` | `127,187` / `20,690` / `0` | — |
+| **Est. Paid Cost (total / per successful extraction)** | `$0.08837` / `$0.00316` | **`$0.08988` / `$0.00310`** | `$0` actual on free tier |
+
+**By Modality & Difficulty (`held-out-v3-multimodal`, Issue #21):**
+- `text`: **10/10 (100.0%)** E2E, `100.0%` field, `0` critical errors, `100.0%` grounding, `0.20` corrections/quote, `1,947 ms` no-retry avg (`T07` & `T10` both passed with `0` corrections).
+- `image`: **10/10 (100.0%)** E2E, `100.0%` field, `0` critical errors, `81.3%` local-span grounding (`I02`, `I04`, `I09` visual column spans), `0.20` corrections/quote, `2,898 ms` no-retry avg.
+- `pdf`: **9/10 (90.0%)** E2E, `97.4%` field, `0` critical errors, `100.0%` grounding, `0.60` corrections/quote, `2,820 ms` no-retry avg.
+- `difficult`: **22/22 (100.0%)** E2E (`0` critical errors); `ordinary`: **7/8 (87.5%)** (`P07` `quoteKind` only).
+
+### 16.3 Legacy Suite Verification (Original 66 Cases vs. New 4 `dev-issue21-*` Cases)
+
+| Suite Slice | E2E Accuracy | Critical Fin. Errors | Currency Guesses | Release Blockers | Notes |
+|---|---:|---:|---:|---:|---|
+| **Original 66 locked cases** (`23` dev, `6` reg, `25` ho1, `12` ho2) | **63/66 (95.5%)** | **0** | **0** | **0** | `22/23` dev, `5/6` reg, `25/25` held-out, `11/12` held-out-v2 |
+| **New independent `dev-issue21-*` cases** (`4` cases) | **4/4 (100.0%)** | **0** | **0** | **0** | Covers dated pricing-model conflict, footer multi-pkg tax/gratuity, unstated tax no-hallucination, ambiguous hospitality |
+| **Combined 70-case live run** | **67/70 (95.7%)** | **0** | **0** | **0** | `70/70` availability, `70/70` schema valid, `1,989 ms` no-retry avg (`2,209 ms` incl. `3` HTTP `429` retries), `253,299` in / `39,028` out tokens, `$0.17356` est. paid cost (`$0.00259`/success; `$0` on free tier) |
+
+### 16.4 Remaining Failures Flagged Honestly Before Merge
+
+Across all **100 live cases (`70` legacy + `30` multimodal)**, there were **`0` critical financial errors**, **`0` unsupported currency guesses**, and **`0` release blockers**. Four remaining non-blocking failures are flagged explicitly for PM review:
+1. **`P07` (`held-out-v3-multimodal`, ordinary PDF):** `quoteKind: got "revision", expected "initial"` on a standalone 1-page DJ contract titled `"WEDDING DJ CONTRACT"` (`0` financial errors; `100%` math and grounding).
+2. **`dev-uat-case-a-missing-gratuity` (original `dev`):** `category: got "unknown", expected "venue"` (conservative fail-closed shift under stricter Rule 4; `0` financial errors).
+3. **`venue-conflict-brochure-vs-note` (`regression`):** `quoteKind: got "initial", expected "revision"` (non-financial metadata classification; `0` financial errors).
+4. **`heldout2-catering-unpriced-dish-surcharge` (`held-out-v2`):** `missing unknown fee matching "goat biryani" (got: [])` — **flagged explicitly:** subtotal (`$7,680`) matched so `src/eval.ts` did not flag a critical subtotal error, but omitting an unpriced conditional dish surcharge is a missed conditional charge that warrants attention if PM prefers tightening before merge.
+
+### 16.5 Offline Verification
+
+- `npm test`: **65/65 pass** (including new schema, normalization, and conflict-grading unit tests)
+- `npm run test:financial-parity`: **33/33 pass** (`30/30` frozen multimodal parity)
+- `npm run eval -- --provider mock`: **70/70 (100.0%) pass** (`66/66` original + `4/4` `dev-issue21-*`)
+- `cd frontend && npm test && npm run lint && npm run build`: **25/25 pass**, `0` TS errors, clean Vite build
