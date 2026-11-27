@@ -419,19 +419,21 @@ Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scri
 
 ### 14.3 Head-to-Head Model Comparison (`held-out-v3-multimodal`)
 
-> **Comparison Caveats:**
+> **Comparison Caveats & Post-Codex Strict Financial Re-Scoring:**
 > - **`gemini-4-hydrogen` was evaluated on a smaller, non-equivalent subset** (`12` attempted / `8` completed: `T01`–`T07`, `I02`) vs. the full `30/30` suite on `gemini-3.5-flash-lite`, so percentages are not apples-to-apples across the full 30 cases.
 > - **Free-tier throttling (`429`/`503`) is not evidence of paid-tier reliability** for `gemini-4-hydrogen` or `gemini-3.8-flash`; it reflects free-tier quota and shared demand limits only.
-> - **`gemini-3.5-flash-lite` achieved `28/30` on the fresh benchmark, with one critical financial error (`T07`).**
+> - **`gemini-3.5-flash-lite` achieved `28/30` (`93.3%`) on subtotal-based E2E grading with one critical subtotal error (`T07`), and `22/30` (`73.3%`) under post-Codex strict all-in financial grading** (which also classifies omitted explicit `taxPercent`, `gratuityPercent`, or `gratuityBasis` as financial failures — affecting `6` multimodal cases: `I02`, `I04`, `I09`, `P01`, `P08`, `P09`, where Flash-Lite left the rate/basis `undefined` rather than fabricating a number).
+> - **`gemini-4-hydrogen` had `0` tax/gratuity omissions** on its `8` completed cases (`7/8 = 87.5%` under both subtotal-based and strict all-in grading, with `1` critical financial error on `T07`).
+> - **Multimodal grounding check (hardened post-Codex):** `scripts/run-model-benchmark.ts` now enforces verbatim numeric/currency/percentage token matching inside a local contiguous 1–3 line source span (unit-tested in `scripts/run-model-benchmark.test.ts`).
 
 | Metric | `gemini-3.5-flash-lite` (30/30 full) | `gemini-4-hydrogen` (12 attempted / 8 completed — non-equivalent subset) |
 |---|---:|---:|
 | **API Availability** | **30/30 (100.0%)** | 8/12 (66.7%) *(aborted by `429`/`503` circuit breaker)* |
 | **Schema Validity (completed)** | **30/30 (100.0%)** | 8/8 (100.0%) |
-| **End-to-End Accuracy (all attempted)** | **28/30 (93.3%)** | 7/12 (58.3%) |
-| **Completed Extraction Accuracy** | **28/30 (93.3%)** | 7/8 (87.5%) |
+| **End-to-End Accuracy (subtotal-based / strict all-in)** | **28/30 (93.3%)** / **22/30 (73.3%)** | 7/12 (58.3%) / 7/12 (58.3%) |
+| **Completed Accuracy (subtotal-based / strict all-in)** | **28/30 (93.3%)** / **22/30 (73.3%)** | 7/8 (87.5%) / 7/8 (87.5%) |
 | **Field-Level Extraction Accuracy** | **207/220 (94.1%)** | 60/61 (98.4%) |
-| **Critical Financial Errors** | **1** (`T07`) | **1** (`T07`) |
+| **Critical Financial Errors (subtotal / strict all-in)** | **1** (`T07`) / **7** (`T07` + `6` omitted tax/gratuity rates/bases) | **1** (`T07`) / **1** (`T07`) |
 | **Unsupported Currency Assumptions** | **0** | **0** |
 | **True Multimodal Source Grounding** | **89/89 (100.0%)** | 19/19 (100.0%) |
 | **Frontend/Backend Calculation Parity** | **29/30 (96.7%)** *(`I04` pre-existing FE gap)* | 8/8 (100.0%) *(`I04` hit `429`)* |

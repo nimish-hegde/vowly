@@ -20,22 +20,67 @@ function normalizeText(s: string): string {
     .trim();
 }
 
+function extractFinancialTokens(s: string): string[] {
+  const matches = s.match(/\$?\d[\d,]*(?:\.\d+)?%?/g) ?? [];
+  return matches.map((m) => m.replace(/,/g, '').toLowerCase());
+}
+
+function spanContainsFinancialToken(normSpan: string, token: string): boolean {
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Require boundary around digits so "5" does not match "150" and "$99" does not match "$990"
+  const re = new RegExp(`(^|[^0-9$])${escaped}(?=$|[^0-9%])`);
+  return re.test(normSpan);
+}
+
 /**
  * True multimodal grounding check:
- * Validates that an excerpt actually appears in the rendered document text (or rawMessage),
- * either as a normalized substring or with >=70% of its non-trivial tokens present.
+ * Validates that an excerpt matches a local contiguous span (a single line or adjacent line pair)
+ * in the rendered document text (or rawMessage), AND that every numeric/currency/percentage token
+ * in the excerpt is verbatim-present in that same span.
  */
-function isExcerptGroundedInSource(excerpt: string, fullSourceText: string): boolean {
+export function isExcerptGroundedInSource(excerpt: string, fullSourceText: string): boolean {
   const normEx = normalizeText(excerpt);
   if (!normEx || normEx.length < 3) return false;
-  const normSrc = normalizeText(fullSourceText);
-  if (normSrc.includes(normEx)) return true;
 
-  // Token overlap fallback for OCR/line-wrap punctuation differences (e.g. "$58 CAD / person" vs "$58 CAD/person")
-  const tokens = normEx.split(' ').filter((t) => t.length >= 2);
-  if (tokens.length === 0) return false;
-  const matched = tokens.filter((t) => normSrc.includes(t)).length;
-  return matched / tokens.length >= 0.7;
+  const finTokens = extractFinancialTokens(excerpt);
+  const rawLines = fullSourceText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  // Build local spans: individual lines + adjacent 2- and 3-line windows (handles card headers
+  // like Title / Badge / Price without allowing document-wide bag-of-words assembly).
+  const localSpans: string[] = [];
+  for (let i = 0; i < rawLines.length; i++) {
+    localSpans.push(rawLines[i]!);
+    if (i + 1 < rawLines.length) {
+      localSpans.push(`${rawLines[i]!} ${rawLines[i + 1]!}`);
+    }
+    if (i + 2 < rawLines.length) {
+      localSpans.push(`${rawLines[i]!} ${rawLines[i + 1]!} ${rawLines[i + 2]!}`);
+    }
+  }
+  if (localSpans.length === 0) return false;
+
+  const exWords = normEx.split(' ').filter((t) => t.length >= 2);
+
+  for (const rawSpan of localSpans) {
+    const normSpan = normalizeText(rawSpan);
+    const spanNoCommas = rawSpan.replace(/,/g, '').toLowerCase();
+
+    // Every numeric/currency/percentage token in the excerpt MUST appear in this local span
+    const allFinancialMatch = finTokens.every((ft) => spanContainsFinancialToken(spanNoCommas, ft));
+    if (!allFinancialMatch) continue;
+
+    if (normSpan.includes(normEx)) return true;
+
+    if (exWords.length > 0) {
+      const matched = exWords.filter((w) => normSpan.includes(w)).length;
+      if (matched / exWords.length >= 0.75) return true;
+    }
+  }
+
+  return false;
 }
 
 function collectAllExcerpts(q: ExtractedQuote): string[] {
@@ -118,7 +163,7 @@ export interface BenchmarkCaseResult {
   };
 }
 
-function gradeBenchmarkCase(
+export function gradeBenchmarkCase(
   bc: BenchmarkCase,
   rawResponse: unknown,
   latencyMs: number,
@@ -232,21 +277,43 @@ function gradeBenchmarkCase(
   const kindOk = q.quoteKind === bc.expected.quoteKind;
   checkField('quoteKind', kindOk, kindOk ? undefined : `quoteKind: got "${q.quoteKind}", expected "${bc.expected.quoteKind}"`);
 
-  // Tax status & percent
+  // Tax status & percent (wrong tax rate/status materially alters all-in financial totals)
+  let taxOrGratuityFinancialError = false;
   const taxStatusOk = q.taxStatus === bc.expected.taxStatus;
   checkField('taxStatus', taxStatusOk, taxStatusOk ? undefined : `taxStatus: got "${q.taxStatus}", expected "${bc.expected.taxStatus}"`);
+  if (!taxStatusOk) {
+    taxOrGratuityFinancialError = true;
+    criticalFinancialError = true;
+    releaseBlockers.push(
+      `Critical financial error (taxStatus): got "${q.taxStatus}", expected "${bc.expected.taxStatus}"`,
+    );
+  }
   if (bc.expected.taxPercent !== undefined) {
     const taxPctOk =
       bc.expected.taxPercent === null
         ? q.taxPercent === null || q.taxPercent === undefined
         : q.taxPercent === bc.expected.taxPercent;
     checkField('taxPercent', taxPctOk, taxPctOk ? undefined : `taxPercent: got ${q.taxPercent}, expected ${bc.expected.taxPercent}`);
+    if (!taxPctOk) {
+      taxOrGratuityFinancialError = true;
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error (taxPercent): got ${q.taxPercent}, expected ${bc.expected.taxPercent}`,
+      );
+    }
   }
 
-  // Gratuity status / percent / basis
+  // Gratuity status / percent / basis (wrong gratuity rate/basis materially alters all-in totals)
   if (bc.expected.gratuityStatus !== undefined) {
     const ok = q.gratuityStatus === bc.expected.gratuityStatus;
     checkField('gratuityStatus', ok, ok ? undefined : `gratuityStatus: got "${q.gratuityStatus}", expected "${bc.expected.gratuityStatus}"`);
+    if (!ok) {
+      taxOrGratuityFinancialError = true;
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error (gratuityStatus): got "${q.gratuityStatus}", expected "${bc.expected.gratuityStatus}"`,
+      );
+    }
   }
   if (bc.expected.gratuityPercent !== undefined) {
     const ok =
@@ -254,10 +321,24 @@ function gradeBenchmarkCase(
         ? q.gratuityPercent === null || q.gratuityPercent === undefined
         : q.gratuityPercent === bc.expected.gratuityPercent;
     checkField('gratuityPercent', ok, ok ? undefined : `gratuityPercent: got ${q.gratuityPercent}, expected ${bc.expected.gratuityPercent}`);
+    if (!ok) {
+      taxOrGratuityFinancialError = true;
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error (gratuityPercent): got ${q.gratuityPercent}, expected ${bc.expected.gratuityPercent}`,
+      );
+    }
   }
   if (bc.expected.gratuityBasis !== undefined) {
     const ok = q.gratuityBasis === bc.expected.gratuityBasis;
     checkField('gratuityBasis', ok, ok ? undefined : `gratuityBasis: got "${q.gratuityBasis}", expected "${bc.expected.gratuityBasis}"`);
+    if (!ok) {
+      taxOrGratuityFinancialError = true;
+      criticalFinancialError = true;
+      releaseBlockers.push(
+        `Critical financial error (gratuityBasis): got "${q.gratuityBasis}", expected "${bc.expected.gratuityBasis}"`,
+      );
+    }
   }
 
   // Venue minGuests & maxCapacity
@@ -520,11 +601,12 @@ function gradeBenchmarkCase(
   const fieldKeys = Object.keys(details);
   const fieldMatched = fieldKeys.filter((k) => details[k]).length;
 
-  // End-to-end pass: schema valid + 0 release blockers + 0 critical financial errors + core fields/unknowns match
+  // End-to-end pass: schema valid + 0 release blockers + 0 critical financial errors (incl. tax/gratuity) + core fields/unknowns match
   const endToEndPassed =
     schemaErrors.length === 0 &&
     releaseBlockers.length === 0 &&
     !criticalFinancialError &&
+    !taxOrGratuityFinancialError &&
     catOk &&
     curOk &&
     kindOk &&
@@ -938,7 +1020,11 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exitCode = 1;
-});
+const isMain =
+  process.argv[1] && resolve(process.argv[1]) === resolve('scripts/run-model-benchmark.ts');
+if (isMain) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
+}
