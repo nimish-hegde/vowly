@@ -186,6 +186,7 @@ function VowlyAppContent() {
               <VendorsView
                 initialMode={vendorsMode}
                 initialCompareEventId={compareEventId}
+                onEditApprovedQuote={openEditApprovedQuote}
                 onAddVendor={openAddVendorGlobal}
                 onOpenVendor={(id) => setSelectedVendorId(id)}
                 onOpenQuoteImport={openQuoteImport}
