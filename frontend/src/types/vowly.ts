@@ -93,6 +93,13 @@ export interface StructuredInclusion {
   sourceExcerpt?: string;
 }
 
+export interface IncludedPricingItem {
+  label: string;
+  extractedHours?: number;
+  sourceExcerpt: string;
+  packageId?: string;
+}
+
 export interface QuotePackageOption {
   id: string;
   name: string;
@@ -105,6 +112,7 @@ export interface QuotePackageOption {
   hours?: number;
   isFoodItem?: boolean;
   fees?: QuoteLineItem[];
+  includedPricingItems?: IncludedPricingItem[];
   taxHandling?: TaxHandling;
   taxPercent?: number | null;
   gratuityStatus?: 'included' | 'excluded' | 'unknown';
@@ -143,8 +151,11 @@ export interface QuoteLineItem {
   label: string;
   pricingModel: LineItemPricingModel;
   unitPrice: number;
-  quantity?: number; // hours for hourly, or fixed count
-  isConditionalOvertime?: boolean; // conditional extra/overtime hourly rate (defaults to 0 hrs)
+  quantity?: number; // confirmed quantity; extra hours on a conditional rate
+  extractedHours?: number;
+  chargeType?: 'mandatory' | 'conditional' | 'optional';
+  sourceExcerpt?: string;
+  isConditionalOvertime?: boolean; // explicit review override; undefined lets imported facts decide
   includedPackageHours?: number; // included base package hours before overtime applies
   ratioDivisor?: number; // e.g., 75 guests per bartender for guest_ratio
   unitLabel?: string; // e.g., "bartender", "table"
@@ -265,6 +276,8 @@ export interface Quote {
   gratuityPercent?: number | null;
   gratuityBasis?: PercentageBasis;
   serviceDurationHours?: number;
+  extraHourRate?: number;
+  includedPricingItems?: IncludedPricingItem[];
   minGuests?: number;
   maxCapacity?: number;
   packages?: QuotePackageOption[];

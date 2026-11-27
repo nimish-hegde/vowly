@@ -1162,8 +1162,9 @@ test('UAT HSR Photography: "Additional Hourly Pricing: $250/hr" defaults to $900
   // Conditional "Additional Hourly Pricing: $250/hr" defaults to 0 hrs -> $900 subtotal
   const calc = calculateQuoteFinancials(mapped.quote, ws.events, []);
   assert.equal(calc.preTaxTotal, 900);
-  assert.equal(mapped.quote.lineItems[1].isConditionalOvertime, true);
-  assert.equal(mapped.quote.lineItems[1].quantity, 0);
+  const overtime = calc.lineItemBreakdowns.find((row) => row.id === mapped.quote.lineItems[1].id);
+  assert.equal(overtime?.conditionalOvertime, true);
+  assert.equal(overtime?.billableHours, 0);
 
   // Explicit date parsing + Booking schedule propagation (NEVER July 14, 2027 or hardcoded dates)
   assert.equal(normalizeIsoDate('August 13, 2027'), '2027-08-13');
@@ -1620,4 +1621,215 @@ test('Issue #3: calculateVendorComparison computes CAD 500 break-even bartender 
   const capComp = calculateVendorComparison([juniperVenue, mapleVenue], ws.events, 160);
   const mapleEntry = capComp.entries.find((e) => e.vendor.id === 'v-maple-be')!;
   assert.equal(mapleEntry.calc.capacityExceeded, true);
+});
+
+test('direct approval and booking enforce package, cost, conflict, currency, and source blockers', () => {
+  const workspace = createDemoWorkspace();
+  const vendor = workspace.vendors.find((v) => v.id === 'ven-versailles')!;
+  const cases: Array<{ reason: RegExp; overrides: Partial<Quote> }> = [
+    { reason: /currency/i, overrides: { currency: 'UNKNOWN' } },
+    {
+      reason: /mandatory.*fee/i,
+      overrides: {
+        unconfirmedFees: [
+          { id: 'unknown-av', label: 'AV fee', description: 'TBD', mandatory: true, status: 'unconfirmed' },
+        ],
+      },
+    },
+    {
+      reason: /package option/i,
+      overrides: {
+        packages: [
+          { id: 'mini', name: 'Mini', pricingModel: 'flat', unitPrice: 8000, inclusions: [] },
+          { id: 'full', name: 'Full', pricingModel: 'flat', unitPrice: 10000, inclusions: [] },
+        ],
+      },
+    },
+    {
+      reason: /conflicting price/i,
+      overrides: {
+        conflicts: [{
+          id: 'conf-base', fieldLabel: 'Base price', description: 'Conflicting quotes',
+          targetLineItemId: 'li-test-1',
+          options: [
+            { id: 'one', label: 'Email price', sourceLabel: 'Email', amount: 9000 },
+            { id: 'two', label: 'Contract price', sourceLabel: 'Contract', amount: 10000 },
+          ],
+        }],
+      },
+    },
+    {
+      reason: /mandatory gratuity/i,
+      overrides: { gratuityStatus: 'excluded', gratuityPercent: null },
+    },
+    {
+      reason: /calculation basis/i,
+      overrides: {
+        lineItems: [{
+          id: 'fee-1', label: 'Admin charge', pricingModel: 'percentage', unitPrice: 5,
+          percentageBasis: 'unknown',
+        }],
+      },
+    },
+    {
+      reason: /source evidence/i,
+      overrides: {
+        sourceWarnings: ['The line-item excerpt could not be located in the source.'],
+        sourceWarningsAcknowledged: false,
+      },
+    },
+  ];
+
+  for (const { reason, overrides } of cases) {
+    const quote = makeCleanQuote(overrides);
+    const approval = applyApproveQuote(workspace, vendor.id, null, quote, vendor.id);
+    assert.equal(approval.approved, false, reason.toString());
+    assert.equal(approval.workspace, workspace);
+    assert.ok(approval.blockingReasons.some((item) => reason.test(item)), reason.toString());
+
+    const draft = applySaveDraftQuote(workspace, vendor.id, null, quote, vendor.id).workspace;
+    assert.equal(draft.vendors.find((item) => item.id === vendor.id)!.draftQuote?.approvalState, 'draft');
+    assert.equal(calculateWorkspaceFinancials(draft).projectedSpend, calculateWorkspaceFinancials(workspace).projectedSpend);
+
+    const staleWorkspace = {
+      ...workspace,
+      vendors: workspace.vendors.map((item) =>
+        item.id === vendor.id ? { ...item, quotes: [quote], activeQuoteId: quote.id } : item
+      ),
+    };
+    const booking = applyConfirmBooking(staleWorkspace, {
+      vendorId: vendor.id,
+      contractTotal: 11300,
+      milestones: [{
+        label: 'Balance', status: 'Date TBD', amount: 11300, dueDate: null, reminderEnabled: false,
+      }],
+    });
+    assert.equal(booking.booked, false, reason.toString());
+    assert.equal(booking.workspace, staleWorkspace);
+    assert.ok(booking.blockingReasons.some((item) => reason.test(item)), reason.toString());
+  }
+});
+
+test('approving one quote cannot discard a different pending draft', () => {
+  const workspace = createDemoWorkspace();
+  const vendor = workspace.vendors.find((v) => v.id === 'ven-versailles')!;
+  const pending = makeCleanQuote({ id: 'resume-this-draft' });
+  const staged = applySaveDraftQuote(workspace, vendor.id, null, pending, vendor.id).workspace;
+
+  const rejected = applyApproveQuote(staged, vendor.id, null, makeCleanQuote(), vendor.id);
+  assert.equal(rejected.approved, false);
+  assert.equal(rejected.workspace, staged);
+  assert.match(rejected.blockingReasons[0], /pending draft/i);
+
+  const approved = applyApproveQuote(staged, vendor.id, null, pending, vendor.id);
+  assert.equal(approved.approved, true);
+  assert.equal(approved.workspace.vendors.find((item) => item.id === vendor.id)!.activeQuoteId, pending.id);
+});
+
+test('booking reconciles existing paid milestones and protects the confirmed contract', () => {
+  const original = createDemoWorkspace();
+  const vendor = original.vendors.find((v) => v.id === 'ven-versailles')!;
+  const priorPayment = {
+    id: 'prior-deposit',
+    vendorId: vendor.id,
+    vendorName: vendor.name,
+    label: 'Prior deposit',
+    amount: 22.33,
+    dueDate: '2026-11-24',
+    paidDate: '2026-11-24',
+    status: 'Paid' as const,
+    reminderEnabled: false,
+  };
+  const ws = {
+    ...original,
+    payments: [...original.payments.filter((p) => p.vendorId !== vendor.id), priorPayment],
+  };
+  const inputs = {
+    vendorId: vendor.id,
+    contractTotal: 100.01,
+    milestones: [{
+      label: 'Balance', status: 'Upcoming' as const, amount: 77.68, dueDate: '2027-06-01', reminderEnabled: true,
+    }],
+  };
+  const mismatched = applyConfirmBooking(ws, {
+    ...inputs, milestones: [{ ...inputs.milestones[0], amount: 77.67 }],
+  });
+  assert.equal(mismatched.booked, false);
+  assert.equal(mismatched.workspace, ws);
+  assert.match(mismatched.blockingReasons[0], /add up to the agreed contract total/i);
+
+  const booked = applyConfirmBooking(ws, inputs);
+  assert.equal(booked.booked, true);
+  const payments = booked.workspace.payments.filter((p) => p.vendorId === vendor.id);
+  assert.equal(payments.length, 2);
+  assert.deepEqual(payments[0], priorPayment);
+  assert.equal(payments[1].status, 'Upcoming');
+  assert.equal(payments[1].amount, 77.68);
+  assert.equal(booked.workspace.vendors.find((v) => v.id === vendor.id)!.bookedContractTotal, 100.01);
+
+  const repeated = applyConfirmBooking(booked.workspace, inputs);
+  assert.equal(repeated.booked, false);
+  assert.equal(repeated.workspace, booked.workspace);
+});
+
+test('ambiguous v1 overtime stays billable until the couple explicitly reviews the quantity', () => {
+  const ws = createDemoWorkspace();
+  const vendor = ws.vendors.find((v) => v.id === 'ven-versailles')!;
+  const quote = makeCleanQuote({
+    legacyReviewAcknowledged: true,
+    lineItems: [
+      { id: 'base', label: 'Full Collection', pricingModel: 'flat', unitPrice: 3100 },
+      { id: 'rate', label: 'Overtime', pricingModel: 'hourly', unitPrice: 275 },
+    ],
+  });
+  const restored = JSON.parse(JSON.stringify(quote)) as Quote;
+  const previous = calculateQuoteFinancials(restored, ws.events, vendor.eventIds);
+  assert.equal(previous.preTaxTotal, 3375);
+
+  const blocked = applyApproveQuote(ws, vendor.id, null, restored, vendor.id);
+  assert.equal(blocked.approved, false);
+  assert.equal(blocked.workspace, ws);
+  assert.match(blocked.blockingReasons[0], /hourly quantity|overtime/i);
+
+  restored.lineItems[1] = {
+    ...restored.lineItems[1],
+    isConditionalOvertime: false,
+    quantity: 1,
+  };
+  const approved = applyApproveQuote(ws, vendor.id, null, restored, vendor.id);
+  assert.equal(approved.approved, true);
+  assert.equal(calculateQuoteFinancials(restored, ws.events, vendor.eventIds).preTaxTotal, 3375);
+});
+
+test('workspace minimums do not change a separately selected per-guest add-on', () => {
+  const quote = makeCleanQuote({
+    minGuests: 200,
+    taxPercent: 13,
+    addOns: [{
+      id: 'li-extra-dessert',
+      label: 'Dessert',
+      description: 'Optional dessert',
+      pricingModel: 'per_person',
+      pricePreTax: 20,
+      selected: true,
+    }],
+  });
+  const calc = calculateQuoteFinancials(quote, [], [], 100);
+  assert.equal(calc.selectedAddOnsPreTax, 2000);
+  assert.equal(calc.preTaxTotal, 12000);
+  assert.equal(calc.taxAmount, 1560);
+  assert.equal(calc.estimatedAllInTotal, 13560);
+});
+
+test('saved v1 demo workspace round trips its projected, committed, and paid totals', () => {
+  const stored = JSON.stringify({ workspaces: [createDemoWorkspace()] });
+  const [workspace] = JSON.parse(stored).workspaces;
+  const before = calculateWorkspaceFinancials(workspace);
+  const [reopened] = JSON.parse(JSON.stringify({ workspaces: [workspace] })).workspaces;
+  const after = calculateWorkspaceFinancials(reopened);
+
+  assert.equal(before.projectedSpend, 96177.20);
+  assert.equal(before.committedSpend, 30555.20);
+  assert.equal(before.paidToDate, 8000);
+  assert.deepEqual(after, before);
 });

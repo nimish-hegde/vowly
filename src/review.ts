@@ -311,17 +311,17 @@ export function approveQuote(
   if (session.status !== 'pending_review') {
     return budget;
   }
-  const blockers = getApprovalBlockers(session);
-  if (blockers.length > 0) {
-    throw new Error(blockers.join(' '));
-  }
-  session.status = 'approved';
-
   const calc = calculateQuoteTotal(session.draftQuote, {
     guestCount: session.guestCount,
     hours: session.hours,
   });
   session.calculation = calc;
+
+  const blockers = getApprovalBlockers(session);
+  if (blockers.length > 0) {
+    throw new Error(blockers.join(' '));
+  }
+  session.status = 'approved';
 
   const currency = session.draftQuote.currency;
   const previous = budget.committedTotals[currency] ?? 0;

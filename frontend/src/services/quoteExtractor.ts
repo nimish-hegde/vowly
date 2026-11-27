@@ -1,6 +1,7 @@
 import type {
   CurrencyCode,
   CurrencySource,
+  IncludedPricingItem,
   LineItemPricingModel,
   PercentageBasis,
   Quote,
@@ -1015,104 +1016,6 @@ export function formatStructuredInclusion(inc: StructuredInclusion): string {
   return cleanName;
 }
 
-const WORD_TO_HOURS: Record<string, number> = {
-  one: 1,
-  two: 2,
-  three: 3,
-  four: 4,
-  five: 5,
-  six: 6,
-  seven: 7,
-  eight: 8,
-  nine: 9,
-  ten: 10,
-  eleven: 11,
-  twelve: 12,
-};
-
-function parseHoursFromText(text: string): number | undefined {
-  const numMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:-|\s)?(?:hours?|hrs?)\b/i);
-  if (numMatch) {
-    const val = Number(numMatch[1]);
-    if (Number.isFinite(val) && val > 0) return val;
-  }
-  const wordMatch = text.match(
-    /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*(?:-|\s)?(?:hours?|hrs?)\b/i
-  );
-  if (wordMatch) {
-    return WORD_TO_HOURS[wordMatch[1].toLowerCase()];
-  }
-  return undefined;
-}
-
-const OVERTIME_PATTERN =
-  /\b(additional|extra|overtime|extension|extended|subsequent)\s*(hourly|hours?|hrs?)\b|\b(hourly|hours?|hrs?)\s*(extension|overtime)\b|\b(after|beyond)\s+\d+\s*(hours?|hrs?)\b|\bovertime\b/i;
-
-function findIncludedHoursFromBackendQuote(
-  bq: BackendExtractedQuote,
-  excludeIdx: number,
-  pkgContext?: BackendPackageOption
-): number | undefined {
-  if (pkgContext?.hours !== undefined && pkgContext.hours > 0) {
-    return pkgContext.hours;
-  }
-  let hasSiblingFlat = Boolean(
-    pkgContext?.pricingType === 'flat' || bq.packages?.some((p) => p.pricingType === 'flat')
-  );
-  for (let i = 0; i < bq.lineItems.length; i++) {
-    if (i === excludeIdx) continue;
-    const sibling = bq.lineItems[i];
-    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
-    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
-      hasSiblingFlat = true;
-      if (sibling.hours !== undefined && sibling.hours > 0) return sibling.hours;
-    }
-  }
-  if (hasSiblingFlat && bq.photographerDetails?.hoursIncluded && bq.photographerDetails.hoursIncluded > 0) {
-    return bq.photographerDetails.hoursIncluded;
-  }
-  if (hasSiblingFlat && bq.serviceDurationHours && bq.serviceDurationHours > 0) {
-    return bq.serviceDurationHours;
-  }
-  for (let i = 0; i < bq.lineItems.length; i++) {
-    if (i === excludeIdx) continue;
-    const sibling = bq.lineItems[i];
-    if (sibling.optionalAddon === true || sibling.chargeType === 'optional') continue;
-    if (sibling.pricingType === 'flat' || sibling.pricingType === 'included') {
-      const fromLabel = parseHoursFromText(sibling.label);
-      if (fromLabel !== undefined) return fromLabel;
-      const fromExcerpt = parseHoursFromText(sibling.sourceExcerpt);
-      if (fromExcerpt !== undefined) return fromExcerpt;
-    }
-  }
-  if (hasSiblingFlat) {
-    const allIncs = [...(pkgContext?.inclusions ?? []), ...(bq.inclusions ?? [])];
-    for (const inc of allIncs) {
-      if (
-        inc.durationHours !== undefined &&
-        inc.durationHours > 0 &&
-        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
-      ) {
-        return inc.durationHours;
-      }
-      if (
-        inc.quantity !== undefined &&
-        inc.quantity > 0 &&
-        inc.unit &&
-        /\b(hours?|hrs?)\b/i.test(inc.unit) &&
-        !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)
-      ) {
-        return inc.quantity;
-      }
-      const fromInc = parseHoursFromText(inc.name);
-      if (fromInc !== undefined && !/\b(second|2nd|assistant|booth)\b/i.test(inc.name)) {
-        return fromInc;
-      }
-    }
-  }
-  return undefined;
-}
-
 function mapPricingTypeToModel(pricingType: string): LineItemPricingModel {
   if (pricingType === 'per_person') return 'per_person';
   if (pricingType === 'per_extra_guest') return 'per_extra_guest';
@@ -1157,6 +1060,7 @@ export function mapBackendExtractionToFrontendResult(
   const unconfirmedFees: QuoteUnconfirmedFee[] = [];
   const conflicts: QuoteConflict[] = [];
   const inclusionStrings: string[] = [];
+  const includedPricingItems: IncludedPricingItem[] = [];
 
   const mapBackendItem = (
     item: BackendLineItem,
@@ -1167,6 +1071,7 @@ export function mapBackendExtractionToFrontendResult(
       pkgContext?: BackendPackageOption;
       targetLineItems: QuoteLineItem[];
       targetInclusions: string[];
+      targetIncludedPricingItems: IncludedPricingItem[];
     }
   ) => {
     const targetLineItems = options?.targetLineItems ?? lineItems;
@@ -1177,6 +1082,13 @@ export function mapBackendExtractionToFrontendResult(
 
     if (item.pricingType === 'included') {
       targetInclusions.push(item.label);
+      const target = options?.targetIncludedPricingItems ?? includedPricingItems;
+      target.push({
+        label: item.label,
+        extractedHours: item.hours,
+        sourceExcerpt: item.sourceExcerpt,
+        packageId: scopedPackageId,
+      });
       return;
     }
 
@@ -1217,37 +1129,15 @@ export function mapBackendExtractionToFrontendResult(
     }
 
     const pricingModel = mapPricingTypeToModel(item.pricingType);
-    const includedPackageHours =
-      pricingModel === 'hourly'
-        ? findIncludedHoursFromBackendQuote(
-            bq,
-            options?.pkgContext ? -1 : idx,
-            options?.pkgContext
-          )
-        : undefined;
-    const isConditionalOvertime =
-      pricingModel === 'hourly' &&
-      includedPackageHours !== undefined &&
-      !(item.hours !== undefined && item.hours > 1) &&
-      ((bq.photographerDetails?.extraHourRate !== undefined &&
-        Math.abs(item.amount - bq.photographerDetails.extraHourRate) < 0.01) ||
-        OVERTIME_PATTERN.test(item.label) ||
-        OVERTIME_PATTERN.test(item.sourceExcerpt));
-
     const liId = `li-${idPrefix}-${idx}-${Date.now()}`;
     targetLineItems.push({
       id: liId,
       label: item.label,
       pricingModel,
       unitPrice: pricingModel === 'percentage' ? (item.percentageRate ?? item.amount) : item.amount,
-      quantity:
-        pricingModel === 'hourly'
-          ? isConditionalOvertime
-            ? 0
-            : item.hours
-          : undefined,
-      isConditionalOvertime: isConditionalOvertime || undefined,
-      includedPackageHours: isConditionalOvertime ? includedPackageHours : undefined,
+      extractedHours: item.hours,
+      chargeType: item.chargeType,
+      sourceExcerpt: item.sourceExcerpt,
       ratioDivisor: item.ratioGuests,
       unitLabel: item.unitLabel,
       percentageBasis: item.percentageBasis,
@@ -1339,12 +1229,14 @@ export function mapBackendExtractionToFrontendResult(
             })
             .filter(Boolean);
           const pkgFees: QuoteLineItem[] = [];
+          const pkgIncludedPricingItems: IncludedPricingItem[] = [];
           (pkg.fees ?? []).forEach((fee, fIdx) => {
             mapBackendItem(fee, `pkg${pkgIdx}`, fIdx, {
               packageId: pkgId,
               pkgContext: pkg,
               targetLineItems: pkgFees,
               targetInclusions: pkgInclusionStrings,
+              targetIncludedPricingItems: pkgIncludedPricingItems,
             });
           });
           const pkgPayParts: string[] = [];
@@ -1373,6 +1265,7 @@ export function mapBackendExtractionToFrontendResult(
             hours: pkg.hours,
             isFoodItem: pkg.isFoodItem,
             fees: pkgFees.length > 0 ? pkgFees : undefined,
+            includedPricingItems: pkgIncludedPricingItems.length > 0 ? pkgIncludedPricingItems : undefined,
             taxHandling: pkg.taxStatus ? mapBackendTaxStatus(pkg.taxStatus) : undefined,
             taxPercent:
               pkg.taxPercent !== undefined && pkg.taxPercent !== null
@@ -1460,6 +1353,8 @@ export function mapBackendExtractionToFrontendResult(
     gratuityBasis: bq.gratuityBasis,
     serviceDurationHours:
       bq.serviceDurationHours ?? bq.photographerDetails?.hoursIncluded,
+    extraHourRate: bq.photographerDetails?.extraHourRate,
+    includedPricingItems: includedPricingItems.length > 0 ? includedPricingItems : undefined,
     minGuests: bq.venueDetails?.minGuests,
     maxCapacity: bq.venueDetails?.maxCapacity,
     packages,

@@ -2,7 +2,6 @@ import type {
   BudgetRow,
   PastelTone,
   PaymentMilestone,
-  PercentageBasis,
   Quote,
   QuoteLineItem,
   QuotePackageOption,
@@ -13,10 +12,10 @@ import type {
   WeddingWorkspace,
 } from '../types/vowly';
 
-export const ONTARIO_HST_RATE = 0.13;
+import { findAmbiguousLegacyOvertimeItems } from './legacyOvertimeReview.ts';
+import { calculateQuote, roundMoney, type LineItem, type PackageOption, type PricingType, type TaxStatus } from '../../../shared/finance/calculator.ts';
 
-const FOOD_ITEM_PATTERN =
-  /\b(banquet|dinner|buffet|menu|catering|food|meal|entree|appetizer|dessert|plated|brunch|lunch|reception package|per[\s-]person|per[\s-]guest)\b/i;
+export const ONTARIO_HST_RATE = 0.13;
 
 export function resolveRelativeDeadlineDate(
   eventDateIso: string | undefined,
@@ -42,6 +41,8 @@ export interface LineItemBreakdown {
   isThirdParty?: boolean;
   thirdPartyProvider?: string;
   unresolvedBasis?: boolean;
+  conditionalOvertime?: boolean;
+  billableHours?: number;
 }
 
 export interface QuoteCalculationResult {
@@ -152,188 +153,6 @@ function getEventGuestCountMap(events: WeddingEvent[]): Record<string, number | 
   return map;
 }
 
-function resolveLineItemAmount(
-  item: QuoteLineItem,
-  guestMap: Record<string, number | null>,
-  fallbackGuests: number | null,
-  guestCountOverride?: number | null
-): {
-  amount: number;
-  guestsUsed: number | null;
-  minApplied: boolean;
-  appliedMin: number | null;
-  guestMissing: boolean;
-} {
-  const rawGuests =
-    guestCountOverride !== undefined
-      ? guestCountOverride
-      : item.eventId && item.eventId in guestMap
-        ? guestMap[item.eventId]
-        : fallbackGuests;
-
-  if (item.pricingModel === 'per_person') {
-    const minFloor = item.minGuests ?? 0;
-    if (rawGuests === null) {
-      if (minFloor > 0) {
-        return {
-          amount: minFloor * item.unitPrice,
-          guestsUsed: minFloor,
-          minApplied: true,
-          appliedMin: minFloor,
-          guestMissing: true,
-        };
-      }
-      return {
-        amount: 0,
-        guestsUsed: null,
-        minApplied: false,
-        appliedMin: null,
-        guestMissing: true,
-      };
-    }
-    const minApplied = minFloor > 0 && rawGuests < minFloor;
-    const effective = Math.max(rawGuests, minFloor);
-    return {
-      amount: effective * item.unitPrice,
-      guestsUsed: effective,
-      minApplied,
-      appliedMin: minApplied ? minFloor : null,
-      guestMissing: false,
-    };
-  }
-
-  if (item.pricingModel === 'per_extra_guest') {
-    const threshold = item.guestThreshold ?? item.minGuests ?? 0;
-    if (rawGuests === null) {
-      return {
-        amount: 0,
-        guestsUsed: null,
-        minApplied: false,
-        appliedMin: null,
-        guestMissing: true,
-      };
-    }
-    const extraGuests = Math.max(0, rawGuests - threshold);
-    return {
-      amount: extraGuests * item.unitPrice,
-      guestsUsed: rawGuests,
-      minApplied: false,
-      appliedMin: null,
-      guestMissing: false,
-    };
-  }
-
-  if (item.pricingModel === 'guest_ratio') {
-    if (rawGuests === null) {
-      return {
-        amount: 0,
-        guestsUsed: null,
-        minApplied: false,
-        appliedMin: null,
-        guestMissing: true,
-      };
-    }
-    const divisor = item.ratioDivisor && item.ratioDivisor > 0 ? item.ratioDivisor : 10;
-    const units = Math.ceil(rawGuests / divisor);
-    return {
-      amount: units * item.unitPrice,
-      guestsUsed: rawGuests,
-      minApplied: false,
-      appliedMin: null,
-      guestMissing: false,
-    };
-  }
-
-  if (item.pricingModel === 'hourly') {
-    const hours = item.isConditionalOvertime ? (item.quantity ?? 0) : (item.quantity ?? 1);
-    return {
-      amount: hours * item.unitPrice,
-      guestsUsed: null,
-      minApplied: false,
-      appliedMin: null,
-      guestMissing: false,
-    };
-  }
-
-  // flat
-  const qty = item.quantity ?? 1;
-  return {
-    amount: qty * item.unitPrice,
-    guestsUsed: null,
-    minApplied: false,
-    appliedMin: null,
-    guestMissing: false,
-  };
-}
-
-function resolvePercentageBasis(
-  basis: PercentageBasis | undefined,
-  baseItems: Array<{ item: QuoteLineItem; amount: number | null }>,
-  options?: { targetLabels?: string[]; customBasisAmount?: number }
-): { amount: number | null; label: string } {
-  const effectiveBasis = basis ?? 'unknown';
-  if (effectiveBasis === 'unknown') {
-    return { amount: null, label: 'calculation basis unresolved' };
-  }
-  if (effectiveBasis === 'custom_amount') {
-    if (
-      options?.customBasisAmount !== undefined &&
-      Number.isFinite(options.customBasisAmount) &&
-      options.customBasisAmount >= 0
-    ) {
-      return {
-        amount: Math.round(options.customBasisAmount * 100) / 100,
-        label: 'confirmed custom amount',
-      };
-    }
-    return { amount: null, label: 'custom amount not confirmed' };
-  }
-  if (effectiveBasis === 'entire_subtotal') {
-    const sum = baseItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
-    return { amount: Math.round(sum * 100) / 100, label: 'applicable subtotal' };
-  }
-  if (effectiveBasis === 'food_subtotal') {
-    const foodItems = baseItems.filter(
-      (e) =>
-        e.item.isFoodItem === true ||
-        (e.item.isFoodItem !== false &&
-          !e.item.isThirdParty &&
-          e.item.pricingModel !== 'guest_ratio' &&
-          FOOD_ITEM_PATTERN.test(e.item.label))
-    );
-    if (foodItems.length === 0 || foodItems.some((e) => e.amount === null)) {
-      return { amount: null, label: 'food subtotal unresolved' };
-    }
-    const sum = foodItems.reduce((acc, e) => acc + (e.amount ?? 0), 0);
-    return { amount: Math.round(sum * 100) / 100, label: 'food subtotal' };
-  }
-  if (effectiveBasis === 'specific_line_items') {
-    const targets = (options?.targetLabels ?? [])
-      .map((t) => t.toLowerCase().trim())
-      .filter(Boolean);
-    if (targets.length === 0) {
-      return { amount: null, label: 'target line items unresolved' };
-    }
-    const matched = baseItems.filter((e) =>
-      targets.some((t) => e.item.label.toLowerCase().includes(t))
-    );
-    if (matched.length === 0 || matched.some((e) => e.amount === null)) {
-      return { amount: null, label: 'target line items unresolved' };
-    }
-    const sum = matched.reduce((acc, e) => acc + (e.amount ?? 0), 0);
-    return { amount: Math.round(sum * 100) / 100, label: targets.join(', ') };
-  }
-  return { amount: null, label: 'calculation basis unresolved' };
-}
-
-function isDuplicateGratuityPercentageItem(item: QuoteLineItem, quote: Quote): boolean {
-  if (item.pricingModel !== 'percentage') return false;
-  if (!/\b(gratuity|tip|service\s*charge)\b/i.test(item.label)) return false;
-  if (quote.gratuityStatus !== 'excluded') return false;
-  if (quote.gratuityPercent === undefined || quote.gratuityPercent === null) return false;
-  return Math.abs(item.unitPrice - quote.gratuityPercent) < 0.01;
-}
-
 const EXTRA_GUEST_LABEL_PATTERN =
   /\b(extra|additional)\s+(guests?|persons?|people|plates?)\b|\bguests?\s+(over|above|beyond)\b/i;
 
@@ -389,54 +208,16 @@ export function getTaxStatusLabel(taxHandling: TaxHandling, taxRate: number): st
   }
 }
 
-function isRedundantExtraGuestLineItem(
-  item: QuoteLineItem,
-  activeItems: QuoteLineItem[],
-  quote: Quote,
-  selectedPackage?: QuotePackageOption
-): boolean {
-  if (selectedPackage && item.id === `pkg-active-${selectedPackage.id}`) return false;
-  const isExtraGuestCandidate =
-    item.pricingModel === 'per_extra_guest' ||
-    (item.pricingModel === 'per_person' && EXTRA_GUEST_LABEL_PATTERN.test(item.label));
-  if (!isExtraGuestCandidate) return false;
-
-  if (
-    selectedPackage &&
-    selectedPackage.pricingModel === 'per_person' &&
-    selectedPackage.unitPrice !== null &&
-    Math.abs(selectedPackage.unitPrice - item.unitPrice) < 0.01
-  ) {
-    return true;
-  }
-  if (
-    !item.packageId &&
-    (quote.packages ?? []).some(
-      (p) =>
-        p.pricingModel === 'per_person' &&
-        p.unitPrice !== null &&
-        Math.abs(p.unitPrice - item.unitPrice) < 0.01
-    )
-  ) {
-    return true;
-  }
-
-  return activeItems.some(
-    (sibling) =>
-      sibling.id !== item.id &&
-      sibling.pricingModel === 'per_person' &&
-      !EXTRA_GUEST_LABEL_PATTERN.test(sibling.label) &&
-      Math.abs(sibling.unitPrice - item.unitPrice) < 0.01
-  );
-}
-
 /**
  * Flags legacy saved quotes that exhibit known pre-fix calculation failure patterns
  * so they are never silently retained as bookable without user re-review.
  */
 export function detectLegacyQuoteReviewReasons(quote: Quote): string[] {
-  if (quote.legacyReviewAcknowledged) return [];
-  const reasons: string[] = [];
+  const ambiguousOvertime = findAmbiguousLegacyOvertimeItems(quote);
+  const reasons = ambiguousOvertime.map((item) =>
+    `Additional hourly rate ("${item.label}") is billed by default — verify whether extra hours are needed.`
+  );
+  if (quote.legacyReviewAcknowledged) return reasons;
 
   // 1. Multiple per_person package/tier items summed in a legacy quote without packages[]
   if (!quote.packages || quote.packages.length === 0) {
@@ -468,7 +249,9 @@ export function detectLegacyQuoteReviewReasons(quote: Quote): string[] {
     const suspiciousOvertime = quote.lineItems.find(
       (li) =>
         li.pricingModel === 'hourly' &&
-        !li.isConditionalOvertime &&
+        li.sourceExcerpt === undefined &&
+        li.isConditionalOvertime === undefined &&
+        !ambiguousOvertime.includes(li) &&
         (li.quantity ?? 1) >= 1 &&
         LEGACY_OVERTIME_PATTERN.test(li.label)
     );
@@ -493,496 +276,275 @@ export function detectLegacyQuoteReviewReasons(quote: Quote): string[] {
   return reasons;
 }
 
-/**
- * Pure deterministic calculator for any vendor quote.
- * Guarantees consistent tax/gratuity handling, structured percentage bases,
- * minimum guest floors, staffing ratios, optional add-ons, negotiated savings,
- * conflict checks, and approval blockers.
- */
+const taxStatusFromWorkspace: Record<TaxHandling, TaxStatus> = {
+  included: 'included',
+  excluded_plus_hst: 'excluded',
+  unspecified: 'unknown',
+  unspecified_ontario_assumed: 'assumed',
+  tax_exempt: 'exempt',
+};
+
+const workspaceTaxFromStatus: Record<TaxStatus, TaxHandling> = {
+  included: 'included',
+  excluded: 'excluded_plus_hst',
+  unknown: 'unspecified',
+  assumed: 'unspecified_ontario_assumed',
+  exempt: 'tax_exempt',
+};
+
+function toPricingType(model: QuoteLineItem['pricingModel']): PricingType {
+  if (model === 'hourly') return 'per_hour';
+  if (model === 'guest_ratio') return 'per_guest_ratio';
+  return model;
+}
+
+function normalizeLine(item: QuoteLineItem): LineItem {
+  const hasImportedFacts = item.sourceExcerpt !== undefined ||
+    item.extractedHours !== undefined || item.chargeType !== undefined;
+  return {
+    id: item.id,
+    label: item.label,
+    pricingType: toPricingType(item.pricingModel),
+    amount: item.unitPrice,
+    quantity: item.quantity,
+    hours: item.extractedHours,
+    conditionalOvertime: item.isConditionalOvertime ?? (hasImportedFacts ? undefined : false),
+    includedPackageHours: item.includedPackageHours,
+    ratioGuests: item.ratioDivisor,
+    unitLabel: item.unitLabel,
+    percentageBasis: item.percentageBasis,
+    percentageTargetLabels: item.percentageTargetLabels,
+    customBasisAmount: item.customBasisAmount,
+    originalAmount: item.originalUnitPrice,
+    isThirdParty: item.isThirdParty,
+    thirdPartyProvider: item.thirdPartyProvider,
+    isFoodItem: item.isFoodItem,
+    eventId: item.eventId,
+    minGuests: item.minGuests,
+    guestThreshold: item.guestThreshold,
+    packageId: item.packageId,
+    sourceExcerpt: item.sourceExcerpt ?? '',
+    pageReference: item.pageReference,
+    chargeType: item.chargeType,
+  };
+}
+
+function formatPricedLine(line: ReturnType<typeof calculateQuote>['lines'][number]): string {
+  const { item, units, guestsUsed, minimum, threshold, ratio, includedHours } = line;
+  const price = `$${item.amount?.toLocaleString('en-CA') ?? '—'}`;
+  switch (item.pricingType) {
+    case 'included':
+      return 'Included';
+    case 'unknown':
+      return 'Base package price unconfirmed (TBD)';
+    case 'per_person':
+      return guestsUsed === undefined
+        ? `${price}/guest (guest count needed)`
+        : `${price}/guest × ${guestsUsed} guests${minimum ? ` (min ${minimum} applied)` : ''}`;
+    case 'per_extra_guest':
+      return units === undefined
+        ? `${price}/extra guest above ${threshold} (guest count needed)`
+        : `${price}/extra guest above ${threshold} × ${units} extra guest${units === 1 ? '' : 's'}`;
+    case 'per_guest_ratio': {
+      const unit = item.unitLabel || 'unit';
+      const rate = `${price} per ${unit}`;
+      return units === undefined
+        ? `${rate} (1 per ${ratio} guests)`
+        : `${rate} · 1 per ${ratio} guests · ${guestsUsed} guests → ${units} ${unit}${units === 1 ? '' : 's'}`;
+    }
+    case 'per_hour':
+      if (line.conditional) {
+        const included = includedHours ? ` (above ${includedHours} included hrs)` : '';
+        return `${units} overtime hr${units === 1 ? '' : 's'} × ${price}/hr${included}`;
+      }
+      return `${price}/hr × ${units} hr${units === 1 ? '' : 's'}`;
+    case 'percentage': {
+      const basis = line.percentageBasis;
+      return basis?.amount == null
+        ? line.note ?? 'Percentage basis unresolved'
+        : `${item.amount}% of ${basis.label} ($${basis.amount.toLocaleString('en-CA')})`;
+    }
+    case 'flat':
+      return item.amount === null ? 'Base package price unconfirmed (TBD)' : `${price} fixed`;
+  }
+}
+
+/** Adapt the saved workspace and project the shared price result for the UI. */
 export function calculateQuoteFinancials(
   quote: Quote,
   events: WeddingEvent[],
   vendorEventIds: string[],
-  guestCountOverride?: number | null
+  guestCountOverride?: number | null,
+  requestedServiceHours?: number,
 ): QuoteCalculationResult {
   const guestMap = getEventGuestCountMap(events);
-  const primaryEventGuests =
-    guestCountOverride !== undefined
-      ? guestCountOverride
-      : vendorEventIds.length > 0 && vendorEventIds[0] in guestMap
-        ? guestMap[vendorEventIds[0]]
-        : null;
-
-  let baseSubtotal = 0;
-  let minGuestsApplied = false;
-  let appliedMinGuests: number | null = null;
-  let effectiveGuestCountUsed: number | null = null;
-  let guestCountMissing = false;
-  let negotiatedSavings = 0;
-  let unresolvedPercentageCount = 0;
-  const lineItemBreakdowns: LineItemBreakdown[] = [];
-  const resolvedBaseItems: Array<{ item: QuoteLineItem; amount: number | null }> = [];
-  const percentageItems: QuoteLineItem[] = [];
-
-  const resolvedConflictByLineItem: Record<
-    string,
-    { amount: number; pricingModel?: QuoteLineItem['pricingModel'] }
-  > = {};
-  for (const conflict of quote.conflicts) {
-    if (conflict.targetLineItemId) {
-      const chosen =
-        conflict.options.find((o) => o.id === conflict.resolvedOptionId) ??
-        conflict.options[0];
-      if (chosen) {
-        resolvedConflictByLineItem[conflict.targetLineItemId] = {
-          amount: chosen.amount,
-          pricingModel: chosen.pricingModel,
-        };
-      }
-    }
-  }
-
-  const { hasMultiplePackages, selectedPackage } = getSelectedPackageOption(quote);
-  const unresolvedPackageSelection = hasMultiplePackages && !selectedPackage;
-  const unresolvedPackagePrice = Boolean(
-    selectedPackage &&
-      (selectedPackage.pricingModel === 'unknown' || selectedPackage.unitPrice === null)
-  );
-
-  const activeItems: QuoteLineItem[] = [];
-  if (selectedPackage) {
-    if (unresolvedPackagePrice) {
-      lineItemBreakdowns.push({
-        id: `pkg-active-${selectedPackage.id}`,
-        label: selectedPackage.name,
-        amount: null,
-        formulaText: 'Base package price unconfirmed (TBD)',
-      });
-    } else {
-      activeItems.push({
-        id: `pkg-active-${selectedPackage.id}`,
-        label: selectedPackage.name,
-        pricingModel: selectedPackage.pricingModel as 'flat' | 'per_person',
-        unitPrice: selectedPackage.unitPrice!,
-        minGuests: selectedPackage.minGuests,
-        isFoodItem: selectedPackage.isFoodItem,
-        eventId: vendorEventIds[0],
-        evidenceId: selectedPackage.evidenceId,
-        pageReference: selectedPackage.pageReference,
-      });
-
-      if (
-        selectedPackage.pricingModel === 'flat' &&
-        selectedPackage.extraGuestRate !== undefined &&
-        selectedPackage.extraGuestRate > 0 &&
-        (selectedPackage.includedGuests !== undefined || selectedPackage.minGuests !== undefined)
-      ) {
-        activeItems.push({
-          id: `pkg-extra-${selectedPackage.id}`,
-          label: `${selectedPackage.name} extra guests`,
-          pricingModel: 'per_extra_guest',
-          unitPrice: selectedPackage.extraGuestRate,
-          guestThreshold: selectedPackage.includedGuests ?? selectedPackage.minGuests,
-          isFoodItem: selectedPackage.isFoodItem,
-          eventId: vendorEventIds[0],
-          evidenceId: selectedPackage.evidenceId,
-        });
-      }
-    }
-
-    if (selectedPackage.fees && selectedPackage.fees.length > 0) {
-      activeItems.push(...selectedPackage.fees);
-    }
-  }
-
-  const knownPackageIds = new Set((quote.packages ?? []).map((p) => p.id.toLowerCase()));
-  for (const li of quote.lineItems) {
-    const liPkgId = li.packageId?.trim().toLowerCase();
-    if (hasMultiplePackages && liPkgId && knownPackageIds.has(liPkgId)) {
-      if (!selectedPackage || liPkgId !== selectedPackage.id.toLowerCase()) {
-        continue;
-      }
-    }
-    if (
-      selectedPackage &&
-      !hasMultiplePackages &&
-      selectedPackage.unitPrice !== null &&
-      li.pricingModel === selectedPackage.pricingModel &&
-      Math.abs(li.unitPrice - selectedPackage.unitPrice) < 0.01
-    ) {
-      continue;
-    }
-    activeItems.push(li);
-  }
-
-  for (const item of activeItems) {
-    if (isRedundantExtraGuestLineItem(item, activeItems, quote, selectedPackage)) {
-      continue;
-    }
-    if (item.pricingModel === 'percentage') {
-      percentageItems.push(item);
-      continue;
-    }
-    const conflictOverride = resolvedConflictByLineItem[item.id];
-    const overriddenUnitPrice =
-      conflictOverride !== undefined ? conflictOverride.amount : item.unitPrice;
-    const overriddenPricingModel =
-      conflictOverride?.pricingModel ?? item.pricingModel;
-    const effectiveItem: QuoteLineItem = {
-      ...item,
-      pricingModel: overriddenPricingModel,
-      unitPrice: overriddenUnitPrice,
-      minGuests: item.minGuests ?? selectedPackage?.minGuests ?? quote.minGuests,
+  const primaryEventId = vendorEventIds[0];
+  const primaryEventGuests = guestCountOverride !== undefined
+    ? guestCountOverride : guestMap[primaryEventId];
+  const conflicts = new Map(quote.conflicts.map((conflict) => [conflict.targetLineItemId, conflict]));
+  const mapLine = (item: QuoteLineItem): LineItem => {
+    const conflict = conflicts.get(item.id);
+    const option = conflict?.options.find((candidate) => candidate.id === conflict.resolvedOptionId)
+      ?? conflict?.options[0];
+    return {
+      ...normalizeLine(item),
+      proposedPrice: option ? {
+        amount: option.amount,
+        pricingType: option.pricingModel ? toPricingType(option.pricingModel) : undefined,
+      } : undefined,
     };
-    const res = resolveLineItemAmount(
-      effectiveItem,
-      guestMap,
-      primaryEventGuests,
-      guestCountOverride
-    );
-    baseSubtotal += res.amount;
-    if (res.minApplied) {
-      minGuestsApplied = true;
-      appliedMinGuests = res.appliedMin;
-    }
-    if (res.guestsUsed !== null) effectiveGuestCountUsed = res.guestsUsed;
-    if (res.guestMissing) guestCountMissing = true;
+  };
+  const mapIncluded = (item: NonNullable<Quote['includedPricingItems']>[number]): LineItem => ({
+    label: item.label,
+    pricingType: 'included',
+    amount: null,
+    hours: item.extractedHours,
+    packageId: item.packageId,
+    sourceExcerpt: item.sourceExcerpt,
+  });
+  const packages = quote.packages?.map((pkg): PackageOption => ({
+    id: pkg.id,
+    name: pkg.name,
+    pricingType: pkg.pricingModel,
+    amount: pkg.unitPrice,
+    minGuests: pkg.minGuests,
+    includedGuests: pkg.includedGuests,
+    extraGuestRate: pkg.extraGuestRate,
+    maxCapacity: pkg.maxCapacity,
+    hours: pkg.hours,
+    isFoodItem: pkg.isFoodItem,
+    fees: [...(pkg.fees ?? []).map(mapLine), ...(pkg.includedPricingItems ?? []).map(mapIncluded)],
+    taxStatus: pkg.taxHandling ? taxStatusFromWorkspace[pkg.taxHandling] : undefined,
+    taxPercent: pkg.taxPercent,
+    gratuityStatus: pkg.gratuityStatus,
+    gratuityPercent: pkg.gratuityPercent,
+    gratuityBasis: pkg.gratuityBasis,
+    inclusions: pkg.structuredInclusions,
+    sourceExcerpt: '',
+    pageReference: pkg.pageReference,
+  }));
+  const payment = quote.paymentOptions?.find((option) => option.id === quote.selectedPaymentOptionId)
+    ?? quote.paymentOptions?.[0];
+  const result = calculateQuote({
+    currency: quote.currency,
+    lineItems: [...quote.lineItems.map(mapLine), ...(quote.includedPricingItems ?? []).map(mapIncluded)],
+    packages,
+    inclusions: quote.structuredInclusions,
+    photographerDetails: { extraHourRate: quote.extraHourRate },
+    serviceDurationHours: quote.serviceDurationHours,
+    venueDetails: { minGuests: quote.minGuests, maxCapacity: quote.maxCapacity },
+    taxStatus: taxStatusFromWorkspace[quote.taxHandling],
+    taxPercent: quote.taxPercent,
+    gratuityStatus: quote.gratuityStatus,
+    gratuityPercent: quote.gratuityPercent,
+    gratuityBasis: quote.gratuityBasis,
+  }, {
+    guestCount: primaryEventGuests ?? undefined,
+    guestCountsByEvent: guestMap,
+    guestCountOverride,
+    primaryEventId,
+    hours: requestedServiceHours,
+    selectedPackageId: quote.selectedPackageId ?? undefined,
+    workspaceDefaults: { taxPercent: ONTARIO_HST_RATE * 100, ratioGuests: 10 },
+    unresolvedConflicts: quote.conflicts.filter((conflict) =>
+      !conflict.options.some((option) => option.id === conflict.resolvedOptionId)).length,
+    payment: payment ? {
+      adjustment: payment.adjustmentDelta,
+      taxStatus: taxStatusFromWorkspace[payment.taxHandling],
+    } : undefined,
+    fees: quote.unconfirmedFees.map((fee) => ({
+      unresolved: fee.mandatory && fee.status === 'unconfirmed',
+      item: {
+        id: fee.id,
+        label: fee.label,
+        pricingType: 'flat',
+        amount: fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number'
+          ? fee.confirmedAmount : null,
+        packageId: fee.packageId,
+        isFoodItem: false,
+        sourceExcerpt: '',
+      },
+    })),
+    addOns: quote.addOns.map((addOn) => ({
+      selected: addOn.selected,
+      item: {
+        id: addOn.id,
+        label: addOn.label,
+        pricingType: toPricingType(addOn.pricingModel ?? 'flat'),
+        amount: addOn.pricePreTax,
+        quantity: addOn.quantity,
+        ratioGuests: addOn.ratioDivisor,
+        unitLabel: addOn.unitLabel,
+        minGuests: addOn.minGuests ?? 0,
+        guestThreshold: addOn.minGuests ?? 0,
+        eventId: addOn.eventId,
+        packageId: addOn.packageId,
+        percentageBasis: addOn.percentageBasis,
+        percentageTargetLabels: addOn.percentageTargetLabels,
+        customBasisAmount: addOn.customBasisAmount,
+        isFoodItem: false,
+        sourceExcerpt: '',
+      },
+    })),
+  });
 
-    let itemSavings: number | undefined;
-    let itemOriginalTotal: number | undefined;
-    if (
-      item.originalUnitPrice !== undefined &&
-      item.originalUnitPrice > overriddenUnitPrice &&
-      !quote.conflicts.some((c) => c.targetLineItemId === item.id)
-    ) {
-      const origRes = resolveLineItemAmount(
-        { ...effectiveItem, unitPrice: item.originalUnitPrice },
-        guestMap,
-        primaryEventGuests,
-        guestCountOverride
-      );
-      if (origRes.amount > res.amount) {
-        itemOriginalTotal = Math.round(origRes.amount * 100) / 100;
-        itemSavings = Math.round((origRes.amount - res.amount) * 100) / 100;
-        negotiatedSavings = Math.round((negotiatedSavings + itemSavings) * 100) / 100;
-      }
-    }
-
-    let formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} fixed`;
-    if (effectiveItem.pricingModel === 'per_person') {
-      formulaText =
-        res.guestsUsed !== null
-          ? `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest × ${res.guestsUsed} guests${
-              res.minApplied && res.appliedMin ? ` (min ${res.appliedMin} applied)` : ''
-            }`
-          : `$${overriddenUnitPrice.toLocaleString('en-CA')}/guest (guest count needed)`;
-    } else if (effectiveItem.pricingModel === 'per_extra_guest') {
-      const threshold = effectiveItem.guestThreshold ?? effectiveItem.minGuests ?? 0;
-      if (res.guestsUsed !== null) {
-        const extra = Math.max(0, res.guestsUsed - threshold);
-        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} × ${extra} extra guest${extra === 1 ? '' : 's'}`;
-      } else {
-        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/extra guest above ${threshold} (guest count needed)`;
-      }
-    } else if (effectiveItem.pricingModel === 'guest_ratio') {
-      const divisor = effectiveItem.ratioDivisor && effectiveItem.ratioDivisor > 0 ? effectiveItem.ratioDivisor : 10;
-      const unitWord = effectiveItem.unitLabel || 'unit';
-      if (res.guestsUsed !== null) {
-        const units = Math.ceil(res.guestsUsed / divisor);
-        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} · 1 per ${divisor} guests · ${res.guestsUsed} guests → ${units} ${unitWord}${units === 1 ? '' : 's'}`;
-      } else {
-        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')} per ${unitWord} (1 per ${divisor} guests)`;
-      }
-    } else if (effectiveItem.pricingModel === 'hourly') {
-      if (effectiveItem.isConditionalOvertime) {
-        const overtimeHrs = effectiveItem.quantity ?? 0;
-        const includedText = effectiveItem.includedPackageHours
-          ? ` (above ${effectiveItem.includedPackageHours} included hrs)`
-          : '';
-        formulaText = `${overtimeHrs} overtime hr${overtimeHrs === 1 ? '' : 's'} × $${overriddenUnitPrice.toLocaleString('en-CA')}/hr${includedText}`;
-      } else {
-        const hrs = effectiveItem.quantity ?? 1;
-        formulaText = `$${overriddenUnitPrice.toLocaleString('en-CA')}/hr × ${hrs} hr${hrs === 1 ? '' : 's'}`;
-      }
-    }
-
-    resolvedBaseItems.push({ item: effectiveItem, amount: res.guestMissing && res.amount === 0 ? null : res.amount });
-    lineItemBreakdowns.push({
+  const lineItemBreakdowns = result.lines.flatMap((line): LineItemBreakdown[] => {
+    const { item } = line;
+    if (item.id === undefined) return [];
+    const unresolvedBasis = item.pricingType === 'percentage' && line.total === null;
+    return [{
       id: item.id,
       label: item.label,
-      amount: Math.round(res.amount * 100) / 100,
-      formulaText,
-      negotiatedOriginalAmount: itemOriginalTotal,
-      negotiatedSavings: itemSavings,
+      amount: line.missingGuests ? roundMoney(line.total ?? 0) :
+        line.total === null ? null : roundMoney(line.total),
+      formulaText: formatPricedLine(line),
+      negotiatedOriginalAmount: line.originalTotal,
+      negotiatedSavings: line.savings,
       isThirdParty: item.isThirdParty,
       thirdPartyProvider: item.thirdPartyProvider,
-    });
-  }
-
-  let paymentOptionAdjustment = 0;
-  let effectiveTaxHandling: TaxHandling = selectedPackage?.taxHandling ?? quote.taxHandling;
-  if (quote.paymentOptions && quote.paymentOptions.length > 0) {
-    const activeOpt =
-      quote.paymentOptions.find((o) => o.id === quote.selectedPaymentOptionId) ??
-      quote.paymentOptions[0];
-    paymentOptionAdjustment = activeOpt.adjustmentDelta;
-    effectiveTaxHandling = activeOpt.taxHandling;
-  }
-
-  // Resolve confirmed extra fees BEFORE evaluating whole-subtotal percentage charges
-  // Only include fees that are quote-wide OR scoped to the currently selected package
-  let confirmedExtraFeesPreTax = 0;
-  let unresolvedMandatoryFeesCount = 0;
-  for (const fee of quote.unconfirmedFees) {
-    if (fee.packageId && (!selectedPackage || fee.packageId !== selectedPackage.id)) {
-      continue;
-    }
-    if (fee.status === 'confirmed_amount' && typeof fee.confirmedAmount === 'number') {
-      confirmedExtraFeesPreTax += fee.confirmedAmount;
-      resolvedBaseItems.push({
-        item: {
-          id: fee.id,
-          label: fee.label,
-          pricingModel: 'flat',
-          unitPrice: fee.confirmedAmount,
-          isFoodItem: false,
-        },
-        amount: fee.confirmedAmount,
-      });
-    } else if (fee.mandatory && fee.status === 'unconfirmed') {
-      unresolvedMandatoryFeesCount += 1;
-    }
-  }
-
-  const hstIncluded = effectiveTaxHandling === 'included';
-  const hstAssumed = effectiveTaxHandling === 'unspecified_ontario_assumed';
-  const effectiveTaxPercentValue =
-    selectedPackage?.taxPercent !== undefined ? selectedPackage.taxPercent : quote.taxPercent;
-  const hasExplicitTaxLineItem = activeItems.some((li) =>
-    /\b(hst|gst|pst|sales\s*tax|tax)\b/i.test(li.label)
-  );
-  const taxNotStated = !hasExplicitTaxLineItem && effectiveTaxHandling === 'unspecified';
-  // When a quote explicitly says "plus tax" without a stated percentage (taxPercent === null),
-  // preserve the unknown rate instead of silently defaulting to 13% HST.
-  const taxRateUnresolved =
-    !hasExplicitTaxLineItem &&
-    effectiveTaxHandling === 'excluded_plus_hst' &&
-    effectiveTaxPercentValue === null;
-  const explicitTaxRate =
-    typeof effectiveTaxPercentValue === 'number' && Number.isFinite(effectiveTaxPercentValue)
-      ? effectiveTaxPercentValue / 100
-      : ONTARIO_HST_RATE;
-  const taxRate =
-    hasExplicitTaxLineItem ||
-    effectiveTaxHandling === 'included' ||
-    effectiveTaxHandling === 'tax_exempt' ||
-    effectiveTaxHandling === 'unspecified' ||
-    taxRateUnresolved
-      ? 0
-      : explicitTaxRate;
-  const taxStatusLabel = hasExplicitTaxLineItem
+      unresolvedBasis: unresolvedBasis || undefined,
+      conditionalOvertime: item.pricingType === 'per_hour' ? line.conditional : undefined,
+      billableHours: item.pricingType === 'per_hour' ? line.units : undefined,
+    }];
+  });
+  const {
+    baseSubtotal, selectedAddOnsPreTax, confirmedExtraFeesPreTax, paymentOptionAdjustment,
+    taxRate, taxNotStated, unresolvedPackageSelection, unresolvedPackagePrice,
+    unresolvedConflictsCount, unresolvedMandatoryFeesCount, unresolvedPercentageCount,
+  } = result;
+  const isCurrencyUnknown = quote.currency === 'UNKNOWN';
+  const gratuityUnresolved = result.gratuityAmount === null;
+  const taxRateUnresolved = result.taxAmount === null;
+  const effectiveTaxHandling = workspaceTaxFromStatus[result.taxStatus];
+  const hstIncluded = result.taxStatus === 'included';
+  const hstAssumed = result.taxStatus === 'assumed';
+  const taxStatusLabel = result.hasTaxLine
     ? 'Tax listed in line items'
     : taxRateUnresolved
       ? 'Plus tax (rate not stated — excluded from estimate.)'
       : getTaxStatusLabel(effectiveTaxHandling, taxRate);
-
-  // Evaluate optional add-ons in two order-independent passes:
-  // Pass 1: resolve all non-percentage add-ons and add selected ones to resolvedBaseItems
-  // Pass 2: evaluate percentage add-ons against the completed resolvedBaseItems
-  let selectedAddOnsPreTax = 0;
-  const activeAddOns = quote.addOns.filter(
-    (a) => !a.packageId || (selectedPackage && a.packageId === selectedPackage.id)
-  );
-  const preTaxByAddOnId = new Map<string, number>();
-
-  for (const addon of activeAddOns) {
-    const model = addon.pricingModel ?? 'flat';
-    if (model === 'percentage') continue;
-    let computedPreTax = addon.pricePreTax;
-    if (model !== 'flat') {
-      const addonRes = resolveLineItemAmount(
-        {
-          id: addon.id,
-          label: addon.label,
-          pricingModel: model,
-          unitPrice: addon.pricePreTax,
-          quantity: addon.quantity,
-          ratioDivisor: addon.ratioDivisor,
-          unitLabel: addon.unitLabel,
-          minGuests: addon.minGuests,
-          guestThreshold: addon.minGuests,
-          eventId: addon.eventId,
-        },
-        guestMap,
-        primaryEventGuests,
-        guestCountOverride
-      );
-      computedPreTax = Math.round(addonRes.amount * 100) / 100;
-    }
-    preTaxByAddOnId.set(addon.id, computedPreTax);
-    if (addon.selected) {
-      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
-      resolvedBaseItems.push({
-        item: {
-          id: addon.id,
-          label: addon.label,
-          pricingModel: model,
-          unitPrice: addon.pricePreTax,
-          isFoodItem: false,
-        },
-        amount: computedPreTax,
-      });
-    }
-  }
-
-  for (const addon of activeAddOns) {
-    const model = addon.pricingModel ?? 'flat';
-    if (model !== 'percentage') continue;
-    const basis = resolvePercentageBasis(addon.percentageBasis, resolvedBaseItems, {
-      targetLabels: addon.percentageTargetLabels,
-      customBasisAmount: addon.customBasisAmount,
-    });
-    let computedPreTax = 0;
-    if (basis.amount === null) {
-      if (addon.selected) {
-        unresolvedPercentageCount += 1;
-      }
-    } else {
-      computedPreTax = Math.round(basis.amount * (addon.pricePreTax / 100) * 100) / 100;
-    }
-    preTaxByAddOnId.set(addon.id, computedPreTax);
-    if (addon.selected) {
-      selectedAddOnsPreTax = Math.round((selectedAddOnsPreTax + computedPreTax) * 100) / 100;
-    }
-  }
-
-  const addOnImpacts = activeAddOns.map((addon) => {
-    const computedPreTax = preTaxByAddOnId.get(addon.id) ?? 0;
-    const impactWithTax = Math.round(computedPreTax * (1 + taxRate) * 100) / 100;
-    return {
-      id: addon.id,
-      label: addon.label,
-      description: addon.description,
-      pricePreTax: computedPreTax,
-      impactWithTax,
-      selected: addon.selected,
-    };
-  });
-
-  // Evaluate non-duplicate percentage-based line items AFTER confirmed fees & selected non-percentage add-ons
-  for (const pctItem of percentageItems) {
-    if (isDuplicateGratuityPercentageItem(pctItem, quote)) {
-      continue;
-    }
-    const rate = pctItem.unitPrice;
-    const basis = resolvePercentageBasis(pctItem.percentageBasis, resolvedBaseItems, {
-      targetLabels: pctItem.percentageTargetLabels,
-      customBasisAmount: pctItem.customBasisAmount,
-    });
-    if (basis.amount === null) {
-      unresolvedPercentageCount += 1;
-      lineItemBreakdowns.push({
-        id: pctItem.id,
-        label: pctItem.label,
-        amount: null,
-        formulaText: `${rate}% (${basis.label})`,
-        isThirdParty: pctItem.isThirdParty,
-        thirdPartyProvider: pctItem.thirdPartyProvider,
-        unresolvedBasis: true,
-      });
-    } else {
-      const charge = Math.round(basis.amount * (rate / 100) * 100) / 100;
-      baseSubtotal = Math.round((baseSubtotal + charge) * 100) / 100;
-      lineItemBreakdowns.push({
-        id: pctItem.id,
-        label: pctItem.label,
-        amount: charge,
-        formulaText: `${rate}% of ${basis.label} ($${basis.amount.toLocaleString('en-CA')})`,
-        isThirdParty: pctItem.isThirdParty,
-        thirdPartyProvider: pctItem.thirdPartyProvider,
-      });
-    }
-  }
-
-  const preTaxTotal = Math.max(
-    0,
-    Math.round(
-      (baseSubtotal + paymentOptionAdjustment + confirmedExtraFeesPreTax + selectedAddOnsPreTax) *
-        100
-    ) / 100
-  );
-
-  // Gratuity calculation (prevent duplicate application; support package-specific overrides & structured bases;
-  // explicit null on a selected package override never inherits quote-level gratuityPercent)
-  const effectiveGratuityStatus = selectedPackage?.gratuityStatus ?? quote.gratuityStatus;
-  const effectiveGratuityPercent =
-    selectedPackage?.gratuityPercent !== undefined
-      ? selectedPackage.gratuityPercent
-      : quote.gratuityPercent;
-  const effectiveGratuityBasis = selectedPackage?.gratuityBasis ?? quote.gratuityBasis;
-
-  const hasExplicitGratuityLineItem = activeItems.some(
-    (li) =>
-      !isDuplicateGratuityPercentageItem(li, quote) &&
-      /\b(gratuity|tip|service\s*charge)\b/i.test(li.label)
-  );
-  let gratuityAmount = 0;
-  let gratuityUnresolved = false;
-  let gratuityBasisLabel: string | undefined;
-
-  if (!hasExplicitGratuityLineItem) {
-    if (
-      effectiveGratuityStatus === 'excluded' &&
-      (effectiveGratuityPercent === undefined || effectiveGratuityPercent === null)
-    ) {
-      gratuityUnresolved = true;
-      gratuityBasisLabel = 'percentage unknown';
-    } else if (
-      effectiveGratuityPercent !== undefined &&
-      effectiveGratuityPercent !== null &&
-      effectiveGratuityPercent > 0 &&
-      effectiveGratuityStatus !== 'included'
-    ) {
-      const basisType = effectiveGratuityBasis ?? 'entire_subtotal';
-      if (basisType === 'entire_subtotal') {
-        gratuityAmount = Math.round(preTaxTotal * (effectiveGratuityPercent / 100) * 100) / 100;
-        gratuityBasisLabel = 'applicable subtotal';
-      } else {
-        const basis = resolvePercentageBasis(basisType, resolvedBaseItems);
-        if (basis.amount === null) {
-          gratuityUnresolved = true;
-          gratuityBasisLabel = basis.label;
-        } else {
-          gratuityAmount = Math.round(basis.amount * (effectiveGratuityPercent / 100) * 100) / 100;
-          gratuityBasisLabel = basis.label;
-        }
-      }
-    }
-  }
-
-  const taxableBase = preTaxTotal + gratuityAmount;
-  const taxAmount = Math.round(taxableBase * taxRate * 100) / 100;
-  const estimatedAllInTotal = Math.round((taxableBase + taxAmount) * 100) / 100;
-
-  const effectiveMaxCap = selectedPackage?.maxCapacity ?? quote.maxCapacity;
-  const capacityExceeded =
-    effectiveMaxCap !== undefined &&
-    primaryEventGuests !== null &&
-    primaryEventGuests > effectiveMaxCap;
-
-  const unresolvedConflictsCount = quote.conflicts.filter((c) => !c.resolvedOptionId).length;
-  const isCurrencyUnknown = quote.currency === 'UNKNOWN';
   const legacyReviewReasons = detectLegacyQuoteReviewReasons(quote);
-
+  const addOnImpacts = quote.addOns.flatMap((addOn) => {
+    const pricePreTax = result.addOnAmounts.get(addOn.id);
+    if (pricePreTax === undefined) return [];
+    return [{
+      id: addOn.id,
+      label: addOn.label,
+      description: addOn.description,
+      pricePreTax,
+      impactWithTax: roundMoney(pricePreTax * (1 + taxRate)),
+      selected: addOn.selected,
+    }];
+  });
   const blockingReasons: string[] = [];
   if (unresolvedPackageSelection) {
     blockingReasons.push(
       'Select one package option before approving this quote, or Save as Draft to keep all options.'
     );
   }
-  if (unresolvedPackagePrice && selectedPackage) {
+  if (unresolvedPackagePrice) {
     blockingReasons.push(
-      `Confirm the base price for "${selectedPackage.name}" before approving, or Save as Draft.`
+      `Confirm the base price for "${result.selectedPackageName}" before approving, or Save as Draft.`
     );
   }
   if (isCurrencyUnknown) {
@@ -1050,41 +612,41 @@ export function calculateQuoteFinancials(
     }
   }
 
+
   return {
-    currencyLabel: quote.currency === 'UNKNOWN' ? 'Currency TBD' : quote.currency,
+    currencyLabel: isCurrencyUnknown ? 'Currency TBD' : quote.currency,
     isCurrencyUnknown,
     baseSubtotal,
     selectedAddOnsPreTax,
     confirmedExtraFeesPreTax,
     paymentOptionAdjustment,
-    preTaxTotal,
-    gratuityAmount,
+    preTaxTotal: result.knownSubtotal,
+    gratuityAmount: result.gratuityAmount ?? 0,
     gratuityUnresolved,
-    gratuityBasisLabel,
+    gratuityBasisLabel: result.gratuityBasisLabel,
     taxRate,
-    taxAmount,
+    taxAmount: result.taxAmount ?? 0,
     hstAssumed,
     hstIncluded,
     taxNotStated,
     taxRateUnresolved,
     taxStatusLabel,
     effectiveTaxHandling,
-    estimatedAllInTotal,
-    effectiveGuestCountUsed,
-    guestCountMissing,
-    minGuestsApplied,
-    appliedMinGuests,
-    capacityExceeded,
+    estimatedAllInTotal: result.knownAllInTotal,
+    effectiveGuestCountUsed: result.effectiveGuestCountUsed,
+    guestCountMissing: result.guestCountMissing,
+    minGuestsApplied: result.appliedMinGuests !== null,
+    appliedMinGuests: result.appliedMinGuests,
+    capacityExceeded: result.capacityExceeded,
     unresolvedPackageSelection,
     unresolvedPackagePrice,
-    selectedPackageName: selectedPackage?.name,
+    selectedPackageName: result.selectedPackageName,
     legacyReviewReasons,
     unresolvedMandatoryFeesCount,
     unresolvedConflictsCount,
     unresolvedPercentageCount,
-    negotiatedSavings,
-    isEstimateComplete:
-      blockingReasons.length === 0 && !guestCountMissing && !taxNotStated && !taxRateUnresolved,
+    negotiatedSavings: result.negotiatedSavings,
+    isEstimateComplete: result.isEstimateComplete && blockingReasons.length === 0,
     lineItemBreakdowns,
     blockingReasons,
     canApprove: blockingReasons.length === 0,
@@ -1131,6 +693,9 @@ export function getVendorBookingEligibility(
 
   if (activeQuote) {
     const calc = calculateQuoteFinancials(activeQuote, events, vendor.eventIds);
+    if (activeQuote.sourceWarnings?.length && !activeQuote.sourceWarningsAcknowledged) {
+      blockingReasons.push('Review flagged source evidence warnings against the original document before booking.');
+    }
     if (calc.unresolvedPackageSelection) {
       blockingReasons.push('Select one package option before confirming a booking.');
     }

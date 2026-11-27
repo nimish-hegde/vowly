@@ -306,3 +306,19 @@ test('single-alternative live conflict shape blocks approval and resolves cleanl
   budgetAlt = approveQuote(s1, budgetAlt);
   assert.deepEqual(budgetAlt.committedTotals, { CAD: 3600 });
 });
+
+test('approval rechecks financial blockers on the current review draft', () => {
+  const budget = createBudgetState();
+  const session = createReviewSession('stale-calc', resolvedSampleQuote, { guestCount: 180 });
+  assert.deepEqual(getApprovalBlockers(session), []);
+  session.draftQuote.lineItems.push({
+    label: 'Required site fee',
+    pricingType: 'unknown',
+    amount: null,
+    sourceExcerpt: 'Required site fee TBD',
+  });
+
+  assert.throws(() => approveQuote(session, budget), /mandatory TBD costs/i);
+  assert.equal(session.status, 'pending_review');
+  assert.deepEqual(budget, createBudgetState());
+});

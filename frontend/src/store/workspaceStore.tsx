@@ -79,7 +79,7 @@ interface WorkspaceContextValue {
 
   // Vendors & Quotes
   addVendor: (vendor: Vendor, onViewVendor?: (vendorId: string) => void) => void;
-  updateVendor: (vendorId: string, patch: Partial<Vendor>) => void;
+  updateVendor: (vendorId: string, patch: Partial<Pick<Vendor, 'status' | 'notes'>>) => void;
   setPreferredVendor: (vendorId: string) => void;
   toggleVendorAddOn: (vendorId: string, quoteId: string, addOnId: string) => void;
   saveDraftQuote: (
@@ -92,7 +92,7 @@ interface WorkspaceContextValue {
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
     approvedQuote: Quote,
     revisionNote?: string
-  ) => string;
+  ) => string | null;
   confirmBooking: (payload: {
     vendorId: string;
     contractTotal: number;
@@ -240,7 +240,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       workspaces: prev.workspaces.map((ws) => {
         if (ws.id !== prev.activeWorkspaceId) return ws;
         const next = updater(ws);
-        if (!activitySummary) return next;
+        if (!activitySummary || next === ws) return next;
         const actor = next.partners[0]?.name ?? 'Couple';
         const act: ActivityItem = {
           id: `act-${Date.now()}`,
@@ -420,10 +420,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const updateVendor = (vendorId: string, patch: Partial<Vendor>) => {
+  const updateVendor: WorkspaceContextValue['updateVendor'] = (vendorId, patch) => {
     mutateActive((ws) => ({
       ...ws,
-      vendors: ws.vendors.map((v) => (v.id === vendorId ? { ...v, ...patch } : v)),
+      vendors: ws.vendors.map((v) => {
+        if (v.id !== vendorId) return v;
+        const status = patch.status === 'Booked' ? v.status : (patch.status ?? v.status);
+        return { ...v, status, notes: patch.notes ?? v.notes };
+      }),
     }));
   };
 
@@ -507,8 +511,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
     approvedQuote: Quote,
     revisionNote?: string
-  ): string => {
-    const cleanQuote: Quote = { ...approvedQuote, approvalState: 'approved' };
+  ): string | null => {
     const targetId = vendorId ?? `ven-${Date.now()}`;
     const existingVendor = vendorId
       ? activeWorkspace.vendors.find((v) => v.id === vendorId)
@@ -519,14 +522,22 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       existingVendor?.name ||
       'Vendor';
 
+    const approval = applyApproveQuote(
+      activeWorkspace, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote
+    );
+    if (!approval.approved) {
+      pushToast(approval.blockingReasons[0] ?? 'Resolve this quote’s blockers before approving.', 'amber');
+      return null;
+    }
+
     mutateActive(
       (ws) =>
-        applyApproveQuote(ws, vendorId, newVendorPayload, cleanQuote, targetId, revisionNote)
+        applyApproveQuote(ws, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote)
           .workspace,
       {
-        summary: `Approved quote "${cleanQuote.title}" for ${vendorName}.`,
+        summary: `Approved quote "${approvedQuote.title}" for ${vendorName}.`,
         category:
-          cleanQuote.revisions && cleanQuote.revisions.length > 0
+          approvedQuote.revisions && approvedQuote.revisions.length > 0
             ? 'revision'
             : 'quote',
       }
