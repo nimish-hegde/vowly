@@ -631,6 +631,71 @@ test('approving a saved duplicate revision draft clears the draft, restores stat
   assert.equal(getVendorBookingEligibility(resolved.workspace.vendors[0], resolved.workspace.events).canBook, true);
 });
 
+test('approving a metadata-only revision updates vendor name and location without adding a duplicate quote version', () => {
+  const ws = workspace(original());
+  const first = approve(ws, amendment());
+  assert.equal(first.approved, true);
+  const lastApproved = active(first.workspace);
+
+  const manualMetadataOnly: Quote = {
+    ...lastApproved,
+    id: 'q-meta-only',
+    approvalState: 'draft',
+    revisionDraft: { baselineQuoteId: lastApproved.id, mode: 'manual' },
+  };
+  const { id, quotes, ...baseMeta } = first.workspace.vendors[0];
+  const updated = applyApproveQuote(
+    first.workspace,
+    id,
+    { ...baseMeta, name: 'Juniper Grand Hall', location: 'Mississauga, ON' },
+    manualMetadataOnly,
+    id,
+  );
+  assert.equal(updated.approved, true);
+  assert.equal(updated.duplicate, true);
+  assert.equal(updated.workspace.vendors[0].name, 'Juniper Grand Hall');
+  assert.equal(updated.workspace.vendors[0].location, 'Mississauga, ON');
+  assert.equal(updated.workspace.vendors[0].quotes.length, 2);
+  assert.equal(active(updated.workspace).revisions?.length, 1);
+
+  const draftedMeta = applySaveDraftQuote(
+    updated.workspace,
+    id,
+    { ...baseMeta, name: 'Juniper Estate Hall', location: 'Vaughan, ON' },
+    { ...manualMetadataOnly, id: 'q-meta-draft' },
+    id,
+  ).workspace;
+  assert.equal(draftedMeta.vendors[0].name, 'Juniper Grand Hall');
+  assert.equal(draftedMeta.vendors[0].location, 'Mississauga, ON');
+
+  const approvedDraftMeta = applyApproveQuote(
+    draftedMeta,
+    id,
+    null,
+    draftedMeta.vendors[0].draftQuote!,
+    id,
+  );
+  assert.equal(approvedDraftMeta.approved, true);
+  assert.equal(approvedDraftMeta.duplicate, true);
+  assert.equal(approvedDraftMeta.workspace.vendors[0].name, 'Juniper Estate Hall');
+  assert.equal(approvedDraftMeta.workspace.vendors[0].location, 'Vaughan, ON');
+  assert.equal(approvedDraftMeta.workspace.vendors[0].draftQuote, undefined);
+  assert.equal(approvedDraftMeta.workspace.vendors[0].draftVendorMetadata, undefined);
+  assert.equal(approvedDraftMeta.workspace.vendors[0].status, 'Quoted');
+  assert.equal(approvedDraftMeta.workspace.vendors[0].quotes.length, 2);
+  assert.equal(getVendorBookingEligibility(approvedDraftMeta.workspace.vendors[0], approvedDraftMeta.workspace.events).canBook, true);
+
+  const blockedByOtherDraft = applyApproveQuote(
+    draftedMeta,
+    id,
+    { ...baseMeta, name: 'Should Not Apply', location: 'Brampton, ON' },
+    { ...manualMetadataOnly, id: 'q-unrelated-meta' },
+    id,
+  );
+  assert.equal(blockedByOtherDraft.approved, false);
+  assert.equal(blockedByOtherDraft.workspace, draftedMeta);
+});
+
 test('partial revision preserves untouched add-on selection while honoring explicit selection and deselection during review', () => {
   const unselectedPrior = original({
     taxHandling: 'included',

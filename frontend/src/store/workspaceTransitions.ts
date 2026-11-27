@@ -139,33 +139,86 @@ export function applyApproveQuote(
     ? buildQuoteRevisionPreview(ws, existingVendor, approvedQuote, eventIds, effectiveMeta?.category)
     : null;
   if (revision?.duplicate) {
-    if (existingVendor && vendorId && existingVendor.draftQuote?.id === approvedQuote.id) {
-      const nextVendors = ws.vendors.map((v) =>
-        v.id === vendorId
-          ? {
-              ...v,
-              status: v.status === 'Revision pending' ? ('Quoted' as const) : v.status,
-              draftQuote: undefined,
-              draftVendorMetadata: undefined,
-            }
-          : v
-      );
-      const nextTasks = ws.tasks.map((t) =>
-        t.vendorId === targetId && t.kind === 'draft_quote'
-          ? { ...t, status: 'Done' as const }
-          : t
-      );
-      return {
-        approved: true,
-        duplicate: true,
-        blockingReasons: [],
-        vendorName,
-        workspace: {
-          ...ws,
-          vendors: nextVendors,
-          tasks: nextTasks,
-        },
-      };
+    if (existingVendor && vendorId) {
+      const hasMatchingDraft = existingVendor.draftQuote?.id === approvedQuote.id;
+      const hasOtherDraft = Boolean(existingVendor.draftQuote && !hasMatchingDraft);
+      const appliedMeta =
+        existingVendor.status === 'Booked'
+          ? undefined
+          : (newVendorPayload ?? existingVendor.draftVendorMetadata);
+      const nextName = appliedMeta ? (appliedMeta.name.trim() || existingVendor.name) : existingVendor.name;
+      const nextCategory = appliedMeta ? appliedMeta.category : existingVendor.category;
+      const nextEventIds = appliedMeta ? [...appliedMeta.eventIds] : existingVendor.eventIds;
+      const nextLocation = appliedMeta ? appliedMeta.location : existingVendor.location;
+      const nextIsDemoVenue = appliedMeta ? (appliedMeta.isDemoVenue ?? existingVendor.isDemoVenue) : existingVendor.isDemoVenue;
+      const hasMetadataChanges =
+        Boolean(appliedMeta) &&
+        (nextName !== existingVendor.name ||
+          nextCategory !== existingVendor.category ||
+          nextEventIds.join('\0') !== existingVendor.eventIds.join('\0') ||
+          nextLocation !== existingVendor.location ||
+          nextIsDemoVenue !== existingVendor.isDemoVenue);
+
+      if (hasMetadataChanges && hasOtherDraft) {
+        return {
+          approved: false,
+          blockingReasons: ['Resolve the pending draft quote before approving a different quote.'],
+          workspace: ws,
+          vendorName,
+        };
+      }
+
+      if (hasMatchingDraft || hasMetadataChanges) {
+        const hasComp = hasMetadataChanges
+          ? hasCompetingSelectedVendor(
+              ws.vendors,
+              { category: nextCategory, eventIds: nextEventIds },
+              existingVendor.id
+            )
+          : false;
+        const nextVendors = ws.vendors.map((v) =>
+          v.id === vendorId
+            ? {
+                ...v,
+                ...(hasMetadataChanges
+                  ? {
+                      name: nextName,
+                      category: nextCategory,
+                      eventIds: nextEventIds,
+                      location: nextLocation,
+                      isDemoVenue: nextIsDemoVenue,
+                      isPreferred: v.status === 'Booked' ? v.isPreferred : v.isPreferred && !hasComp,
+                    }
+                  : {}),
+                ...(hasMatchingDraft
+                  ? {
+                      status: v.status === 'Revision pending' ? ('Quoted' as const) : v.status,
+                      draftQuote: undefined,
+                      draftVendorMetadata: undefined,
+                    }
+                  : {}),
+              }
+            : v
+        );
+        const nextTasks = hasMatchingDraft
+          ? ws.tasks.map((t) =>
+              t.vendorId === targetId && t.kind === 'draft_quote'
+                ? { ...t, status: 'Done' as const }
+                : t
+            )
+          : ws.tasks;
+        return {
+          approved: true,
+          duplicate: true,
+          blockingReasons: [],
+          vendorName: nextName,
+          workspace: {
+            ...ws,
+            vendors: nextVendors,
+            tasks: nextTasks,
+          },
+        };
+      }
     }
     return { approved: true, duplicate: true, blockingReasons: [], workspace: ws, vendorName };
   }
