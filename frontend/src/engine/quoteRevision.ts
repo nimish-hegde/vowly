@@ -56,6 +56,9 @@ function showCost(cost: Cost, currency: Quote['currency']): string {
     case 'line': {
       const base = money(cost.item.unitPrice, currency, cost.item.pricingModel);
       if (cost.item.pricingModel === 'hourly') {
+        if (cost.item.isConditionalOvertime === true && cost.item.quantity === undefined) {
+          return `${base} · conditional`;
+        }
         const hours = cost.item.quantity ?? cost.item.extractedHours;
         if (hours !== undefined) return `${base} · ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
       }
@@ -131,6 +134,18 @@ function amendCost(previous: Cost, incoming: Cost): Cost {
       ) {
         merged.isConditionalOvertime = undefined;
         if (incoming.item.quantity === undefined && previous.item.quantity === 0) {
+          merged.quantity = undefined;
+        }
+      }
+      if (
+        incoming.item.isConditionalOvertime === undefined &&
+        incoming.item.chargeType === 'conditional' &&
+        previous.item.chargeType !== 'conditional'
+      ) {
+        if (previous.item.isConditionalOvertime === false) {
+          merged.isConditionalOvertime = undefined;
+        }
+        if (incoming.item.quantity === undefined) {
           merged.quantity = undefined;
         }
       }
@@ -259,6 +274,7 @@ function revisePackages(context: RevisionContext) {
   const result = new Map(before.map((pkg) => [pkg.id, pkg]));
   const used = new Set(result.keys());
   const touched = new Set<string>();
+  const retainedPackages = new Set<string>();
   const mapped = new Map<string, string | undefined>();
   for (const pkg of proposed) {
     const id = 'package:' + pkg.id;
@@ -296,6 +312,7 @@ function revisePackages(context: RevisionContext) {
     } : pkg;
     const packageId = old?.id ?? reserveId(pkg.id, used);
     if (removed) result.delete(packageId);
+    else if (retained && old) retainedPackages.add(old.id);
     else if (!retained) result.set(packageId, {
       ...revised, id: packageId, evidenceId: mapEvidenceId(pkg.evidenceId) ?? old?.evidenceId,
       structuredInclusions: revised.structuredInclusions?.map((item) =>
@@ -317,13 +334,14 @@ function revisePackages(context: RevisionContext) {
     const id = 'package:previous:' + pkg.id;
     const remove = decisions[id]?.action === 'remove' || (!partial && decisions[id]?.action !== 'retain');
     if (remove) result.delete(pkg.id);
+    else if (!partial && decisions[id]?.action === 'retain') retainedPackages.add(pkg.id);
     const label = packageLabel(pkg, previous.currency);
     changes.push({
       id, field: pkg.name, scope: 'Package', previous: label, proposed: remove ? null : label,
       kind: remove ? 'removed' : 'carried', previousEvidence: evidence(previous, pkg.evidenceId), canRemove: true, canAccept: false,
     });
   }
-  return { result, mapped };
+  return { result, mapped, retained: retainedPackages };
 }
 
 function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revisePackages>, currency: Quote['currency']) {
@@ -400,10 +418,11 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
   }
   for (const row of oldRows) {
     if (touched.has(row.key)) continue;
+    const retainedByPackage = Boolean(row.packageId && packages.retained.has(row.packageId));
     const id = 'cost:previous:' + row.key;
     const decision = decisions[id];
-    const removed = decision?.action === 'remove' || (!partial && decision?.action !== 'retain' && decision?.action !== 'manual');
-    if (decision?.action === 'retain' || decision?.action === 'manual') preserved.add(row.key);
+    const removed = decision?.action === 'remove' || (!partial && !retainedByPackage && decision?.action !== 'retain' && decision?.action !== 'manual');
+    if (decision?.action === 'retain' || decision?.action === 'manual' || retainedByPackage) preserved.add(row.key);
     const manual = decision?.action === 'manual';
     const edited = editAmount(row, decision);
     if (!edited) blockingReasons.push('Enter a valid amount for "' + row.item.label + '".');
@@ -528,7 +547,7 @@ export function reconcileQuoteRevision(
     });
     quote.selectedPackageId = accept ? nextSelection : validOld;
   } else {
-    const selection = nextSelection ?? (partial ? validOld : undefined);
+    const selection = nextSelection ?? (partial || (validOld && packages.retained.has(validOld)) ? validOld : undefined);
     quote.selectedPackageId = selection && packages.result.has(selection) ? selection : null;
   }
 

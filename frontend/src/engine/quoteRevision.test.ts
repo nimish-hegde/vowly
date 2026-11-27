@@ -517,6 +517,89 @@ test('revising an hourly overtime override with confirmed mandatory hours clears
   assert.equal(ratePreview.quote.lineItems.find(({ id }) => id === 'ot')?.isConditionalOvertime, true);
 });
 
+test('revising a confirmed mandatory hourly line to conditional overtime clears the mandatory override and quantity', () => {
+  const prior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    lineItems: [
+      { id: 'base', label: 'Photography package', pricingModel: 'flat', unitPrice: 900 },
+      {
+        id: 'ot',
+        label: 'Additional hourly coverage',
+        pricingModel: 'hourly',
+        unitPrice: 100,
+        extractedHours: 2,
+        quantity: 2,
+        isConditionalOvertime: false,
+      },
+    ],
+  });
+  const ws = workspace(prior);
+  assert.equal(calculateQuoteFinancials(prior, ws.events, [reception]).preTaxTotal, 1100);
+
+  const conditionalRevision = amendment(prior.id, {
+    sourceText: 'Additional hourly coverage is CAD 100/hour only if extra overtime is needed.',
+    lineItems: [
+      {
+        id: 'ot-cond',
+        label: 'Additional hourly coverage',
+        pricingModel: 'hourly',
+        unitPrice: 100,
+        extractedHours: 1,
+        chargeType: 'conditional',
+        sourceExcerpt: 'CAD 100/hour only if extra overtime is needed',
+      },
+    ],
+    evidenceSpans: [{ id: 'ev-1', excerpt: 'CAD 100/hour only if extra overtime is needed', sourceLabel: 'Revised email' }],
+  });
+  const preview = buildQuoteRevisionPreview(ws, ws.vendors[0], conditionalRevision);
+  assert.ok(preview);
+  assert.equal(preview.proposedCalc.preTaxTotal, 900);
+  assert.equal(preview.preTaxDelta, -200);
+  const reconciledLine = preview.quote.lineItems.find(({ id }) => id === 'ot');
+  assert.equal(reconciledLine?.isConditionalOvertime, undefined);
+  assert.equal(reconciledLine?.quantity, undefined);
+  assert.equal(reconciledLine?.chargeType, 'conditional');
+});
+
+test('retaining an edited or removed package in a manual revision preserves its scoped fees and selection', () => {
+  const avFee = { id: 'pkg-av', label: 'AV fee', pricingModel: 'flat' as const, unitPrice: 300, packageId: 'orchid' };
+  const prior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    lineItems: [],
+    selectedPackageId: 'orchid',
+    packages: [
+      { id: 'orchid', name: 'Orchid', unitPrice: 1000, pricingModel: 'flat', inclusions: ['Hall'], fees: [avFee] },
+      { id: 'cedar', name: 'Cedar', unitPrice: 800, pricingModel: 'flat', inclusions: ['Terrace'], fees: [] },
+    ],
+  });
+  const ws = workspace(prior);
+
+  const manualEdit: Quote = {
+    ...prior,
+    id: 'q-manual-pkg',
+    approvalState: 'draft',
+    packages: [
+      { ...prior.packages![0], unitPrice: 1200, fees: [{ ...avFee, unitPrice: 350 }] },
+      prior.packages![1],
+    ],
+    revisionDraft: {
+      baselineQuoteId: prior.id,
+      mode: 'manual',
+      decisions: { 'package:orchid': { action: 'retain' } },
+    },
+  };
+  const preview = buildQuoteRevisionPreview(ws, ws.vendors[0], manualEdit);
+  assert.ok(preview);
+  assert.equal(preview.quote.selectedPackageId, 'orchid');
+  assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.unitPrice, 1000);
+  assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.fees?.length, 1);
+  assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.fees?.[0].unitPrice, 300);
+  assert.equal(preview.proposedCalc.preTaxTotal, 1300);
+  assert.equal(preview.preTaxDelta, 0);
+});
+
 test('approving a saved duplicate revision draft clears the draft, restores status, and unblocks booking without adding a version', () => {
   const ws = workspace(original());
   const first = approve(ws, amendment());
