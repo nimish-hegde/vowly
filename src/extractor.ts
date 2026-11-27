@@ -750,9 +750,9 @@ export function normalizeProviderResponse(parsed: unknown): unknown {
         obj.gratuityPercent = onlyPkg.gratuityPercent;
       }
       if (
-        (obj.gratuityBasis === undefined || obj.gratuityBasis === 'unknown') &&
         typeof onlyPkg.gratuityBasis === 'string' &&
-        onlyPkg.gratuityBasis !== 'unknown'
+        (obj.gratuityBasis === undefined ||
+          (obj.gratuityBasis === 'unknown' && onlyPkg.gratuityBasis !== 'unknown'))
       ) {
         obj.gratuityBasis = onlyPkg.gratuityBasis;
       }

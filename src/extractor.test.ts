@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { calculateQuoteTotal } from './calculator.ts';
 import {
   buildOllamaRequestBody,
   ExtractionError,
@@ -7,6 +8,7 @@ import {
   normalizeProviderResponse,
   OLLAMA_RESPONSE_SCHEMA,
 } from './extractor.ts';
+import type { ExtractedQuote } from './types.ts';
 
 test('buildOllamaRequestBody supplies complete output contract and JSON schema', () => {
   const body = buildOllamaRequestBody('qwen2.5:7b', 'Sample venue quote');
@@ -256,4 +258,45 @@ test('normalizeProviderResponse preserves multi-package explicit null overrides 
     ],
   }) as { lineItems: Array<Record<string, unknown>> };
   assert.equal(conflictFixed.lineItems[0]?.pricingType, 'flat');
+});
+
+test('Codex P1: folding a single package preserves explicit unknown gratuityBasis and blocks completion', () => {
+  const folded = normalizeProviderResponse({
+    vendorName: 'Solo Hall',
+    category: 'venue',
+    events: ['Reception'],
+    quoteKind: 'initial',
+    currency: 'CAD',
+    taxStatus: 'unknown',
+    taxPercent: null,
+    gratuityStatus: 'unknown',
+    gratuityPercent: null,
+    gratuityBasis: null,
+    packages: [
+      {
+        id: 'solo',
+        name: 'Solo Package',
+        pricingType: 'flat',
+        amount: 1000,
+        gratuityStatus: 'excluded',
+        gratuityPercent: 15,
+        gratuityBasis: 'unknown',
+        inclusions: [],
+        sourceExcerpt: 'Solo Package $1,000 plus 15% gratuity',
+      },
+    ],
+    lineItems: [],
+    paymentTerms: { methodRule: 'unknown' },
+    openQuestions: [],
+  }) as ExtractedQuote;
+
+  assert.equal(folded.gratuityStatus, 'excluded');
+  assert.equal(folded.gratuityPercent, 15);
+  assert.equal(folded.gratuityBasis, 'unknown');
+
+  const calc = calculateQuoteTotal(folded);
+  assert.equal(calc.knownSubtotal, 1000);
+  assert.equal(calc.gratuityAmount, null);
+  assert.equal(calc.gratuityUnresolved, true);
+  assert.equal(calc.isEstimateComplete, false);
 });
