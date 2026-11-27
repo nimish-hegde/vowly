@@ -23,7 +23,7 @@ export function getApprovedRevisionBaseline(vendor: Vendor): Quote | undefined {
 function stable(value: unknown, skip?: ReadonlySet<string>): unknown {
   if (Array.isArray(value)) return value.map((item) => stable(item, skip));
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).filter(([key]) => !skip?.has(key)).sort(([a], [b]) => a.localeCompare(b))
+    return Object.fromEntries(Object.entries(value).filter(([key, field]) => !skip?.has(key) && field !== undefined && !(Array.isArray(field) && field.length === 0)).sort(([a], [b]) => a.localeCompare(b))
       .map(([key, field]) => [key, stable(field, skip)]));
   }
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : value;

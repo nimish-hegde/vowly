@@ -1,6 +1,6 @@
 import type {
-  IncludedPricingItem, Quote, QuoteAddOn, QuoteEvidenceSpan, QuoteLineItem,
-  QuotePackageOption, QuoteUnconfirmedFee,
+  IncludedPricingItem, PercentageBasis, Quote, QuoteAddOn, QuoteEvidenceSpan, QuoteLineItem,
+  QuotePackageOption, QuotePaymentMilestone, QuoteUnconfirmedFee, TaxHandling,
 } from '../types/vowly.ts';
 
 import type { RevisionChange, RevisionDecision } from '../types/vowly.ts';
@@ -26,6 +26,44 @@ const uniqueList = <T>(old: T[] = [], incoming: T[] = []) =>
 
 function supplied<T extends object>(old: T, incoming: T): T {
   return { ...old, ...Object.fromEntries(Object.entries(incoming).filter(([, value]) => value !== undefined)) };
+}
+
+type TaxTerms = { taxHandling?: TaxHandling; taxPercent?: number | null };
+type GratuityTerms = {
+  gratuityStatus?: 'included' | 'excluded' | 'unknown';
+  gratuityPercent?: number | null;
+  gratuityBasis?: PercentageBasis;
+};
+
+/**
+ * Tax terms after a partial amendment. An unstated treatment keeps the confirmed one, and a restated
+ * treatment without a rate keeps the confirmed rate. A different treatment never inherits a stale rate.
+ */
+function mergeTax(old: TaxTerms, next: TaxTerms): TaxTerms {
+  if (next.taxHandling === undefined || next.taxHandling === 'unspecified') {
+    return { taxHandling: old.taxHandling, taxPercent: old.taxPercent };
+  }
+  if (next.taxPercent != null) return { taxHandling: next.taxHandling, taxPercent: next.taxPercent };
+  return { taxHandling: next.taxHandling, taxPercent: next.taxHandling === old.taxHandling ? old.taxPercent : next.taxPercent };
+}
+
+/**
+ * Gratuity status, rate and basis move together. Unknowns keep the confirmed terms, an unstated basis
+ * keeps the confirmed basis, and included gratuity carries no rate or basis.
+ */
+function mergeGratuity(old: GratuityTerms, next: GratuityTerms): GratuityTerms {
+  const stated = (next.gratuityStatus !== undefined && next.gratuityStatus !== 'unknown') || next.gratuityPercent != null;
+  if (!stated) {
+    return { gratuityStatus: old.gratuityStatus, gratuityPercent: old.gratuityPercent, gratuityBasis: old.gratuityBasis };
+  }
+  const explicitStatus = next.gratuityStatus !== undefined && next.gratuityStatus !== 'unknown' ? next.gratuityStatus : undefined;
+  const status = explicitStatus ?? old.gratuityStatus ?? next.gratuityStatus;
+  if (status === 'included') return { gratuityStatus: status, gratuityPercent: undefined, gratuityBasis: undefined };
+  const percent = next.gratuityPercent != null ? next.gratuityPercent
+    : status === old.gratuityStatus ? old.gratuityPercent : next.gratuityPercent;
+  const basis = next.gratuityBasis !== undefined && next.gratuityBasis !== 'unknown' ? next.gratuityBasis
+    : old.gratuityStatus === 'excluded' ? old.gratuityBasis ?? next.gratuityBasis : next.gratuityBasis;
+  return { gratuityStatus: status, gratuityPercent: percent, gratuityBasis: basis };
 }
 
 function reserveId(preferred: string, used: Set<string>): string {
@@ -116,41 +154,67 @@ function withScope(cost: Cost, key: string, packageId?: string, eventId?: string
   }
 }
 
+/** Charge classification implied by an hourly line: true is conditional overtime, false is billed hours. */
+function hourlyConditionality(item: QuoteLineItem): boolean | undefined {
+  if (item.isConditionalOvertime !== undefined) return item.isConditionalOvertime;
+  return item.chargeType === 'conditional' ? true : item.chargeType === 'mandatory' ? false : undefined;
+}
+
+function amendLine(previous: QuoteLineItem, incoming: QuoteLineItem): QuoteLineItem {
+  const merged = supplied(previous, incoming);
+  // A new price invalidates a negotiated "normally X" figure unless the source restates it.
+  if (incoming.unitPrice !== previous.unitPrice && incoming.originalUnitPrice === undefined) merged.originalUnitPrice = undefined;
+
+  if (previous.pricingModel === 'percentage') {
+    if (incoming.percentageBasis === 'unknown' && previous.percentageBasis) {
+      merged.percentageBasis = previous.percentageBasis;
+    } else if (incoming.percentageBasis !== undefined && incoming.percentageBasis !== previous.percentageBasis) {
+      if (incoming.customBasisAmount === undefined) merged.customBasisAmount = undefined;
+      if (incoming.percentageTargetLabels === undefined) merged.percentageTargetLabels = undefined;
+    }
+  }
+
+  if (previous.pricingModel === 'hourly') {
+    // The source decides the classification only when it states one; more than one hour means billed hours.
+    const stated = incoming.isConditionalOvertime !== undefined ? undefined
+      : incoming.chargeType === 'conditional' ? true
+        : incoming.chargeType === 'mandatory' || (incoming.extractedHours ?? 0) > 1 ? false : undefined;
+    const before = hourlyConditionality(previous);
+    const flipped = stated !== undefined && before !== undefined && stated !== before;
+    if (flipped) {
+      // The confirmed override and quantity described the old classification.
+      merged.isConditionalOvertime = undefined;
+      merged.quantity = incoming.quantity;
+    } else if (incoming.quantity === undefined && previous.quantity !== undefined) {
+      // A single noisy hour on a conditional rate says nothing about confirmed overtime hours.
+      const conditional = merged.isConditionalOvertime ?? (incoming.chargeType ?? previous.chargeType) === 'conditional';
+      const hoursChanged = incoming.extractedHours !== undefined &&
+        incoming.extractedHours !== (previous.extractedHours ?? previous.quantity);
+      if (!conditional && hoursChanged) merged.quantity = undefined;
+    }
+  }
+  return merged;
+}
+
+/** A restated unknown amount never discards what the reviewer already confirmed or waived. */
+function amendFee(previous: QuoteUnconfirmedFee, incoming: QuoteUnconfirmedFee): QuoteUnconfirmedFee {
+  const restatedUnknown = incoming.status === 'unconfirmed' && previous.status !== 'unconfirmed' &&
+    incoming.mandatory === previous.mandatory;
+  if (!restatedUnknown) return incoming;
+  return {
+    ...incoming,
+    description: incoming.description.trim() ? incoming.description : previous.description,
+    status: previous.status,
+    confirmedAmount: previous.confirmedAmount,
+  };
+}
+
 function amendCost(previous: Cost, incoming: Cost): Cost {
   if (previous.type === 'line' && incoming.type === 'line' && previous.item.pricingModel === incoming.item.pricingModel) {
-    const merged = supplied(previous.item, incoming.item);
-    if (previous.item.pricingModel === 'hourly') {
-      const hoursChanged =
-        incoming.item.extractedHours !== undefined &&
-        incoming.item.extractedHours !== (previous.item.extractedHours ?? previous.item.quantity);
-      if (incoming.item.quantity === undefined && previous.item.quantity !== undefined && hoursChanged) {
-        merged.quantity = undefined;
-      }
-      if (
-        incoming.item.isConditionalOvertime === undefined &&
-        previous.item.isConditionalOvertime === true &&
-        ((incoming.item.extractedHours !== undefined && incoming.item.extractedHours > 1) ||
-          (incoming.item.chargeType === 'mandatory' && previous.item.chargeType !== 'mandatory'))
-      ) {
-        merged.isConditionalOvertime = undefined;
-        if (incoming.item.quantity === undefined && previous.item.quantity === 0) {
-          merged.quantity = undefined;
-        }
-      }
-      if (
-        incoming.item.isConditionalOvertime === undefined &&
-        incoming.item.chargeType === 'conditional' &&
-        previous.item.chargeType !== 'conditional'
-      ) {
-        if (previous.item.isConditionalOvertime === false) {
-          merged.isConditionalOvertime = undefined;
-        }
-        if (incoming.item.quantity === undefined) {
-          merged.quantity = undefined;
-        }
-      }
-    }
-    return { ...incoming, item: merged };
+    return { ...incoming, item: amendLine(previous.item, incoming.item) };
+  }
+  if (previous.type === 'fee' && incoming.type === 'fee') {
+    return { ...incoming, item: amendFee(previous.item, incoming.item) };
   }
   if (previous.type === 'optional' && incoming.type === 'optional') {
     const item = previous.item.pricingModel === incoming.item.pricingModel ? supplied(previous.item, incoming.item) : incoming.item;
@@ -211,14 +275,28 @@ function paymentLabel(source: Quote | QuotePackageOption, currency: Quote['curre
   ].filter(Boolean).join(' · ') || null;
 }
 
+const DEPOSIT_LABEL = /\b(deposit|retainer|booking|signing|initial)\b/i;
+const BALANCE_LABEL = /\b(balance|remaining|final|rest|due)\b/i;
+const milestoneSlot = (label: string) => DEPOSIT_LABEL.test(label) ? 'deposit' : BALANCE_LABEL.test(label) ? 'balance' : undefined;
+
 function paymentAmendment<T extends Quote | QuotePackageOption>(old: T, incoming: T) {
   const amendments = incoming.paymentMilestones ?? [];
-  const touched = new Set<string>();
-  const milestones = (old.paymentMilestones ?? []).map((milestone) => {
-    const candidates = amendments.filter((item) => norm(item.label) === norm(milestone.label));
-    if (candidates.length !== 1) return milestone;
-    const next = candidates[0];
-    touched.add(norm(next.label));
+  const previous = old.paymentMilestones ?? [];
+  const claimed = new Set<QuotePaymentMilestone>();
+  const matchFor = (milestone: QuotePaymentMilestone) => {
+    const exact = amendments.filter((item) => norm(item.label) === norm(milestone.label));
+    if (exact.length > 0) return exact.length === 1 ? exact[0] : undefined;
+    const slot = milestoneSlot(milestone.label);
+    if (!slot || previous.filter((item) => milestoneSlot(item.label) === slot).length !== 1) return undefined;
+    // A differently worded deposit or balance amends the one on file instead of adding a second.
+    const sameSlot = amendments.filter((item) => milestoneSlot(item.label) === slot &&
+      !previous.some((other) => other !== milestone && norm(other.label) === norm(item.label)));
+    return sameSlot.length === 1 ? sameSlot[0] : undefined;
+  };
+  const milestones = previous.map((milestone) => {
+    const next = matchFor(milestone);
+    if (!next) return milestone;
+    claimed.add(next);
     return {
       ...supplied(milestone, next),
       amount: next.percent !== undefined && next.amount === undefined ? undefined : next.amount ?? milestone.amount,
@@ -228,14 +306,29 @@ function paymentAmendment<T extends Quote | QuotePackageOption>(old: T, incoming
         : next.relativeDaysBeforeEvent ?? milestone.relativeDaysBeforeEvent,
     };
   });
+  const schedule = [...milestones, ...amendments.filter((item) => !claimed.has(item))];
+  let depositAmount = incoming.depositPercent !== undefined && incoming.depositAmount === undefined ? undefined
+    : incoming.depositAmount ?? old.depositAmount;
+  let depositPercent = incoming.depositAmount !== undefined && incoming.depositPercent === undefined ? undefined
+    : incoming.depositPercent ?? old.depositPercent;
+
+  // The booking flow reads the deposit milestone before the deposit fields, so keep the two in agreement.
+  const index = schedule.findIndex((item) => milestoneSlot(item.label) === 'deposit');
+  const statedField = incoming.depositAmount !== undefined || incoming.depositPercent !== undefined;
+  const statedMilestone = amendments.some((item) => milestoneSlot(item.label) === 'deposit');
+  if (index >= 0 && statedField && !statedMilestone) {
+    schedule[index] = { ...schedule[index], amount: depositAmount, percent: depositPercent };
+  } else if (index >= 0 && statedMilestone && !statedField &&
+      (old.depositAmount !== undefined || old.depositPercent !== undefined)) {
+    depositAmount = schedule[index].amount;
+    depositPercent = schedule[index].percent;
+  }
   return {
     paymentTermsSummary: incoming.paymentTermsSummary?.trim() && incoming.paymentTermsSummary !== 'Confirm deposit and payment schedule with vendor.'
       ? incoming.paymentTermsSummary : old.paymentTermsSummary,
-    paymentMilestones: [...milestones, ...amendments.filter((item) => !touched.has(norm(item.label)))],
-    depositAmount: incoming.depositPercent !== undefined && incoming.depositAmount === undefined ? undefined
-      : incoming.depositAmount ?? old.depositAmount,
-    depositPercent: incoming.depositAmount !== undefined && incoming.depositPercent === undefined ? undefined
-      : incoming.depositPercent ?? old.depositPercent,
+    paymentMilestones: schedule,
+    depositAmount,
+    depositPercent,
   };
 }
 
@@ -308,6 +401,8 @@ function revisePackages(context: RevisionContext) {
       inclusions: uniqueList(old.inclusions, pkg.inclusions),
       structuredInclusions: uniqueList(old.structuredInclusions, pkg.structuredInclusions),
       deliveryTerms: uniqueList(old.deliveryTerms, pkg.deliveryTerms),
+      ...mergeTax(old, pkg),
+      ...mergeGratuity(old, pkg),
       ...paymentAmendment(old, pkg),
     } : pkg;
     const packageId = old?.id ?? reserveId(pkg.id, used);
@@ -358,6 +453,13 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
   const preserved = new Set<string>();
   const mapped = new Map<string, string>();
   const repriced = new Set<string>();
+  // A resolved conflict, not the stored price, is what the previous quote actually charged.
+  const effective = (row: Cost): Cost => {
+    if (row.type !== 'line') return row;
+    const conflict = previous.conflicts.find((item) => item.targetLineItemId === row.key && item.resolvedOptionId);
+    const option = conflict?.options.find((item) => item.id === conflict.resolvedOptionId);
+    return option ? { ...row, item: { ...row.item, unitPrice: option.amount, pricingModel: option.pricingModel ?? row.item.pricingModel } } : row;
+  };
   const scope = (row: Cost) => row.packageId ? packages.result.get(row.packageId)?.name ?? row.packageId : row.eventId;
   const exact = (left: Cost, right: Cost) => left.packageId === right.packageId && (left.eventId ?? context.defaultEventId) === (right.eventId ?? context.defaultEventId) && norm(left.item.label) === norm(right.item.label);
   for (const row of proposed) {
@@ -397,7 +499,8 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
     const proposedEvidence = row.type === 'included' ? undefined : mapEvidenceId(row.item.evidenceId);
     const scoped = withScope(row, key, partial ? old?.packageId ?? row.packageId : row.packageId,
       partial ? old?.eventId ?? row.eventId : row.eventId, proposedEvidence ?? carriedEvidence);
-    const amended = old && partial ? amendCost(old, { ...scoped, nested: old.nested || scoped.nested }) : scoped;
+    const charged = old ? effective(old) : undefined;
+    const amended = old && charged && partial ? amendCost(charged, { ...scoped, nested: old.nested || scoped.nested }) : scoped;
     const reviewed = editAmount(amended, decision);
     if (!reviewed) blockingReasons.push('Enter a valid amount for "' + row.item.label + '".');
     const next = reviewed ?? amended;
@@ -406,11 +509,11 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
       result.set(key, next);
       if (next.type === 'line') mapped.set(row.key, key);
     }
-    const changed = !old || !same(costFacts(old), costFacts(next));
+    const changed = !charged || !same(costFacts(charged), costFacts(next));
     if (changed && old && !retained && !removed) repriced.add(old.key);
     if (changed || decision) changes.push({
-      id, field: row.item.label, scope: scope(next), previous: old ? showCost(old, previous.currency) : null,
-      proposed: removed || (retained && !old) ? null : retained && old ? showCost(old, previous.currency) : showCost(next, currency),
+      id, field: row.item.label, scope: scope(next), previous: charged ? showCost(charged, previous.currency) : null,
+      proposed: removed || (retained && !old) ? null : retained && charged ? showCost(charged, previous.currency) : showCost(next, currency),
       kind: removed ? 'removed' : retained ? 'carried' : old ? 'changed' : 'added',
       previousEvidence: old ? costEvidence(previous, old) : undefined, proposedEvidence: costEvidence(incoming, row),
       canEditAmount: next.type !== 'included', canRemove: Boolean(old),
@@ -484,15 +587,25 @@ export function reconcileQuoteRevision(
     quote.currency = previous.currency;
     quote.currencySource = previous.currencySource;
   }
-  if (!preferIncoming('tax', 'Tax', taxLabel(previous), taxLabel(incoming), !partial || incoming.taxHandling !== 'unspecified')) {
+  const tax = partial ? mergeTax(previous, incoming) : incoming;
+  if (!preferIncoming('tax', 'Tax', taxLabel(previous), taxLabel(tax as Pick<Quote, 'taxHandling' | 'taxPercent'>),
+    !partial || incoming.taxHandling !== 'unspecified')) {
     quote.taxHandling = previous.taxHandling;
     quote.taxPercent = previous.taxPercent;
-  } else if (partial && incoming.taxPercent === undefined && incoming.taxHandling !== previous.taxHandling) quote.taxPercent = undefined;
-  if (!preferIncoming('gratuity', 'Gratuity', gratuityLabel(previous), gratuityLabel(incoming),
+  } else {
+    quote.taxHandling = tax.taxHandling ?? previous.taxHandling;
+    quote.taxPercent = tax.taxPercent;
+  }
+  const gratuity = partial ? mergeGratuity(previous, incoming) : incoming;
+  if (!preferIncoming('gratuity', 'Gratuity', gratuityLabel(previous), gratuityLabel(gratuity),
     !partial || (incoming.gratuityStatus && incoming.gratuityStatus !== 'unknown') || incoming.gratuityPercent != null)) {
     quote.gratuityStatus = previous.gratuityStatus;
     quote.gratuityPercent = previous.gratuityPercent;
     quote.gratuityBasis = previous.gratuityBasis;
+  } else {
+    quote.gratuityStatus = gratuity.gratuityStatus;
+    quote.gratuityPercent = gratuity.gratuityPercent;
+    quote.gratuityBasis = gratuity.gratuityBasis;
   }
   for (const [key, field] of [
     ['minGuests', 'Guest minimum'], ['maxCapacity', 'Capacity'],
@@ -567,7 +680,12 @@ export function reconcileQuoteRevision(
         : !item.targetLineItemId && norm(item.fieldLabel) === norm(conflict.fieldLabel)) &&
       !(conflict.targetLineItemId && repriced.has(conflict.targetLineItemId) && conflict.resolvedOptionId)),
     ...newConflicts,
-  ] : newConflicts;
+  ] : newConflicts.filter((conflict) => {
+    // A price typed over a line supersedes the choice recorded for its conflict.
+    const line = rows.find((row) => row.type === 'line' && row.key === conflict.targetLineItemId)?.item as QuoteLineItem | undefined;
+    const option = conflict.options.find((item) => item.id === conflict.resolvedOptionId);
+    return !line || !option || line.unitPrice === option.amount;
+  });
 
   const termsFields = [
     ['inclusions', 'Inclusions'], ['deliveryTerms', 'Delivery terms'],
@@ -600,7 +718,7 @@ export function reconcileQuoteRevision(
   const acknowledgedPrevious = !previous.sourceWarnings?.length || Boolean(previous.sourceWarningsAcknowledged) ||
     (!partial && incoming.sourceWarningsAcknowledged &&
       previous.sourceWarnings.every((warning) => incoming.sourceWarnings?.includes(warning)));
-  quote.sourceWarningsAcknowledged =
+  quote.sourceWarningsAcknowledged = quote.sourceWarnings.length === 0 ? previous.sourceWarningsAcknowledged :
     acknowledgedPrevious &&
     (!incoming.sourceWarnings?.length || Boolean(incoming.sourceWarningsAcknowledged));
   return { quote, changes, blockingReasons: [...new Set(blockingReasons)] };

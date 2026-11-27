@@ -1482,6 +1482,14 @@ export function QuoteImportModal({
                                 type="button"
                                 onClick={() => {
                                   if (opt.evidenceId) setActiveEvidenceId(opt.evidenceId);
+                                  const applyOption = (li: QuoteLineItem): QuoteLineItem =>
+                                    li.id === conflict.targetLineItemId
+                                      ? {
+                                          ...li,
+                                          unitPrice: opt.amount,
+                                          pricingModel: opt.pricingModel ?? li.pricingModel,
+                                        }
+                                      : li;
                                   updateQuote((q) => ({
                                     ...q,
                                     conflicts: q.conflicts.map((c) =>
@@ -1489,14 +1497,11 @@ export function QuoteImportModal({
                                         ? { ...c, resolvedOptionId: opt.id }
                                         : c
                                     ),
-                                    lineItems: q.lineItems.map((li) =>
-                                      li.id === conflict.targetLineItemId
-                                        ? {
-                                            ...li,
-                                            unitPrice: opt.amount,
-                                            pricingModel: opt.pricingModel ?? li.pricingModel,
-                                          }
-                                        : li
+                                    lineItems: q.lineItems.map(applyOption),
+                                    packages: q.packages?.map((pkg) =>
+                                      pkg.fees?.some((fee) => fee.id === conflict.targetLineItemId)
+                                        ? { ...pkg, fees: pkg.fees.map(applyOption) }
+                                        : pkg
                                     ),
                                   }));
                                 }}
