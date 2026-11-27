@@ -45,15 +45,43 @@ export interface TelemetrySummary {
   quoteApprovalRate: number;
 }
 
-// Flash-Lite paid estimate ($0.10 / 1M input, $0.40 / 1M output). Free tier is $0.
-const INPUT_USD_PER_MILLION = 0.1;
-const OUTPUT_USD_PER_MILLION = 0.4;
+export interface ModelPricingRates {
+  inputUsdPerMillion: number;
+  outputUsdPerMillion: number;
+  note?: string;
+}
 
-export function estimateExtractionCostUsd(usage?: TokenUsage): number {
+// Estimated paid-tier rates (USD per 1M tokens). Free tier is $0 actual spend.
+export const MODEL_PRICING_USD_PER_MILLION: Record<string, ModelPricingRates> = {
+  'gemini-3.5-flash-lite': { inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5 },
+  'gemini-flash-lite-latest': { inputUsdPerMillion: 0.3, outputUsdPerMillion: 2.5 },
+  'gemini-3.8-flash': {
+    inputUsdPerMillion: 0.75,
+    outputUsdPerMillion: 3.75,
+    note: 'promotional pricing',
+  },
+  'gemini-4-hydrogen': { inputUsdPerMillion: 1.5, outputUsdPerMillion: 7.5 },
+  'gemini-4-neon': { inputUsdPerMillion: 3.0, outputUsdPerMillion: 15.0 },
+};
+
+const DEFAULT_PRICING: ModelPricingRates = MODEL_PRICING_USD_PER_MILLION['gemini-3.5-flash-lite']!;
+
+export function getModelPricingRates(model?: string): ModelPricingRates {
+  if (!model) return DEFAULT_PRICING;
+  const norm = model.trim().toLowerCase();
+  if (MODEL_PRICING_USD_PER_MILLION[norm]) return MODEL_PRICING_USD_PER_MILLION[norm]!;
+  for (const [key, rates] of Object.entries(MODEL_PRICING_USD_PER_MILLION)) {
+    if (norm.includes(key)) return rates;
+  }
+  return DEFAULT_PRICING;
+}
+
+export function estimateExtractionCostUsd(usage?: TokenUsage, model?: string): number {
   if (!usage) return 0;
+  const rates = getModelPricingRates(model);
   return (
-    (usage.promptTokens * INPUT_USD_PER_MILLION +
-      usage.outputTokens * OUTPUT_USD_PER_MILLION) /
+    (usage.promptTokens * rates.inputUsdPerMillion +
+      usage.outputTokens * rates.outputUsdPerMillion) /
     1_000_000
   );
 }

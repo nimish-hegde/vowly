@@ -120,3 +120,17 @@ Record significant product, architecture, and model decisions here as they are m
   - Side-by-side multi-package comparison inside `VendorComparisonView`.
   - Inline editing of package-specific fees/overrides without leaving the package card.
 - **Decision:** **Approved by PM and merged (`#13`).**
+
+### D-007 — Issue #15 Gemini Model Benchmarking & Fresh 30-Case Multimodal Holdout (`experiment/model-benchmarking`)
+
+- **Hypothesis:** Newer Gemini models (`gemini-3.8-flash`, `gemini-4-hydrogen`, `gemini-4-neon`) might meaningfully improve multimodal quote extraction accuracy or reduce manual corrections compared to `gemini-3.5-flash-lite`.
+- **Changes:**
+  - Created frozen, 100% synthetic 30-case multimodal holdout (`eval-data/held-out-v3-multimodal/`: `10` pasted messages, `10` PNG screenshots, `10` single/multi-page PDFs) with deterministic generator (`scripts/generate-multimodal-holdout.ts`, `scripts/render-holdout-images.ps1`).
+  - Built 10-dimension benchmark runner (`scripts/run-model-benchmark.ts`) with true multimodal `documentText` grounding, 3-way separation (AI extraction errors vs. legitimate user decisions vs. missing source info), and frontend/backend calculation parity checks; added `--model` flag to `src/eval.ts` and updated model pricing table in `src/telemetry.ts`.
+  - Kept default production model (`gemini-flash-lite-latest`), `SYSTEM_PROMPT`, `GEMINI_RESPONSE_SCHEMA`, and all 66 locked regression cases unchanged.
+- **Evaluation Results (`$0` actual spend on free tier):**
+  - **Smoke tests:** `gemini-3.5-flash-lite` PASS (`1.66s`); `gemini-4-hydrogen` PASS (`43.6s`, thinking-enabled); `gemini-3.8-flash` EXCLUDED (persistent HTTP `503 UNAVAILABLE` / timeouts); `gemini-4-neon` EXCLUDED (HTTP `429` free-tier unavailable; billing not enabled).
+  - **`gemini-3.5-flash-lite` (30/30 full + 15 consistency runs):** `28/30 (93.3%)` E2E (`10/10` image, `10/10` PDF, `8/10` text), `94.1%` field accuracy, `100%` true grounding, `0.70` AI corrections/quote, `2,570 ms` avg no-retry latency, `$0.00316` est. paid cost/extraction (`$0.30/$2.50` per 1M); `100%` pass/fail stability across 5-case × 3-repeat consistency check; `66/66` locked regression intact.
+  - **`gemini-4-hydrogen` (12 attempted / 8 completed before `429`/`503` circuit breaker):** `7/8` completed (`98.4%` field accuracy, `0.38` AI corrections/quote), but **failed `T07` too**, `66.7%` API availability (`19` retries), `12,221 ms` avg no-retry latency (`4.8×` slower), and `$0.03057` est. paid cost/extraction (`9.7×` more expensive due to `14,599` default thinking tokens).
+  - **Bonus Parity Catch:** Benchmark parity check caught a real pre-existing frontend bug on `I04` (multi-package conditional overtime billing 1 hour in frontend vs `0` in backend) — routed to **Issue #16**.
+- **Decision:** **HOLD on model migration — Recommend keeping `gemini-3.5-flash-lite` (`gemini-flash-lite-latest`) as production default (pending PM approval).** Prioritize **Issue #16** (shared financial engine) and targeted prompt refinement for `T07`/`T10` over paying `9.7×` for a slower model.

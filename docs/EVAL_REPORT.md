@@ -389,3 +389,104 @@ Following Codex review on `eda6c4d` and founder manual UAT, four release blocker
 - Free-tier Gemini API bursts can trigger HTTP 429 retries (12 retries across 66 sequential cases; all recovered cleanly via exponential backoff).
 - On some multi-package brochures mentioning gratuity without explicit basis wording, Gemini conservatively flags gratuity basis as needing user confirmation (safe fail-closed behavior; user confirms in 1 click).
 - Post-event actual overtime reconciliation and multi-installment (>2 milestone) custom schedule editing in `BookingModal` are deferred to the next milestone.
+
+---
+
+## 14. Issue #15 — Gemini Model Benchmarking & Fresh Multimodal Holdout (`held-out-v3-multimodal`)
+
+**Branch:** `experiment/model-benchmarking` (from `main` at `85e00a9`)  
+**Default Production Model:** Unchanged (`gemini-flash-lite-latest` → `gemini-3.5-flash-lite`)  
+**Controlled Variables:** `SYSTEM_PROMPT`, `GEMINI_RESPONSE_SCHEMA`, `normalizeProviderResponse`, `validateExtractedQuote`, and `calculateQuoteTotal` were frozen and identical across all runs (`temperature: 0`). Existing 66 locked cases (`dev/`, `regression/`, `held-out/`, `held-out-v2/`) were untouched.
+
+### 14.1 Model Access & Structured-Output Smoke Tests (Free Tier, `$0` Actual Spend)
+
+Metadata visibility (`GET /v1beta/models`) listed all four candidate models, so we ran live generation smoke tests on each before benchmarking:
+
+| Model ID | Paid Pricing (USD / 1M tokens) | Smoke-Test Outcome | Included in Live Benchmark? |
+|---|---|---|---|
+| `gemini-3.5-flash-lite` | `$0.30` in / `$2.50` out | **PASS** — Full `extractQuote` (`1,663 ms`, schema valid, grounded) | **Yes (Baseline — full 30/30 + 15 consistency runs)** |
+| `gemini-4-hydrogen` | `$1.50` in / `$7.50` out | **PASS** — Full `extractQuote` (`43,597 ms`, schema valid, `766` thinking tokens) | **Yes (12 attempted / 8 completed before free-tier `429`/`503` circuit breaker)** |
+| `gemini-3.8-flash` | `$0.75` in / `$3.75` out *(promotional)* | **UNAVAILABLE** — Repeated `30s`/`45s` timeouts and HTTP `503 UNAVAILABLE` ("currently experiencing high demand") across 4 smoke tests and Phase 1 start | **Excluded** (persistent upstream `503`/timeout failures) |
+| `gemini-4-neon` | `$3.00` in / `$15.00` out | **UNAVAILABLE ON FREE TIER** — HTTP `429` (`quota exceeded`) in `170 ms` | **Excluded** (paid-only; billing **not** enabled without PM approval) |
+
+### 14.2 Fresh Frozen 30-Case Multimodal Dataset (`eval-data/held-out-v3-multimodal/`)
+
+Generated deterministically via `scripts/generate-multimodal-holdout.ts` + `scripts/render-holdout-images.ps1` (100% synthetic/anonymized, zero personal wedding data) and verified `30/30 (100%)` offline via `--provider mock` before any live calls:
+- **Modalities:** `10` pasted messages (`T01`–`T10`), `10` PNG screenshots (`I01`–`I10`: email, 2-column brochure, IG DM, 3-tier rate card, dense catering flyer with fine print, WhatsApp thread, mobile DJ quote, low-contrast card, cropped table with TBD tier, email+graphic cross-source conflict), `10` PDFs (`P01`–`P10`: single- and 2-page proposals, brochures, contracts, revision addendum).
+- **Difficulty Mix:** `8` ordinary quotes, `22` difficult quotes across `venue`, `photographer`, `catering`, `decor`, `dj`, `entertainment`, and `unknown`.
+- **True Multimodal Grounding:** Every `sourceExcerpt` is verified against the actual rendered `documentText` of each PNG/PDF (not merely checking non-empty strings).
+- **3-Way Error Separation:** Separates (1) AI extraction errors requiring manual correction, (2) legitimate user decisions/confirmations (`29` across the 30 cases), and (3) genuinely missing source information (`36` across the 30 cases).
+
+### 14.3 Head-to-Head Model Comparison (`held-out-v3-multimodal`)
+
+| Metric | `gemini-3.5-flash-lite` (30/30 full) | `gemini-4-hydrogen` (12 attempted / 8 completed) |
+|---|---:|---:|
+| **API Availability** | **30/30 (100.0%)** | 8/12 (66.7%) *(aborted by `429`/`503` circuit breaker)* |
+| **Schema Validity (completed)** | **30/30 (100.0%)** | 8/8 (100.0%) |
+| **End-to-End Accuracy (all attempted)** | **28/30 (93.3%)** | 7/12 (58.3%) |
+| **Completed Extraction Accuracy** | **28/30 (93.3%)** | 7/8 (87.5%) |
+| **Field-Level Extraction Accuracy** | **207/220 (94.1%)** | 60/61 (98.4%) |
+| **Critical Financial Errors** | **1** (`T07`) | **1** (`T07`) |
+| **Unsupported Currency Assumptions** | **0** | **0** |
+| **True Multimodal Source Grounding** | **89/89 (100.0%)** | 19/19 (100.0%) |
+| **Frontend/Backend Calculation Parity** | **29/30 (96.7%)** *(`I04` pre-existing FE gap)* | 8/8 (100.0%) *(`I04` hit `429`)* |
+| **Inclusions Recall (leaked schema tokens)** | **78.0%** (`0` leaked) | 80.0% (`0` leaked) |
+| **Delivery Terms Recall / Payment Accuracy** | **80.0% / 86.0%** | 100.0% / 91.7% |
+| **AI Extraction Errors Requiring Correction** | **21 (`0.70` / quote)** | 3 (`0.38` / completed quote) |
+| **Legitimate User Decisions / Missing Source Info** | `29` / `36` | `12` / `12` *(attempted subset)* |
+| **Avg Latency (excl. retries / incl. retries)** | **2,570 ms** / 5,072 ms | 12,221 ms / 20,765 ms *(4.8× slower)* |
+| **Total Retries (`429`/`503`/timeout)** | **2** | **19** |
+| **Tokens (Input / Candidate Out / Thinking Out)** | `109,637` / `22,190` / `0` | `49,698` / `3,993` / `14,599` *(3.66× thinking multiplier)* |
+| **Est. Paid Cost (incl. thinking as billed out)** | **`$0.08837`** | `$0.21399` *(for only 8 completed cases)* |
+| **Est. Paid Cost per Successful Extraction** | **`$0.00316`** | `$0.03057` *(**9.7×** more expensive)* |
+
+### 14.4 Breakdowns for `gemini-3.5-flash-lite` (Full 30 Cases)
+
+**By Modality:**
+
+| Modality | E2E Accuracy | Field Accuracy | Critical Fin. Errors | True Grounding | AI Corrections / Quote | Avg Latency (No-Retry) |
+|---|---:|---:|---:|---:|---:|---:|
+| `text` (10) | 8/10 (80.0%) | 97.1% | 1 (`T07`) | 100.0% | 0.50 | 1,895 ms |
+| `image` (10) | **10/10 (100.0%)** | 91.9% | **0** | 100.0% | 0.80 | 2,777 ms |
+| `pdf` (10) | **10/10 (100.0%)** | 93.5% | **0** | 100.0% | 0.80 | 3,037 ms |
+
+**By Difficulty:**
+
+| Difficulty | E2E Accuracy | Field Accuracy | Critical Fin. Errors | AI Corrections / Quote |
+|---|---:|---:|---:|---:|
+| `ordinary` (8) | **8/8 (100.0%)** | 96.6% | **0** | 0.75 |
+| `difficult` (22) | 20/22 (90.9%) | 93.2% | 1 (`T07`) | 0.68 |
+
+**By Vendor Category:**
+
+| Category | E2E Accuracy | Field Accuracy | Critical Fin. Errors | AI Corrections / Quote | Avg Latency (No-Retry) |
+|---|---:|---:|---:|---:|---:|
+| `venue` (10) | **10/10 (100.0%)** | 90.8% | 0 | 1.30 | 2,703 ms |
+| `photographer` (8) | **8/8 (100.0%)** | 95.7% | 0 | 0.63 | 2,792 ms |
+| `catering` (3) | 2/3 (66.7%) | 95.7% | 1 (`T07`) | 0.67 | 2,707 ms |
+| `decor` (3) | **3/3 (100.0%)** | 100.0% | 0 | 0.00 | 2,505 ms |
+| `dj` (3) | **3/3 (100.0%)** | 100.0% | 0 | 0.00 | 2,080 ms |
+| `entertainment` (2) | **2/2 (100.0%)** | 100.0% | 0 | 0.00 | 2,055 ms |
+| `unknown` (1) | 0/1 (0.0%) | 83.3% | 0 | 1.00 | 1,744 ms |
+
+### 14.5 Consistency & Regression Verification
+
+- **5-Case × 3-Repeat Consistency Check (`gemini-3.5-flash-lite` on `T02`, `T07`, `I02`, `I04`, `P02` — 15 live runs):**
+  - **API Availability:** `15/15 (100.0%)`, `0` retries, `2,770 ms` avg latency.
+  - **Pass/Fail Stability:** **100% deterministic across all 5 cases** (`3/3` PASS on `T02`, `I02`, `I04`, `P02`; consistent `0/3` on `T07`).
+  - **Field Accuracy:** `107/114 (93.9%)`, `100%` true grounding (`59/59`), `100%` delivery terms and payment accuracy.
+- **66-Case Locked Regression Suite:** `gemini-3.5-flash-lite` remains verified at **66/66 (100.0%)** with `0` critical financial errors (prompt, schema, and extractor logic are unchanged from `a0b942c`). `gemini-4-hydrogen` was not run on the 66-case suite to preserve free-tier quota after failing the availability, latency, and unit-economics gates on the multimodal holdout.
+
+### 14.6 Failure Analysis & Actionable Findings
+
+1. **`T07` (Conflicting Pricing Models Across Dated Messages — failed by BOTH `gemini-3.5-flash-lite` and `gemini-4-hydrogen`):** When a forwarded message contained an earlier Instagram DM (`$1,800 flat`) and a later dated Email (`$45/person`), both models classified it as a `revision` instead of a conflicting `initial` quote, and `gemini-4-hydrogen` omitted `conflictingOptions` entirely. This is a prompt disambiguation edge case, not a Flash-Lite capability gap.
+2. **`T10` (Ambiguous Category):** `gemini-3.5-flash-lite` classified `"Horizon Hospitality & Events"` as `"venue"` instead of `"unknown"`.
+3. **Pre-Existing Frontend/Backend Parity Gap (`I04`, caught by benchmark parity check):** On a 3-tier photography rate card (`I04`) where `"Overtime is $275/hr"` is a quote-level line item and included hours live on `packages[].hours`, the backend correctly calculated `$3,100` (`0` overtime hours) while the frontend calculated `$3,375` (`+$275` for 1 default hour) because `findIncludedHoursFromBackendQuote` in `frontend/src/services/quoteExtractor.ts` did not inspect `packages[].hours`. Tracked for **Issue #16 (Shared Deterministic Financial Engine)**.
+
+### 14.7 Model Selection Recommendation (Pending PM Approval)
+
+- **Recommendation: KEEP `gemini-3.5-flash-lite` (`gemini-flash-lite-latest`) as Vowly's production default (HOLD on model migration).**
+- **Rationale:**
+  - `gemini-3.5-flash-lite` achieved **`10/10 (100%)` on images**, **`10/10 (100%)` on PDFs**, **`100%` API availability**, **`100%` true multimodal grounding**, **`2.57s` avg no-retry latency**, and **`$0.00316` est. paid cost per successful extraction**.
+  - `gemini-4-hydrogen` showed slightly higher field-level accuracy (`98.4%` vs `94.1%`) on the 8 cases it completed, but failed three ship gates: **API availability (`66.7%` vs `≥95%`)**, **UX latency (`12.2s` vs `<5.0s`)**, and **unit economics (`$0.03057` vs `$0.00316` per extraction — `9.7×` higher cost driven by default thinking tokens)**, while still failing `T07`.
+  - `gemini-3.8-flash` was unusable due to persistent HTTP `503` high-demand / timeout failures, and `gemini-4-neon` is unavailable on the free tier (`429`).

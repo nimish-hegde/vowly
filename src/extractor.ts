@@ -726,6 +726,7 @@ export async function extractQuote(
   rawMessage: string,
   options: {
     provider?: ProviderName;
+    model?: string;
     mockLookup?: ExtractedQuote;
     attachments?: ExtractionAttachment[];
     onRetry?: (info: RetryInfo) => void;
@@ -829,7 +830,7 @@ export async function extractQuote(
     });
   }
 
-  const model = process.env.GEMINI_MODEL ?? 'gemini-flash-lite-latest';
+  const model = options.model ?? process.env.GEMINI_MODEL ?? 'gemini-flash-lite-latest';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const userParts: Array<
