@@ -69,3 +69,32 @@ test('Codex P2: grounding requires local span co-occurrence rather than document
   // Digit substring must not false-match ("5" must not match "150" or "58")
   assert.equal(isExcerptGroundedInSource('Minimum guarantee: 5 guests', source), false);
 });
+
+test('Codex P1: package-level taxPercent and gratuityPercent overrides fail endToEndPassed and flag criticalFinancialError', () => {
+  const t02 = getCase('T02');
+  const bad = structuredClone(t02.mockExtraction);
+  bad.packages![0]!.taxPercent = 99;
+  bad.packages![0]!.gratuityPercent = 99;
+
+  const result = gradeBenchmarkCase(t02, bad, 100, 100, 0, undefined, 1);
+  assert.equal(result.endToEndPassed, false);
+  assert.equal(result.criticalFinancialError, true);
+  assert.ok(result.aiExtractionErrorsRequiringCorrection >= 2);
+  assert.ok(result.releaseBlockers.some((b) => b.includes('Silver Package') && b.includes('taxPercent')));
+  assert.ok(result.releaseBlockers.some((b) => b.includes('Silver Package') && b.includes('gratuityPercent')));
+});
+
+test('Codex P2: partial decimal matches ($85 vs $85.50, 5% vs 15.5%) fail financial-token grounding', () => {
+  assert.equal(
+    isExcerptGroundedInSource('Package $85 CAD per person', 'Package $85.50 CAD per person'),
+    false,
+  );
+  assert.equal(
+    isExcerptGroundedInSource('Service charge 5% applies', 'Service charge 15.5% applies'),
+    false,
+  );
+  assert.equal(
+    isExcerptGroundedInSource('Package $85.50 CAD per person', 'Package $85.50 CAD per person'),
+    true,
+  );
+});

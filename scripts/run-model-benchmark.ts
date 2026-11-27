@@ -25,18 +25,11 @@ function extractFinancialTokens(s: string): string[] {
   return matches.map((m) => m.replace(/,/g, '').toLowerCase());
 }
 
-function spanContainsFinancialToken(normSpan: string, token: string): boolean {
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // Require boundary around digits so "5" does not match "150" and "$99" does not match "$990"
-  const re = new RegExp(`(^|[^0-9$])${escaped}(?=$|[^0-9%])`);
-  return re.test(normSpan);
-}
-
 /**
  * True multimodal grounding check:
- * Validates that an excerpt matches a local contiguous span (a single line or adjacent line pair)
- * in the rendered document text (or rawMessage), AND that every numeric/currency/percentage token
- * in the excerpt is verbatim-present in that same span.
+ * Validates that an excerpt matches a local contiguous span (a single line or adjacent 2-3 line window)
+ * in the rendered document text (or rawMessage), AND that every complete numeric/currency/percentage
+ * token extracted from the excerpt matches a complete extracted token in that same span.
  */
 export function isExcerptGroundedInSource(excerpt: string, fullSourceText: string): boolean {
   const normEx = normalizeText(excerpt);
@@ -66,10 +59,11 @@ export function isExcerptGroundedInSource(excerpt: string, fullSourceText: strin
 
   for (const rawSpan of localSpans) {
     const normSpan = normalizeText(rawSpan);
-    const spanNoCommas = rawSpan.replace(/,/g, '').toLowerCase();
+    const spanFinTokenSet = new Set(extractFinancialTokens(rawSpan));
 
-    // Every numeric/currency/percentage token in the excerpt MUST appear in this local span
-    const allFinancialMatch = finTokens.every((ft) => spanContainsFinancialToken(spanNoCommas, ft));
+    // Every complete numeric/currency/percentage token in the excerpt MUST appear as a complete
+    // token in this local span (rejecting partial decimal matches like $85 vs $85.50 or 5% vs 15.5%).
+    const allFinancialMatch = finTokens.every((ft) => spanFinTokenSet.has(ft));
     if (!allFinancialMatch) continue;
 
     if (normSpan.includes(normEx)) return true;
@@ -404,6 +398,58 @@ export function gradeBenchmarkCase(
         aiCorrections++;
         releaseBlockers.push(
           `Critical financial error (selected package "${chosenPkg.name}"): got ${selCalc.knownSubtotal}, expected ${bc.expected.expectedSelectedPackageSubtotal}`,
+        );
+      }
+
+      // Validate effective package-level tax & gratuity overrides (which take precedence over quote-level)
+      const effTaxStatus = chosenPkg.taxStatus ?? q.taxStatus;
+      const effTaxPercent =
+        chosenPkg.taxPercent !== undefined ? chosenPkg.taxPercent : q.taxPercent;
+      const effGratStatus = chosenPkg.gratuityStatus ?? q.gratuityStatus;
+      const effGratPercent =
+        chosenPkg.gratuityPercent !== undefined ? chosenPkg.gratuityPercent : q.gratuityPercent;
+      const effGratBasis = chosenPkg.gratuityBasis ?? q.gratuityBasis;
+
+      const checkPkgFin = (label: string, ok: boolean, gotVal: unknown, expVal: unknown) => {
+        if (!ok) {
+          taxOrGratuityFinancialError = true;
+          criticalFinancialError = true;
+          aiCorrections++;
+          releaseBlockers.push(
+            `Critical financial error (selected package "${chosenPkg.name}" ${label}): got ${gotVal}, expected ${expVal}`,
+          );
+        }
+      };
+
+      checkPkgFin('taxStatus', effTaxStatus === bc.expected.taxStatus, effTaxStatus, bc.expected.taxStatus);
+      if (bc.expected.taxPercent !== undefined) {
+        const ok =
+          bc.expected.taxPercent === null
+            ? effTaxPercent === null || effTaxPercent === undefined
+            : effTaxPercent === bc.expected.taxPercent;
+        checkPkgFin('taxPercent', ok, effTaxPercent, bc.expected.taxPercent);
+      }
+      if (bc.expected.gratuityStatus !== undefined) {
+        checkPkgFin(
+          'gratuityStatus',
+          effGratStatus === bc.expected.gratuityStatus,
+          effGratStatus,
+          bc.expected.gratuityStatus,
+        );
+      }
+      if (bc.expected.gratuityPercent !== undefined) {
+        const ok =
+          bc.expected.gratuityPercent === null
+            ? effGratPercent === null || effGratPercent === undefined
+            : effGratPercent === bc.expected.gratuityPercent;
+        checkPkgFin('gratuityPercent', ok, effGratPercent, bc.expected.gratuityPercent);
+      }
+      if (bc.expected.gratuityBasis !== undefined) {
+        checkPkgFin(
+          'gratuityBasis',
+          effGratBasis === bc.expected.gratuityBasis,
+          effGratBasis,
+          bc.expected.gratuityBasis,
         );
       }
     }
