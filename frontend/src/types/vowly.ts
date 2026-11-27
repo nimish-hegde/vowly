@@ -191,6 +191,7 @@ export interface QuoteAddOn {
   percentageTargetLabels?: string[];
   customBasisAmount?: number;
   selected: boolean;
+  selectionConfirmed?: boolean;
   evidenceId?: string;
 }
 

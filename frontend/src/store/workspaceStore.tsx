@@ -526,6 +526,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       activeWorkspace, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote
     );
     if (approval.duplicate) {
+      if (approval.workspace !== activeWorkspace) {
+        mutateActive(
+          (ws) =>
+            applyApproveQuote(ws, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote)
+              .workspace
+        );
+      }
       pushToast('This revision is already applied.');
       return targetId;
     }

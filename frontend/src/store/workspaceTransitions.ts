@@ -139,6 +139,34 @@ export function applyApproveQuote(
     ? buildQuoteRevisionPreview(ws, existingVendor, approvedQuote, eventIds, effectiveMeta?.category)
     : null;
   if (revision?.duplicate) {
+    if (existingVendor && vendorId && existingVendor.draftQuote?.id === approvedQuote.id) {
+      const nextVendors = ws.vendors.map((v) =>
+        v.id === vendorId
+          ? {
+              ...v,
+              status: v.status === 'Revision pending' ? ('Quoted' as const) : v.status,
+              draftQuote: undefined,
+              draftVendorMetadata: undefined,
+            }
+          : v
+      );
+      const nextTasks = ws.tasks.map((t) =>
+        t.vendorId === targetId && t.kind === 'draft_quote'
+          ? { ...t, status: 'Done' as const }
+          : t
+      );
+      return {
+        approved: true,
+        duplicate: true,
+        blockingReasons: [],
+        vendorName,
+        workspace: {
+          ...ws,
+          vendors: nextVendors,
+          tasks: nextTasks,
+        },
+      };
+    }
     return { approved: true, duplicate: true, blockingReasons: [], workspace: ws, vendorName };
   }
   if (isRevision && !revision) {

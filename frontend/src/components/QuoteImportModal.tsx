@@ -2304,7 +2304,18 @@ export function QuoteImportModal({
                     <h4 className="text-xs font-semibold text-[#22201D]">
                       Optional add-ons
                     </h4>
-                    {calc.addOnImpacts.map((addon) => (
+                    {calc.addOnImpacts.map((addon) => {
+                      const rawAddOn = draftQuote.addOns.find((a) => a.id === addon.id);
+                      const effectiveSelected =
+                        revisionDraft?.mode === 'partial' && revisionPreview && !rawAddOn?.selectionConfirmed
+                          ? (revisionPreview.quote.addOns.find(
+                              (a) =>
+                                a.id === addon.id ||
+                                (a.label.trim().toLowerCase() === addon.label.trim().toLowerCase() &&
+                                  (a.packageId ?? undefined) === (rawAddOn?.packageId ?? undefined))
+                            )?.selected ?? addon.selected)
+                          : addon.selected;
+                      return (
                       <label
                         key={addon.id}
                         className="flex items-start justify-between gap-3 rounded-lg border border-[#F0EAE0] p-2.5 cursor-pointer hover:bg-[#FAF8F4]"
@@ -2312,12 +2323,14 @@ export function QuoteImportModal({
                         <div className="flex items-start gap-2">
                           <input
                             type="checkbox"
-                            checked={addon.selected}
+                            checked={effectiveSelected}
                             onChange={() =>
                               updateQuote((q) => ({
                                 ...q,
                                 addOns: q.addOns.map((a) =>
-                                  a.id === addon.id ? { ...a, selected: !a.selected } : a
+                                  a.id === addon.id
+                                    ? { ...a, selected: !effectiveSelected, selectionConfirmed: true }
+                                    : a
                                 ),
                               }))
                             }
@@ -2336,7 +2349,8 @@ export function QuoteImportModal({
                           +{formatShortCad(addon.impactWithTax)}
                         </span>
                       </label>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 

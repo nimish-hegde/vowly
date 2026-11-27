@@ -53,8 +53,17 @@ function money(amount: number, currency: Quote['currency'], model?: QuoteLineIte
 
 function showCost(cost: Cost, currency: Quote['currency']): string {
   switch (cost.type) {
-    case 'line': return money(cost.item.unitPrice, currency, cost.item.pricingModel);
-    case 'optional': return money(cost.item.pricePreTax, currency, cost.item.pricingModel) + ' · optional';
+    case 'line': {
+      const base = money(cost.item.unitPrice, currency, cost.item.pricingModel);
+      if (cost.item.pricingModel === 'hourly') {
+        const hours = cost.item.quantity ?? cost.item.extractedHours;
+        if (hours !== undefined) return `${base} · ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+      }
+      return base;
+    }
+    case 'optional':
+      return money(cost.item.pricePreTax, currency, cost.item.pricingModel) +
+        (cost.item.selected ? ' · optional (selected)' : ' · optional');
     case 'included': return 'Included';
     case 'fee':
       if (cost.item.status === 'waived_or_included') return 'Waived or included';
@@ -106,11 +115,32 @@ function withScope(cost: Cost, key: string, packageId?: string, eventId?: string
 
 function amendCost(previous: Cost, incoming: Cost): Cost {
   if (previous.type === 'line' && incoming.type === 'line' && previous.item.pricingModel === incoming.item.pricingModel) {
-    return { ...incoming, item: supplied(previous.item, incoming.item) };
+    const merged = supplied(previous.item, incoming.item);
+    if (
+      previous.item.pricingModel === 'hourly' &&
+      incoming.item.quantity === undefined &&
+      incoming.item.extractedHours !== undefined &&
+      previous.item.quantity !== undefined &&
+      incoming.item.extractedHours !== (previous.item.extractedHours ?? previous.item.quantity)
+    ) {
+      merged.quantity = undefined;
+      if (incoming.item.isConditionalOvertime === undefined && incoming.item.extractedHours > 1) {
+        merged.isConditionalOvertime = undefined;
+      }
+    }
+    return { ...incoming, item: merged };
   }
   if (previous.type === 'optional' && incoming.type === 'optional') {
     const item = previous.item.pricingModel === incoming.item.pricingModel ? supplied(previous.item, incoming.item) : incoming.item;
-    return { ...incoming, item: { ...item, selected: previous.item.selected } };
+    const explicitSelection = incoming.item.selectionConfirmed === true || incoming.item.selected === true;
+    const { selectionConfirmed: _ignored, ...cleanItem } = item;
+    return {
+      ...incoming,
+      item: {
+        ...cleanItem,
+        selected: explicitSelection ? incoming.item.selected : previous.item.selected,
+      },
+    };
   }
   return incoming;
 }
@@ -466,7 +496,11 @@ export function reconcileQuoteRevision(
   const packages = revisePackages(context);
   const { rows, mapped, repriced } = reviseCosts(context, packages, quote.currency);
   quote.lineItems = rows.flatMap((row) => row.type === 'line' && !row.nested ? [row.item] : []);
-  quote.addOns = rows.flatMap((row) => row.type === 'optional' ? [row.item] : []);
+  quote.addOns = rows.flatMap((row) => {
+    if (row.type !== 'optional') return [];
+    const { selectionConfirmed: _ignored, ...cleanItem } = row.item;
+    return [cleanItem];
+  });
   quote.unconfirmedFees = rows.flatMap((row) => row.type === 'fee' ? [row.item] : []);
   quote.includedPricingItems = rows.flatMap((row) => row.type === 'included' && !row.nested ? [row.item] : []);
   quote.packages = packages.result.size ? [...packages.result.values()].map((pkg) => ({

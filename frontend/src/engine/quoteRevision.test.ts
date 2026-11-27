@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createDemoWorkspace } from '../data/demoWorkspace.ts';
-import { calculateQuoteFinancials, calculateWorkspaceFinancials } from './financialCalculator.ts';
+import { calculateQuoteFinancials, calculateWorkspaceFinancials, getVendorBookingEligibility } from './financialCalculator.ts';
 import { reconcileQuoteRevision } from './quoteRevision.ts';
 import { buildQuoteRevisionPreview } from './revisionPreview.ts';
 import { applyApproveQuote, applySaveDraftQuote } from '../store/workspaceTransitions.ts';
@@ -435,4 +435,126 @@ test('an imported line scoped to the only vendor event replaces its unscoped leg
   assert.equal(preview?.preTaxDelta, -300);
   assert.equal(preview?.blockingReasons.length, 0);
   assert.equal(preview?.quote.lineItems.filter((line) => line.label === 'AV fee').length, 1);
+});
+
+test('revised source hours replace a previously confirmed hourly quantity while unchanged hours preserve it', () => {
+  const prior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    lineItems: [
+      { id: 'photo', label: 'Photographer coverage', pricingModel: 'hourly', unitPrice: 100, extractedHours: 2, quantity: 2 },
+    ],
+  });
+  const ws = workspace(prior);
+
+  const fourHours = amendment(prior.id, {
+    sourceText: 'Updated photographer coverage is 4 hours at CAD 100/hour.',
+    lineItems: [
+      { id: 'photo-new', label: 'Photographer coverage', pricingModel: 'hourly', unitPrice: 100, extractedHours: 4 },
+    ],
+    evidenceSpans: [{ id: 'ev-1', excerpt: '4 hours at CAD 100/hour', sourceLabel: 'Revised email' }],
+  });
+  const preview = buildQuoteRevisionPreview(ws, ws.vendors[0], fourHours);
+  assert.ok(preview);
+  assert.equal(preview.proposedCalc.preTaxTotal, 400);
+  assert.equal(preview.preTaxDelta, 200);
+  assert.equal(preview.quote.lineItems[0].quantity, undefined);
+  assert.equal(preview.quote.lineItems[0].extractedHours, 4);
+
+  const manualOverridePrior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    lineItems: [
+      { id: 'photo', label: 'Photographer coverage', pricingModel: 'hourly', unitPrice: 100, extractedHours: 2, quantity: 3 },
+    ],
+  });
+  const rateOnly = amendment(manualOverridePrior.id, {
+    sourceText: 'Hourly rate is now CAD 120/hour.',
+    lineItems: [
+      { id: 'photo-rate', label: 'Photographer coverage', pricingModel: 'hourly', unitPrice: 120, extractedHours: 2 },
+    ],
+  });
+  const ratePreview = buildQuoteRevisionPreview(workspace(manualOverridePrior), workspace(manualOverridePrior).vendors[0], rateOnly);
+  assert.ok(ratePreview);
+  assert.equal(ratePreview.proposedCalc.preTaxTotal, 360);
+  assert.equal(ratePreview.quote.lineItems[0].quantity, 3);
+});
+
+test('approving a saved duplicate revision draft clears the draft, restores status, and unblocks booking without adding a version', () => {
+  const ws = workspace(original());
+  const first = approve(ws, amendment());
+  assert.equal(first.approved, true);
+  assert.equal(first.workspace.vendors[0].quotes.length, 2);
+
+  const lastApproved = active(first.workspace);
+  const reimported = amendment(lastApproved.id, {
+    id: 'q-duplicate-draft',
+    lineItems: [{ ...amendment().lineItems[0], id: 'dup-av', evidenceId: 'dup-ev' }],
+    evidenceSpans: [{ ...amendment().evidenceSpans[0], id: 'dup-ev' }],
+  });
+  const drafted = applySaveDraftQuote(first.workspace, vendorId, null, reimported, vendorId).workspace;
+  assert.equal(drafted.vendors[0].status, 'Revision pending');
+  assert.ok(drafted.vendors[0].draftQuote);
+  assert.equal(drafted.tasks.some((t) => t.kind === 'draft_quote' && t.status === 'Open'), true);
+  assert.equal(getVendorBookingEligibility(drafted.vendors[0], drafted.events).canBook, false);
+
+  const resolved = approve(drafted, drafted.vendors[0].draftQuote);
+  assert.equal(resolved.approved, true);
+  assert.equal(resolved.duplicate, true);
+  assert.notEqual(resolved.workspace, drafted);
+  assert.equal(resolved.workspace.vendors[0].quotes.length, 2);
+  assert.equal(active(resolved.workspace).revisions?.length, 1);
+  assert.equal(resolved.workspace.vendors[0].draftQuote, undefined);
+  assert.equal(resolved.workspace.vendors[0].draftVendorMetadata, undefined);
+  assert.equal(resolved.workspace.vendors[0].status, 'Quoted');
+  assert.equal(resolved.workspace.tasks.some((t) => t.kind === 'draft_quote' && t.status === 'Open'), false);
+  assert.equal(getVendorBookingEligibility(resolved.workspace.vendors[0], resolved.workspace.events).canBook, true);
+});
+
+test('partial revision preserves untouched add-on selection while honoring explicit selection and deselection during review', () => {
+  const unselectedPrior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    addOns: [{ id: 'ao-1', label: 'Uplighting', description: 'Ambient lighting', pricePreTax: 500, selected: false }],
+  });
+  const wsUnselected = workspace(unselectedPrior);
+  const selectIncoming = amendment(unselectedPrior.id, {
+    lineItems: [],
+    addOns: [{ id: 'ao-new', label: 'Uplighting', description: 'Ambient lighting', pricePreTax: 500, selected: true, selectionConfirmed: true }],
+  });
+  const selectPreview = buildQuoteRevisionPreview(wsUnselected, wsUnselected.vendors[0], selectIncoming);
+  assert.ok(selectPreview);
+  assert.equal(selectPreview.quote.addOns[0].selected, true);
+  assert.equal(selectPreview.quote.addOns[0].selectionConfirmed, undefined);
+  assert.equal(selectPreview.preTaxDelta, 500);
+  const approvedSelect = approve(wsUnselected, selectIncoming);
+  assert.equal(approvedSelect.approved, true);
+  assert.equal(active(approvedSelect.workspace).addOns[0].selected, true);
+
+  const selectedPrior = original({
+    taxHandling: 'included',
+    taxPercent: 0,
+    addOns: [{ id: 'ao-1', label: 'Uplighting', description: 'Ambient lighting', pricePreTax: 500, selected: true }],
+  });
+  const wsSelected = workspace(selectedPrior);
+  const untouchedImport = amendment(selectedPrior.id, {
+    lineItems: [],
+    addOns: [{ id: 'ao-new', label: 'Uplighting', description: 'Ambient lighting', pricePreTax: 400, selected: false }],
+  });
+  const untouchedPreview = buildQuoteRevisionPreview(wsSelected, wsSelected.vendors[0], untouchedImport);
+  assert.ok(untouchedPreview);
+  assert.equal(untouchedPreview.quote.addOns[0].selected, true);
+  assert.equal(untouchedPreview.preTaxDelta, -100);
+
+  const explicitDeselect = amendment(selectedPrior.id, {
+    lineItems: [],
+    addOns: [{ id: 'ao-new', label: 'Uplighting', description: 'Ambient lighting', pricePreTax: 400, selected: false, selectionConfirmed: true }],
+  });
+  const deselectPreview = buildQuoteRevisionPreview(wsSelected, wsSelected.vendors[0], explicitDeselect);
+  assert.ok(deselectPreview);
+  assert.equal(deselectPreview.quote.addOns[0].selected, false);
+  assert.equal(deselectPreview.preTaxDelta, -500);
+  const approvedDeselect = approve(wsSelected, explicitDeselect);
+  assert.equal(approvedDeselect.approved, true);
+  assert.equal(active(approvedDeselect.workspace).addOns[0].selected, false);
 });
