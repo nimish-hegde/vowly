@@ -689,6 +689,7 @@ export function getVendorBookingEligibility(
   events: WeddingEvent[]
 ): BookingEligibilityResult {
   const blockingReasons: string[] = [];
+  if (vendor.archived) blockingReasons.push('Restore this vendor before confirming a booking.');
   const activeQuote = getVendorActiveQuote(vendor);
 
   if (!activeQuote || activeQuote.approvalState !== 'approved') {
@@ -1084,7 +1085,7 @@ export function explainEventGuestCountImpact(
     const activeVendors = workspace.vendors.filter(
       (v) =>
         v.eventIds.includes(eventId) &&
-        (v.status === 'Booked' || (v.isPreferred && v.status !== 'Declined'))
+        (v.status === 'Booked' || (!v.archived && v.isPreferred && v.status !== 'Declined'))
     );
 
     for (const v of activeVendors) {
@@ -1252,7 +1253,7 @@ export function calculateWorkspaceFinancials(
   }
 
   const budgetVendors = workspace.vendors.filter(
-    (v) => v.status === 'Booked' || (v.isPreferred && v.status !== 'Declined')
+    (v) => v.status === 'Booked' || (!v.archived && v.isPreferred && v.status !== 'Declined')
   );
 
   for (const vendor of budgetVendors) {
@@ -1449,7 +1450,7 @@ export function calculateWorkspaceFinancials(
     }
 
     const vendorCount = workspace.vendors.filter(
-      (v) => v.eventIds.includes(evt.id) && v.status !== 'Declined'
+      (v) => !v.archived && v.eventIds.includes(evt.id) && v.status !== 'Declined'
     ).length;
 
     eventSummaries[evt.id] = {
@@ -1471,6 +1472,7 @@ export function calculateWorkspaceFinancials(
     );
   }
   const vendorsWithUnconfirmed = workspace.vendors.filter((v) => {
+    if (v.archived) return false;
     const q = getVendorActiveQuote(v);
     if (!q || v.status === 'Declined') return false;
     return q.unconfirmedFees.some((f) => f.mandatory && f.status === 'unconfirmed');
@@ -1533,6 +1535,7 @@ export function calculateVendorComparison(
   const unquotedVendors: Vendor[] = [];
 
   for (const vendor of vendors) {
+    if (vendor.archived) continue;
     const quote = getVendorActiveQuote(vendor);
     if (!quote) {
       unquotedVendors.push(vendor);

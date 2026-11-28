@@ -8,6 +8,8 @@ import {
   applyApproveQuote,
   applyConfirmBooking,
   applySaveDraftQuote,
+  applySetVendorArchived,
+  getActivePlanningTasks,
 } from './workspaceTransitions';
 import {
   ActivityItem,
@@ -81,6 +83,7 @@ interface WorkspaceContextValue {
   addVendor: (vendor: Vendor, onViewVendor?: (vendorId: string) => void) => void;
   updateVendor: (vendorId: string, patch: Partial<Pick<Vendor, 'status' | 'notes'>>) => void;
   setPreferredVendor: (vendorId: string) => void;
+  setVendorArchived: (vendorId: string, archived: boolean, confirmedForecastRemoval?: boolean) => void;
   toggleVendorAddOn: (vendorId: string, quoteId: string, addOnId: string) => void;
   saveDraftQuote: (
     vendorId: string | null,
@@ -450,7 +453,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     mutateActive((ws) => ({
       ...ws,
       vendors: ws.vendors.map((v) => {
-        if (v.id !== vendorId) return v;
+        if (v.id !== vendorId || v.archived) return v;
         const status = patch.status === 'Booked' ? v.status : (patch.status ?? v.status);
         return { ...v, status, notes: patch.notes ?? v.notes };
       }),
@@ -459,9 +462,9 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   const setPreferredVendor = (vendorId: string) => {
     const target = activeWorkspace.vendors.find((v) => v.id === vendorId);
-    if (!target) return;
+    if (!target || target.archived) return;
     mutateActive(
-      (ws) => ({
+      (ws) => ws.vendors.some((vendor) => vendor.id === vendorId && !vendor.archived) ? ({
         ...ws,
         vendors: ws.vendors.map((v) => {
           const sameCategory = v.category === target.category;
@@ -476,7 +479,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           }
           return v;
         }),
-      }),
+      }) : ws,
       {
         summary: `Selected ${target.name} as preferred estimate.`,
         category: 'quote',
@@ -485,11 +488,22 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     pushToast(`${target.name} selected for projected budget`);
   };
 
+  const setVendorArchived: WorkspaceContextValue['setVendorArchived'] = (vendorId, archived, confirmedForecastRemoval) => {
+    const result = applySetVendorArchived(activeWorkspace, vendorId, archived, confirmedForecastRemoval);
+    if (result.blockingReason) {
+      pushToast(result.blockingReason, 'amber');
+      return;
+    }
+    if (result.workspace === activeWorkspace) return;
+    mutateActive((ws) => applySetVendorArchived(ws, vendorId, archived, confirmedForecastRemoval).workspace);
+    pushToast(archived ? 'Vendor archived' : 'Vendor restored');
+  };
+
   const toggleVendorAddOn = (vendorId: string, quoteId: string, addOnId: string) => {
     mutateActive((ws) => ({
       ...ws,
       vendors: ws.vendors.map((v) => {
-        if (v.id !== vendorId) return v;
+        if (v.id !== vendorId || v.archived) return v;
         return {
           ...v,
           quotes: v.quotes.map((q) => {
@@ -517,6 +531,10 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       : undefined;
     const vendorName =
       existingVendor?.name || newVendorPayload?.name?.trim() || 'Vendor';
+    if (existingVendor?.archived) {
+      pushToast('Restore this vendor before saving a quote.', 'amber');
+      return null;
+    }
 
     const saved = mutateActive(
       (ws) =>
@@ -738,21 +756,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   };
 
   const reassignTask = (taskId: string, partnerId: string) => {
-    mutateActive((ws) => ({
+    mutateActive((ws) => getActivePlanningTasks(ws).some((task) => task.id === taskId) ? ({
       ...ws,
       tasks: ws.tasks.map((t) =>
         t.id === taskId ? { ...t, assigneePartnerId: partnerId } : t
       ),
-    }));
+    }) : ws);
   };
 
   const toggleTaskStatus = (taskId: string) => {
-    mutateActive((ws) => ({
+    mutateActive((ws) => getActivePlanningTasks(ws).some((task) => task.id === taskId) ? ({
       ...ws,
       tasks: ws.tasks.map((t) =>
         t.id === taskId ? { ...t, status: t.status === 'Open' ? 'Done' : 'Open' } : t
       ),
-    }));
+    }) : ws);
   };
 
   const addTask = (task: Omit<FollowUpTask, 'id'>) => {
@@ -824,6 +842,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
         addVendor,
         updateVendor,
         setPreferredVendor,
+        setVendorArchived,
         toggleVendorAddOn,
         saveDraftQuote,
         approveQuote,

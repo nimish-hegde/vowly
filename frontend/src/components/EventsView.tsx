@@ -103,7 +103,7 @@ export function EventsView({
   const eventVendors = useMemo(() => {
     if (!currentEvent) return [];
     return activeWorkspace.vendors.filter(
-      (v) => v.eventIds.includes(currentEvent.id) && v.status !== 'Declined'
+      (v) => !v.archived && v.eventIds.includes(currentEvent.id) && v.status !== 'Declined'
     );
   }, [activeWorkspace.vendors, currentEvent]);
 

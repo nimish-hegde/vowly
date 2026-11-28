@@ -222,7 +222,7 @@ export function QuoteImportModal({
 
     if (editApprovedForVendorId) {
       const existingVendor = activeWorkspace.vendors.find(
-        (v) => v.id === editApprovedForVendorId
+        (v) => v.id === editApprovedForVendorId && !v.archived
       );
       const active = existingVendor ? getApprovedRevisionBaseline(existingVendor) : undefined;
       if (existingVendor && active) {
@@ -249,7 +249,7 @@ export function QuoteImportModal({
 
     if (resumeDraftForVendorId) {
       const existingVendor = activeWorkspace.vendors.find(
-        (v) => v.id === resumeDraftForVendorId
+        (v) => v.id === resumeDraftForVendorId && !v.archived
       );
       if (existingVendor?.draftQuote) {
         const staged = existingVendor.draftVendorMetadata;
@@ -515,7 +515,7 @@ export function QuoteImportModal({
 
       let resolvedVendor: Vendor | undefined;
       if (initialVendorId) {
-        const target = activeWorkspace.vendors.find((v) => v.id === initialVendorId);
+        const target = activeWorkspace.vendors.find((v) => v.id === initialVendorId && !v.archived);
         if (target) {
           const targetNorm = target.name.trim().toLowerCase();
           if (
@@ -537,11 +537,11 @@ export function QuoteImportModal({
         }
       } else if (result.isRevisionOfExistingVendorId) {
         resolvedVendor = activeWorkspace.vendors.find(
-          (v) => v.id === result.isRevisionOfExistingVendorId
+          (v) => v.id === result.isRevisionOfExistingVendorId && !v.archived
         );
       } else if (hasRealSuggestedName) {
         resolvedVendor = activeWorkspace.vendors.find(
-          (v) => v.name.trim().toLowerCase() === suggestedNorm
+          (v) => !v.archived && v.name.trim().toLowerCase() === suggestedNorm
         );
       }
 
@@ -585,7 +585,7 @@ export function QuoteImportModal({
   const handleManualEntry = () => {
     if (!rawText.trim() && !uploadedAttachment) return;
 
-    const target = activeWorkspace.vendors.find((vendor) => vendor.id === initialVendorId);
+    const target = activeWorkspace.vendors.find((vendor) => vendor.id === initialVendorId && !vendor.archived);
     const linked = target?.draftQuote ? undefined : target;
     const attachmentPreview = uploadedAttachment?.dataUrl ? {
       fileName: uploadedAttachment.fileName,
@@ -664,7 +664,7 @@ export function QuoteImportModal({
 
   const handleVendorLinkChange = (vendorId: string | null) => {
     setLinkedVendorId(vendorId);
-    const vendor = activeWorkspace.vendors.find((candidate) => candidate.id === vendorId);
+    const vendor = activeWorkspace.vendors.find((candidate) => candidate.id === vendorId && !candidate.archived);
     const nextRevision = newRevisionDraft(vendor, 'partial');
     updateQuote((quote) => ({ ...quote, revisionDraft: nextRevision }));
     if (vendor) setSelectedEventIds(vendor.eventIds);
@@ -2719,7 +2719,7 @@ export function QuoteImportModal({
                               className="w-full rounded-lg border border-[#E5DED2] px-3 py-1.5 text-xs text-[#22201D]"
                             >
                               <option value="">Create as new vendor</option>
-                              {activeWorkspace.vendors.map((v) => (
+                              {activeWorkspace.vendors.filter((v) => !v.archived).map((v) => (
                                 <option
                                   key={v.id}
                                   value={v.id}

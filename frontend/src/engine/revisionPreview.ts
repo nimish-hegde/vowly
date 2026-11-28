@@ -9,6 +9,7 @@ export function hasCompetingSelectedVendor(
   excludeVendorId?: string,
 ): boolean {
   return vendors.some((vendor) => vendor.id !== excludeVendorId &&
+    !vendor.archived &&
     (vendor.status === 'Booked' || vendor.isPreferred) &&
     vendor.category === candidate.category &&
     (vendor.eventIds.some((id) => candidate.eventIds.includes(id)) ||

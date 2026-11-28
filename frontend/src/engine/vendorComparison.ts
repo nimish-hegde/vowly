@@ -389,7 +389,7 @@ export function buildVendorComparison(workspace: WeddingWorkspace, scenario: Com
   const entries: ComparisonOption[] = [];
   const unquotedVendors: Vendor[] = [];
   for (const vendor of workspace.vendors) {
-    if (!event || vendor.status === 'Declined' || vendor.category !== scenario.category || !vendor.eventIds.includes(event.id) ||
+    if (!event || vendor.archived || vendor.status === 'Declined' || vendor.category !== scenario.category || !vendor.eventIds.includes(event.id) ||
         (scenario.vendorId && vendor.id !== scenario.vendorId)) continue;
     const active = vendor.quotes.find((quote) => quote.id === vendor.activeQuoteId && quote.approvalState === 'approved')
       ?? [...vendor.quotes].reverse().find((quote) => quote.approvalState === 'approved') ?? null;
