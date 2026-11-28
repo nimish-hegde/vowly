@@ -185,7 +185,9 @@ export function QuoteRevisionReview({
       delta: preview.allInDelta,
     },
   ];
-  const blockers = preview.duplicate ? [] : Array.from(new Set([...preview.blockingReasons, ...additionalBlockers]));
+  const blockers = preview.duplicate
+    ? Array.from(new Set(additionalBlockers))
+    : Array.from(new Set([...preview.blockingReasons, ...additionalBlockers]));
 
   return (
     <section aria-label="Revision review" className="min-w-0 space-y-4 rounded-2xl border border-[#B6D7C0] bg-[#F5FAF6] p-3.5 sm:p-4">

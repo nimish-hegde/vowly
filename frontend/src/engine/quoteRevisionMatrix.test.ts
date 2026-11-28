@@ -1203,3 +1203,125 @@ test('textual milestone deadline clears stale calendar dueDate and reverses clea
   assert.equal(reversedDefaults.depositHasKnownDate, true);
   assert.equal(reversedDefaults.depositDate, '2027-08-13');
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Independent internal review findings: unknown package placeholders, partial manual conflict supersession,
+// tax & non-percentage gratuity lines, multi-gratuity-line decisions, and included->percentage gratuity.
+// ---------------------------------------------------------------------------------------------------------
+table('independent review P1 regressions', [
+  {
+    name: 'package taxHandling unspecified does not shadow quote-level tax update',
+    prior: packagePrior({ taxHandling: 'unspecified', taxPercent: undefined }, { taxHandling: 'unspecified', taxPercent: undefined }),
+    text: 'package unspecified tax cleared',
+    overrides: { taxHandling: 'excluded_plus_hst', taxPercent: 13 },
+    check: (preview) => {
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxHandling, undefined);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1130);
+    },
+  },
+  {
+    name: 'package gratuityStatus unknown does not shadow mandatory TBD quote gratuity blocker',
+    prior: packagePrior({ taxHandling: 'included', taxPercent: 0, gratuityStatus: 'unknown' }, { taxHandling: 'included', taxPercent: 0, gratuityStatus: 'unknown' }),
+    text: 'package unknown gratuity cleared',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: null },
+    blocked: true,
+    check: (preview) => {
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.gratuityStatus, undefined);
+      assert.equal(preview.proposedCalc.gratuityUnresolved, true);
+    },
+  },
+  {
+    name: 'partial-mode manual amount decision supersedes an incoming resolved conflict on that line',
+    prior: base({ taxHandling: 'included', taxPercent: 0 }),
+    text: 'partial manual supersedes conflict',
+    overrides: {
+      lineItems: [{ id: 'hall-new', label: 'Hall rental', pricingModel: 'flat', unitPrice: 1200 }],
+      conflicts: [{
+        id: 'c-hall', fieldLabel: 'Hall rental', description: 'Email vs PDF', targetLineItemId: 'hall-new', resolvedOptionId: 'o1200',
+        options: [
+          { id: 'o1150', label: 'Email', sourceLabel: 'Email', amount: 1150 },
+          { id: 'o1200', label: 'PDF', sourceLabel: 'PDF', amount: 1200 },
+        ],
+      }],
+    },
+    decisions: { 'cost:hall-new': { action: 'manual', value: '1100' } },
+    check: (preview) => {
+      assert.equal(preview.proposedCalc.preTaxTotal, 1100);
+      assert.deepEqual(preview.quote.conflicts, []);
+    },
+  },
+  {
+    name: 'existing tax line blocks quote-level tax change until confirmed and accept removes the stale line',
+    prior: base({
+      taxHandling: 'excluded_plus_hst',
+      taxPercent: 13,
+      lineItems: [
+        { id: 'hall', label: 'Hall rental', pricingModel: 'flat', unitPrice: 1000 },
+        { id: 'hst', label: 'HST 13%', pricingModel: 'percentage', unitPrice: 13, percentageBasis: 'entire_subtotal' },
+      ],
+    }),
+    text: 'tax line accepted replacement',
+    overrides: { taxHandling: 'included' },
+    decisions: { 'tax-line:hst': { action: 'accept' } },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems.some(({ id }) => id === 'hst'), false);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1000);
+    },
+  },
+  {
+    name: 'non-percentage service-charge line blocks quote-level gratuity update until confirmed',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      gratuityStatus: 'unknown',
+      lineItems: [
+        { id: 'hall', label: 'Hall rental', pricingModel: 'flat', unitPrice: 1000 },
+        { id: 'svc-flat', label: 'Service charge', pricingModel: 'flat', unitPrice: 500 },
+      ],
+    }),
+    text: 'flat service charge blocked',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    blocked: true,
+    check: (preview) => assert.ok(preview.changes.some((c) => c.id === 'gratuity-line:svc-flat' && c.needsDecision)),
+  },
+  {
+    name: 'multi-package gratuity lines: accepting one and retaining another does not drop quote gratuity to zero',
+    prior: base({
+      lineItems: [],
+      taxHandling: 'included',
+      taxPercent: 0,
+      gratuityStatus: 'unknown',
+      selectedPackageId: 'orchid',
+      packages: [
+        orchid({
+          taxHandling: 'included', taxPercent: 0,
+          fees: [{ id: 'fA', label: 'Service charge', pricingModel: 'percentage', unitPrice: 18, percentageBasis: 'entire_subtotal', packageId: 'orchid' }],
+        }),
+        {
+          ...cedar(), taxHandling: 'included', taxPercent: 0,
+          fees: [{ id: 'fB', label: 'Service charge', pricingModel: 'percentage', unitPrice: 15, percentageBasis: 'entire_subtotal', packageId: 'cedar' }],
+        },
+      ],
+    }),
+    text: 'mixed gratuity line accept and retain',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    decisions: { 'gratuity-line:fA': { action: 'accept' }, 'gratuity-line:fB': { action: 'retain' } },
+    check: (preview) => {
+      assert.equal(preview.quote.gratuityPercent, 20);
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.fees?.length, 0);
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'cedar')?.fees?.length, 1);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1200);
+    },
+  },
+  {
+    name: 'included gratuity transitions to excluded when incoming specifies gratuityPercent with unknown status',
+    prior: base({ taxHandling: 'included', taxPercent: 0, gratuityStatus: 'included' }),
+    text: 'included to 20% with unknown status',
+    overrides: { gratuityStatus: 'unknown', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    check: (preview) => {
+      assert.equal(preview.quote.gratuityStatus, 'excluded');
+      assert.equal(preview.quote.gratuityPercent, 20);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1080);
+    },
+  },
+]);

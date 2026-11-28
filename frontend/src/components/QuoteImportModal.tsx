@@ -373,20 +373,31 @@ export function QuoteImportModal({
     !GENERIC_VENDOR_NAMES.has(vendorName.trim().toLowerCase());
 
   const legacyOvertimeItems = draftQuote ? findAmbiguousLegacyOvertimeItems(draftQuote) : [];
+  const hasOtherDraft = Boolean(!onCompleteForOnboarding && linkedVendor?.draftQuote && linkedVendor.draftQuote.id !== draftQuote?.id);
+  const hasPendingMetadataChange = Boolean(
+    linkedVendor &&
+      linkedVendor.status !== 'Booked' &&
+      (vendorName.trim() !== linkedVendor.name ||
+        vendorLocation.trim() !== linkedVendor.location ||
+        vendorCategory !== linkedVendor.category ||
+        selectedEventIds.join('\0') !== linkedVendor.eventIds.join('\0'))
+  );
   const revisionBlockers: string[] = [];
   if (revisionPreview && findAmbiguousLegacyOvertimeItems(revisionPreview.quote).length > 0) {
     revisionBlockers.push('Confirm the hourly quantity or mark the rate as conditional before approving.');
   }
   if (revisionDraft && !isVendorNameValid) revisionBlockers.push('Enter a vendor name in quote details.');
-  if (!onCompleteForOnboarding && linkedVendor?.draftQuote && linkedVendor.draftQuote.id !== draftQuote?.id) {
+  if (hasOtherDraft && (!revisionPreview?.duplicate || hasPendingMetadataChange)) {
     revisionBlockers.push('Resume the saved draft before approving a different quote.');
   }
   const canApproveWithVendor = Boolean(isVendorNameValid && (
     revisionDraft
-      ? revisionPreview && (revisionPreview.duplicate || (
-          !revisionPreview.stale && revisionPreview.proposedCalc.canApprove
-          && !revisionPreview.blockingReasons.length && !revisionBlockers.length
-        ))
+      ? revisionPreview && (
+          (revisionPreview.duplicate && !revisionBlockers.length) || (
+            !revisionPreview.stale && revisionPreview.proposedCalc.canApprove
+            && !revisionPreview.blockingReasons.length && !revisionBlockers.length
+          )
+        )
       : calc?.canApprove && !legacyOvertimeItems.length && !revisionBlockers.length
   ));
   const selectedPackage = draftQuote ? getSelectedPackageOption(draftQuote).selectedPackage : undefined;
@@ -2311,14 +2322,19 @@ export function QuoteImportModal({
                     </h4>
                     {calc.addOnImpacts.map((addon) => {
                       const rawAddOn = draftQuote.addOns.find((a) => a.id === addon.id);
+                      const rawPkgName = rawAddOn?.packageId
+                        ? draftQuote.packages?.find((p) => p.id === rawAddOn.packageId)?.name?.trim().toLowerCase()
+                        : undefined;
                       const effectiveSelected =
                         revisionDraft?.mode === 'partial' && revisionPreview && !rawAddOn?.selectionConfirmed
-                          ? (revisionPreview.quote.addOns.find(
-                              (a) =>
-                                a.id === addon.id ||
-                                (a.label.trim().toLowerCase() === addon.label.trim().toLowerCase() &&
-                                  (a.packageId ?? undefined) === (rawAddOn?.packageId ?? undefined))
-                            )?.selected ?? addon.selected)
+                          ? (revisionPreview.quote.addOns.find((a) => {
+                              if (a.id === addon.id) return true;
+                              if (a.label.trim().toLowerCase() !== addon.label.trim().toLowerCase()) return false;
+                              if ((a.packageId ?? undefined) === (rawAddOn?.packageId ?? undefined)) return true;
+                              if (!rawPkgName || !a.packageId) return false;
+                              const revPkgName = revisionPreview.quote.packages?.find((p) => p.id === a.packageId)?.name?.trim().toLowerCase();
+                              return revPkgName === rawPkgName;
+                            })?.selected ?? addon.selected)
                           : addon.selected;
                       return (
                       <label

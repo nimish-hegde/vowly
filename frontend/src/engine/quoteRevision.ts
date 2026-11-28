@@ -57,7 +57,7 @@ function mergeGratuity(old: GratuityTerms, next: GratuityTerms): GratuityTerms {
     return { gratuityStatus: old.gratuityStatus, gratuityPercent: old.gratuityPercent, gratuityBasis: old.gratuityBasis };
   }
   const explicitStatus = next.gratuityStatus !== undefined && next.gratuityStatus !== 'unknown' ? next.gratuityStatus : undefined;
-  const status = explicitStatus ?? old.gratuityStatus ?? next.gratuityStatus;
+  const status = explicitStatus ?? (next.gratuityPercent != null && old.gratuityStatus === 'included' ? 'excluded' : old.gratuityStatus ?? next.gratuityStatus);
   if (status === 'included') return { gratuityStatus: status, gratuityPercent: undefined, gratuityBasis: undefined };
   const percent = next.gratuityPercent != null ? next.gratuityPercent
     : status === old.gratuityStatus ? old.gratuityPercent : next.gratuityPercent;
@@ -531,7 +531,9 @@ function reconcilePackageInheritance(
     if (packages.retained.has(pkg.id)) continue;
     const exp = packages.explicit.get(pkg.id);
 
-    if (
+    if (quoteTaxChanged && !exp?.tax && pkg.taxHandling === 'unspecified') {
+      packages.result.set(pkg.id, { ...pkg, taxHandling: undefined, taxPercent: undefined });
+    } else if (
       quoteTaxChanged &&
       !exp?.tax &&
       pkg.taxHandling &&
@@ -558,7 +560,14 @@ function reconcilePackageInheritance(
     const currentPkg = packages.result.get(pkg.id)!;
     const hasPkgGrat = (currentPkg.gratuityStatus !== undefined && currentPkg.gratuityStatus !== 'unknown') ||
       currentPkg.gratuityPercent != null;
-    if (
+    if (quoteGratChanged && !exp?.gratuity && currentPkg.gratuityStatus === 'unknown' && currentPkg.gratuityPercent == null) {
+      packages.result.set(currentPkg.id, {
+        ...currentPkg,
+        gratuityStatus: undefined,
+        gratuityPercent: undefined,
+        gratuityBasis: undefined,
+      });
+    } else if (
       quoteGratChanged &&
       !exp?.gratuity &&
       hasPkgGrat &&
@@ -916,12 +925,15 @@ export function reconcileQuoteRevision(
   if (quoteGratChanged) {
     const GRATUITY_LINE_PATTERN = /\b(gratuity|tip|service\s*charge)\b/i;
     const supersededKeys = new Set<string>();
+    let retainedCount = 0;
+    let totalMatching = 0;
     for (const row of rows) {
       if (row.type !== 'line' || touched.has(row.key)) continue;
-      if (row.item.pricingModel !== 'percentage' || !GRATUITY_LINE_PATTERN.test(row.item.label)) continue;
-      const differs = quote.gratuityStatus === 'included' || quote.gratuityPercent == null ||
-        Math.abs(row.item.unitPrice - quote.gratuityPercent) >= 0.01;
+      if (!GRATUITY_LINE_PATTERN.test(row.item.label)) continue;
+      const differs = row.item.pricingModel !== 'percentage' || quote.gratuityStatus === 'included' ||
+        quote.gratuityPercent == null || Math.abs(row.item.unitPrice - quote.gratuityPercent) >= 0.01;
       if (!differs) continue;
+      totalMatching++;
       const id = 'gratuity-line:' + row.key;
       const action = decisions[id]?.action;
       const rowScope = row.packageId ? packages.result.get(row.packageId)?.name ?? row.packageId : row.eventId;
@@ -934,9 +946,7 @@ export function reconcileQuoteRevision(
           canAccept: true,
         });
       } else if (action === 'retain') {
-        quote.gratuityStatus = previous.gratuityStatus;
-        quote.gratuityPercent = previous.gratuityPercent;
-        quote.gratuityBasis = previous.gratuityBasis;
+        retainedCount++;
         changes.push({
           id, field: row.item.label, scope: rowScope,
           previous: showCost(row, previous.currency), proposed: showCost(row, previous.currency), kind: 'carried',
@@ -953,8 +963,62 @@ export function reconcileQuoteRevision(
         blockingReasons.push(`Confirm whether "${row.item.label}" is replaced by the updated gratuity terms or kept as-is.`);
       }
     }
+    if (totalMatching > 0 && retainedCount === totalMatching) {
+      quote.gratuityStatus = previous.gratuityStatus;
+      quote.gratuityPercent = previous.gratuityPercent;
+      quote.gratuityBasis = previous.gratuityBasis;
+    }
     if (supersededKeys.size > 0) {
       rows = rows.filter((row) => !supersededKeys.has(row.key));
+    }
+  }
+  const quoteTaxChanged = partial && (
+    quote.taxHandling !== previous.taxHandling || (quote.taxPercent ?? undefined) !== (previous.taxPercent ?? undefined)
+  );
+  if (quoteTaxChanged) {
+    const TAX_LINE_PATTERN = /\b(hst|gst|pst|sales\s*tax|tax)\b/i;
+    const supersededTaxKeys = new Set<string>();
+    let retainedTaxCount = 0;
+    let totalTaxMatching = 0;
+    for (const row of rows) {
+      if (row.type !== 'line' || touched.has(row.key)) continue;
+      if (!TAX_LINE_PATTERN.test(row.item.label)) continue;
+      totalTaxMatching++;
+      const id = 'tax-line:' + row.key;
+      const action = decisions[id]?.action;
+      const rowScope = row.packageId ? packages.result.get(row.packageId)?.name ?? row.packageId : row.eventId;
+      if (action === 'accept') {
+        supersededTaxKeys.add(row.key);
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: taxLabel(quote), kind: 'changed',
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Tax'),
+          canAccept: true,
+        });
+      } else if (action === 'retain') {
+        retainedTaxCount++;
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: showCost(row, previous.currency), kind: 'carried',
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Tax'),
+          canAccept: true,
+        });
+      } else {
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: taxLabel(quote), kind: 'ambiguous',
+          needsDecision: true, canAccept: true,
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Tax'),
+        });
+        blockingReasons.push(`Confirm whether "${row.item.label}" is replaced by the updated tax terms or kept as-is.`);
+      }
+    }
+    if (totalTaxMatching > 0 && retainedTaxCount === totalTaxMatching) {
+      quote.taxHandling = previous.taxHandling;
+      quote.taxPercent = previous.taxPercent;
+    }
+    if (supersededTaxKeys.size > 0) {
+      rows = rows.filter((row) => !supersededTaxKeys.has(row.key));
     }
   }
   quote.lineItems = rows.flatMap((row) => row.type === 'line' && !row.nested ? [row.item] : []);
@@ -995,20 +1059,21 @@ export function reconcileQuoteRevision(
       ...conflict, targetLineItemId, options: conflict.options.map((option) => ({ ...option, evidenceId: mapEvidenceId(option.evidenceId) })),
     }];
   });
-  quote.conflicts = partial ? [
-    ...previous.conflicts.filter((conflict) =>
-      (!conflict.targetLineItemId || retainedLineIds.has(conflict.targetLineItemId)) &&
-      !newConflicts.some((item) => conflict.targetLineItemId
-        ? item.targetLineItemId === conflict.targetLineItemId
-        : !item.targetLineItemId && norm(item.fieldLabel) === norm(conflict.fieldLabel)) &&
-      !(conflict.targetLineItemId && repriced.has(conflict.targetLineItemId) && conflict.resolvedOptionId)),
-    ...newConflicts,
-  ] : newConflicts.filter((conflict) => {
-    // A price typed over a line supersedes the choice recorded for its conflict.
+  const activeNewConflicts = newConflicts.filter((conflict) => {
+    // A manually entered or edited price supersedes a resolved conflict choice.
     const line = rows.find((row) => row.type === 'line' && row.key === conflict.targetLineItemId)?.item as QuoteLineItem | undefined;
     const option = conflict.options.find((item) => item.id === conflict.resolvedOptionId);
     return !line || !option || line.unitPrice === option.amount;
   });
+  quote.conflicts = partial ? [
+    ...previous.conflicts.filter((conflict) =>
+      (!conflict.targetLineItemId || retainedLineIds.has(conflict.targetLineItemId)) &&
+      !activeNewConflicts.some((item) => conflict.targetLineItemId
+        ? item.targetLineItemId === conflict.targetLineItemId
+        : !item.targetLineItemId && norm(item.fieldLabel) === norm(conflict.fieldLabel)) &&
+      !(conflict.targetLineItemId && repriced.has(conflict.targetLineItemId) && conflict.resolvedOptionId)),
+    ...activeNewConflicts,
+  ] : activeNewConflicts;
 
   const termsFields = [
     ['inclusions', 'Inclusions'], ['deliveryTerms', 'Delivery terms'],
