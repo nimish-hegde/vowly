@@ -25,7 +25,10 @@ import {
   applyApproveQuote,
   applyConfirmBooking,
   applySaveDraftQuote,
+  applySetVendorArchived,
+  getActivePlanningTasks,
 } from '../store/workspaceTransitions.ts';
+import { buildVendorComparison } from './vendorComparison.ts';
 import type { Quote, Vendor } from '../types/vowly';
 
 function makeCleanQuote(overrides: Partial<Quote> = {}): Quote {
@@ -60,6 +63,80 @@ function makeCleanQuote(overrides: Partial<Quote> = {}): Quote {
     ...overrides,
   };
 }
+
+test('archiving a preferred vendor requires confirmation, retains history, and never selects a replacement', () => {
+  const demo = createDemoWorkspace();
+  const vendorId = 'ven-versailles';
+  const vendor = demo.vendors.find((item) => item.id === vendorId)!;
+  const history = demo.tasks[0];
+  const draft = makeCleanQuote({ approvalState: 'draft' });
+  const workspace = {
+    ...demo,
+    vendors: demo.vendors.map((item) => item.id === vendorId ? { ...item, draftQuote: draft } : item),
+    tasks: [...demo.tasks, { ...history, id: 'archived-history', vendorId, status: 'Done' as const }],
+  };
+  const rejected = applySetVendorArchived(workspace, vendorId, true);
+  assert.equal(rejected.workspace, workspace);
+  assert.match(rejected.blockingReason ?? '', /projected budget/);
+
+  const archived = applySetVendorArchived(workspace, vendorId, true, true).workspace;
+  assert.deepEqual(archived.vendors.find((item) => item.id === vendorId), { ...vendor, draftQuote: draft, archived: true, isPreferred: false });
+  assert.deepEqual(archived.vendors.filter((item) => item.id !== vendorId), workspace.vendors.filter((item) => item.id !== vendorId));
+  assert.equal(archived.tasks, workspace.tasks);
+  assert.deepEqual(getActivePlanningTasks(archived), demo.tasks);
+  assert.equal(archived.payments, workspace.payments);
+  const before = calculateWorkspaceFinancials(workspace);
+  const after = calculateWorkspaceFinancials(archived);
+  assert.ok(after.projectedSpend < before.projectedSpend);
+  assert.equal(after.committedSpend, before.committedSpend);
+  assert.equal(after.paidToDate, before.paidToDate);
+  assert.equal(applySetVendorArchived(archived, vendorId, true).workspace, archived);
+
+  const reloaded = JSON.parse(JSON.stringify(archived)) as typeof workspace;
+  const restored = applySetVendorArchived(reloaded, vendorId, false).workspace;
+  assert.deepEqual(restored.vendors.find((item) => item.id === vendorId), { ...vendor, draftQuote: draft, archived: false, isPreferred: false });
+  assert.equal(calculateWorkspaceFinancials(restored).projectedSpend, after.projectedSpend);
+  assert.deepEqual(getActivePlanningTasks(restored), workspace.tasks);
+});
+
+test('archiving is blocked by booked status, legacy contract details, or any linked payment', () => {
+  const demo = createDemoWorkspace();
+  const vendor = demo.vendors.find((item) => item.id === 'ven-verdi')!;
+  for (const [patch, hasPayment] of [
+    [{ status: 'Booked' }, false],
+    [{ bookedContractTotal: 0 }, false],
+    [{ bookedDate: '2026-11-20' }, false],
+    [{}, true],
+  ] as const) {
+    const workspace = {
+      ...demo,
+      vendors: [{ ...vendor, ...patch }],
+      payments: hasPayment ? [{ ...demo.payments[0], vendorId: vendor.id }] : [],
+    };
+    const result = applySetVendorArchived(workspace, vendor.id, true, true);
+    assert.equal(result.workspace, workspace);
+    assert.match(result.blockingReason ?? '', /booking, contract, or payment/);
+  }
+});
+
+test('archived vendors are excluded from comparison and blocked from quote mutations and booking', () => {
+  const workspace = createDemoWorkspace();
+  const vendorId = 'ven-versailles';
+  const archived = applySetVendorArchived(workspace, vendorId, true, true).workspace;
+  const quote = makeCleanQuote();
+  const scenario = { category: 'venue' as const, eventId: 'evt-reception' };
+  assert.ok(buildVendorComparison(workspace, scenario).entries.some((option) => option.vendor.id === vendorId));
+  assert.ok(!buildVendorComparison(archived, scenario).entries.some((option) => option.vendor.id === vendorId));
+  const draft = applySaveDraftQuote(archived, vendorId, null, quote, vendorId);
+  assert.equal(draft.workspace, archived);
+  assert.match(draft.blockingReason ?? '', /restore/i);
+  const approval = applyApproveQuote(archived, vendorId, null, quote, vendorId);
+  assert.equal(approval.workspace, archived);
+  assert.match(approval.blockingReasons.join(' '), /restore/i);
+  const booking = applyConfirmBooking(archived, { vendorId, contractTotal: 1000, milestones: [] });
+  assert.equal(booking.workspace, archived);
+  assert.match(booking.blockingReasons.join(' '), /restore/i);
+});
 
 test('failed quote import can preserve its original source in an incomplete draft without changing workspace finances', () => {
   const workspace = createDemoWorkspace();

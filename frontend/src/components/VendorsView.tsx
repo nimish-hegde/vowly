@@ -56,6 +56,7 @@ export function VendorsView({
   const [mode, setMode] = useState<'directory' | 'compare'>(initialMode);
   const [categoryFilter, setCategoryFilter] = useState<VendorCategory | 'all'>('all');
   const [statusFilter, setStatusFilter] = useState<VendorStatus | 'all'>('all');
+  const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'price_asc' | 'price_desc' | 'status'>('price_desc');
 
@@ -83,6 +84,7 @@ export function VendorsView({
   const filteredVendors = useMemo(() => {
     return enrichedVendors
       .filter(({ vendor }) => {
+        if (Boolean(vendor.archived) !== showArchived) return false;
         if (categoryFilter !== 'all' && vendor.category !== categoryFilter) return false;
         if (statusFilter !== 'all' && vendor.status !== statusFilter) return false;
         if (search.trim()) {
@@ -108,7 +110,7 @@ export function VendorsView({
         }
         return (b.effectivePrice ?? -1) - (a.effectivePrice ?? -1);
       });
-  }, [enrichedVendors, categoryFilter, statusFilter, search, sortBy]);
+  }, [enrichedVendors, categoryFilter, statusFilter, showArchived, search, sortBy]);
 
   return (
     <div className="space-y-5">
@@ -183,6 +185,15 @@ export function VendorsView({
           {/* Filter Bar */}
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
             <div className="flex flex-wrap items-center gap-2">
+              <select
+                aria-label="Filter by archive state"
+                value={showArchived ? 'archived' : 'active'}
+                onChange={(e) => setShowArchived(e.target.value === 'archived')}
+                className="px-3 py-2 text-xs rounded-xl border border-[#E5DED2] bg-white text-[#22201D]"
+              >
+                <option value="active">Active vendors</option>
+                <option value="archived">Archived vendors</option>
+              </select>
               <div className="relative">
                 <Search className="w-3.5 h-3.5 text-[#6B655C] absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
@@ -420,7 +431,9 @@ export function VendorsView({
                       {/* Footer */}
                       <div className="mt-3.5 pt-3 border-t border-[#F0EAE0] flex flex-wrap items-center justify-between gap-2 text-xs">
                         <div>
-                          {vendor.status === 'Booked' ? (
+                          {vendor.archived ? (
+                            <span className="font-medium text-[#6B655C]">Archived</span>
+                          ) : vendor.status === 'Booked' ? (
                             <span className="inline-flex items-center gap-1 font-semibold text-[#234733]">
                               <Check className="w-3.5 h-3.5" />
                               Booked
@@ -452,7 +465,7 @@ export function VendorsView({
                         </div>
 
                         <div className="flex items-center gap-3">
-                          {vendor.status !== 'Booked' && activeQuote && (() => {
+                          {!vendor.archived && vendor.status !== 'Booked' && activeQuote && (() => {
                             const eligibility = getVendorBookingEligibility(
                               vendor,
                               activeWorkspace.events

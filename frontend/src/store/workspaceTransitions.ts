@@ -18,19 +18,60 @@ import { buildQuoteRevisionPreview, hasCompetingSelectedVendor } from '../engine
 
 export { hasCompetingSelectedVendor } from '../engine/revisionPreview.ts';
 
+export function getVendorArchiveBlockReason(ws: WeddingWorkspace, vendor: Vendor): string | undefined {
+  if (vendor.status === 'Booked' || vendor.bookedContractTotal != null || vendor.bookedDate ||
+      ws.payments.some((payment) => payment.vendorId === vendor.id)) {
+    return 'Vendors with a booking, contract, or payment record cannot be archived.';
+  }
+}
+
+export function applySetVendorArchived(
+  ws: WeddingWorkspace,
+  vendorId: string,
+  archived: boolean,
+  confirmedForecastRemoval = false,
+): { workspace: WeddingWorkspace; blockingReason?: string } {
+  const vendor = ws.vendors.find((item) => item.id === vendorId);
+  if (!vendor) return { workspace: ws, blockingReason: 'Vendor not found.' };
+  if (Boolean(vendor.archived) === archived) return { workspace: ws };
+  if (archived) {
+    const blockingReason = getVendorArchiveBlockReason(ws, vendor);
+    if (blockingReason) return { workspace: ws, blockingReason };
+    if (vendor.isPreferred && vendor.status !== 'Declined' && !confirmedForecastRemoval) {
+      return { workspace: ws, blockingReason: 'Confirm removal from the projected budget before archiving.' };
+    }
+  }
+  return {
+    workspace: {
+      ...ws,
+      vendors: ws.vendors.map((item) => item.id === vendorId
+        ? { ...item, archived, isPreferred: false }
+        : item),
+    },
+  };
+}
+
+export function getActivePlanningTasks(ws: WeddingWorkspace): FollowUpTask[] {
+  const archivedVendorIds = new Set(ws.vendors.filter((vendor) => vendor.archived).map((vendor) => vendor.id));
+  return ws.tasks.filter((task) => !task.vendorId || !archivedVendorIds.has(task.vendorId));
+}
+
 export function applySaveDraftQuote(
   ws: WeddingWorkspace,
   vendorId: string | null,
   newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
   draftQuote: Quote,
   targetId: string
-): { workspace: WeddingWorkspace; vendorName: string } {
+): { workspace: WeddingWorkspace; vendorName: string; blockingReason?: string } {
   const cleanDraft: Quote = { ...draftQuote, approvalState: 'draft' };
   const existingVendor = vendorId
     ? ws.vendors.find((v) => v.id === vendorId)
     : undefined;
   const vendorName =
     existingVendor?.name || newVendorPayload?.name?.trim() || 'Vendor';
+  if (existingVendor?.archived) {
+    return { workspace: ws, vendorName, blockingReason: 'Restore this vendor before saving a quote.' };
+  }
 
   let nextVendors: Vendor[];
   if (existingVendor && vendorId) {
@@ -129,6 +170,9 @@ export function applyApproveQuote(
     existingVendor?.draftVendorMetadata?.name?.trim() ||
     existingVendor?.name ||
     'Vendor';
+  if (existingVendor?.archived) {
+    return { workspace: ws, vendorName, approved: false, blockingReasons: ['Restore this vendor before approving a quote.'] };
+  }
 
   const isRevision = approvedQuote.revisionDraft !== undefined;
   const effectiveMeta = newVendorPayload ?? existingVendor?.draftVendorMetadata;

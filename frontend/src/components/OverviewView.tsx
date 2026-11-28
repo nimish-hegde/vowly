@@ -12,6 +12,7 @@ import {
   formatShortCad,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
+import { getActivePlanningTasks } from '../store/workspaceTransitions';
 import { PASTEL_TONES } from '../utils/pastelStyles';
 import { DemoDataNote, StatusText } from './DemoLabel';
 
@@ -55,12 +56,8 @@ export function OverviewView({
   );
 
   // Single highest-priority next action
-  const nextAction = useMemo(() => {
-    const open = activeWorkspace.tasks.filter((t) => t.status === 'Open');
-    if (open.length === 0) return null;
-    const high = open.find((t) => t.priority === 'high');
-    return high ?? open[0];
-  }, [activeWorkspace.tasks]);
+  const openTasks = getActivePlanningTasks(activeWorkspace).filter((task) => task.status === 'Open');
+  const nextAction = openTasks.find((task) => task.priority === 'high') ?? openTasks[0];
 
   // Next unpaid payment chronologically (overdue first, then soonest dated, then undated)
   const nextPayment = useMemo(() => {
@@ -359,9 +356,9 @@ export function OverviewView({
             <h2 className="text-xs font-semibold text-[#6B655C]">
               Next action
             </h2>
-            {activeWorkspace.tasks.filter((t) => t.status === 'Open').length > 1 && (
+            {openTasks.length > 1 && (
               <span className="text-[11px] text-[#6B655C]">
-                {activeWorkspace.tasks.filter((t) => t.status === 'Open').length} open
+                {openTasks.length} open
               </span>
             )}
           </div>

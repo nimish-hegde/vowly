@@ -26,6 +26,7 @@ import {
   getVendorBookingEligibility,
 } from '../engine/financialCalculator';
 import { useWorkspace } from '../store/workspaceStore';
+import { getVendorArchiveBlockReason } from '../store/workspaceTransitions';
 import { VendorStatus } from '../types/vowly';
 import { PASTEL_TONES } from '../utils/pastelStyles';
 import { DemoDataNote, StatusText } from './DemoLabel';
@@ -62,6 +63,7 @@ export function VendorDetailDrawer({
     updateVendor,
     updateEventGuestCount,
     setPreferredVendor,
+    setVendorArchived,
     toggleVendorAddOn,
   } = useWorkspace();
 
@@ -133,6 +135,10 @@ export function VendorDetailDrawer({
   }, [displayedTotal]);
 
   if (!vendor) return null;
+
+  const archiveBlockReason = getVendorArchiveBlockReason(activeWorkspace, vendor);
+  const removesForecast = vendor.isPreferred && vendor.status !== 'Declined';
+  const archivedTasks = vendor.archived ? activeWorkspace.tasks.filter((task) => task.vendorId === vendor.id) : [];
 
   const linkedEvents = vendor.eventIds
     .map((id) => activeWorkspace.events.find((e) => e.id === id))
@@ -301,7 +307,7 @@ export function VendorDetailDrawer({
                     : calc.taxStatusLabel}
               </span>
             )}
-            {vendor.status !== 'Booked' && activeQuote && (
+            {!vendor.archived && vendor.status !== 'Booked' && activeQuote && (
               <button
                 type="button"
                 disabled={hasUnresolvedBlockers}
@@ -321,6 +327,47 @@ export function VendorDetailDrawer({
 
         {/* Scrollable Drawer Body */}
         <div className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-4">
+          <div className="rounded-xl bg-white border border-[#E5DED2] p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-[#6B655C]">
+              {vendor.archived ? 'Archived. Restore to use this vendor in active planning.' : archiveBlockReason}
+            </div>
+            {vendor.archived ? (
+              <button
+                type="button"
+                onClick={() => setVendorArchived(vendor.id, false)}
+                className="rounded-lg border border-[#B6D7C0] bg-[#DFEFE4] px-3 py-1.5 text-xs font-semibold text-[#234733] hover:bg-[#D1E7D8] cursor-pointer"
+              >
+                Restore vendor
+              </button>
+            ) : (
+              <button
+                type="button"
+                disabled={Boolean(archiveBlockReason)}
+                onClick={() => {
+                  if (removesForecast && !window.confirm(`Archive ${vendor.name} and remove its estimate from projected spending? You can restore the vendor and choose it for the budget again.`)) return;
+                  setVendorArchived(vendor.id, true, removesForecast);
+                }}
+                className="rounded-lg border border-[#E5DED2] bg-white px-3 py-1.5 text-xs font-semibold text-[#22201D] hover:bg-[#FAF8F4] cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Archive vendor
+              </button>
+            )}
+          </div>
+
+          {archivedTasks.length > 0 && (
+            <details className="rounded-xl bg-white border border-[#E5DED2] p-4 text-xs">
+              <summary className="font-semibold text-[#22201D] cursor-pointer">Follow-up history ({archivedTasks.length})</summary>
+              <ul className="mt-3 space-y-2">
+                {archivedTasks.map((task) => (
+                  <li key={task.id}>
+                    <span className="font-medium text-[#22201D]">{task.title} · {task.status}</span>
+                    <p className="text-[#6B655C]">{task.description}</p>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           {/* Always Visible: Draft / Unresolved Fees / Booking Blockers */}
           {vendor.draftQuote && (
             <div className="rounded-xl bg-[#FEF3C7] border border-[#F59E0B]/60 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -335,13 +382,13 @@ export function VendorDetailDrawer({
                   </div>
                 </div>
               </div>
-              <button
+              {!vendor.archived && <button
                 type="button"
                 onClick={() => onResumeDraft(vendor.id)}
                 className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-[#92400E] text-white hover:bg-[#78350F] whitespace-nowrap shrink-0 cursor-pointer"
               >
                 Resolve draft
-              </button>
+              </button>}
             </div>
           )}
 
@@ -379,13 +426,13 @@ export function VendorDetailDrawer({
                   </ul>
                 </div>
               </div>
-              <button
+              {!vendor.archived && <button
                 type="button"
                 onClick={() => onEditApprovedQuote(vendor.id)}
                 className="px-3.5 py-2 text-xs font-semibold rounded-lg bg-[#92400E] text-white hover:bg-[#78350F] whitespace-nowrap shrink-0 cursor-pointer"
               >
                 Review &amp; edit quote
-              </button>
+              </button>}
             </div>
           )}
 
@@ -398,13 +445,13 @@ export function VendorDetailDrawer({
                   excluded from estimate. Confirm tax handling before booking.
                 </div>
               </div>
-              <button
+              {!vendor.archived && <button
                 type="button"
                 onClick={() => onEditApprovedQuote(vendor.id)}
                 className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-[#F59E0B] bg-white text-[#92400E] hover:bg-[#FEF3C7] whitespace-nowrap shrink-0 cursor-pointer"
               >
                 Set tax handling
-              </button>
+              </button>}
             </div>
           )}
 
@@ -426,7 +473,7 @@ export function VendorDetailDrawer({
           )}
 
           {/* Saved Guest Count Control (Single-Event Quoted Vendors) */}
-          {primaryEvent && activeQuote && (
+          {!vendor.archived && primaryEvent && activeQuote && (
             <div className="rounded-xl bg-white border border-[#E5DED2] p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <div className="text-xs font-semibold text-[#22201D] inline-flex items-center gap-1.5">
@@ -467,19 +514,19 @@ export function VendorDetailDrawer({
                   Preserved as unpriced until you import or enter a quote.
                 </div>
               </div>
-              <button
+              {!vendor.archived && <button
                 type="button"
                 onClick={() => onOpenQuoteImport(undefined, vendor.id)}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold rounded-xl bg-[#486755] text-white hover:bg-[#395344] whitespace-nowrap cursor-pointer"
               >
                 <FileUp className="w-3.5 h-3.5" />
                 Add quote
-              </button>
+              </button>}
             </div>
           ) : (
             <>
               {/* Quick Controls Row */}
-              <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 flex flex-wrap items-center justify-between gap-3">
+              {!vendor.archived && <div className="rounded-2xl bg-white border border-[#E5DED2] p-4 flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-xs">
                   <label htmlFor="drawer-status" className="text-[#6B655C]">
                     Status:
@@ -548,7 +595,7 @@ export function VendorDetailDrawer({
                     Import revision
                   </button>
                 </div>
-              </div>
+              </div>}
 
               {/* Line Items & Optional Add-Ons (Tax-Inclusive Change Shown Beside Each) */}
               {calc && (
@@ -604,6 +651,7 @@ export function VendorDetailDrawer({
                             <input
                               type="checkbox"
                               checked={addon.selected}
+                              disabled={vendor.archived}
                               onChange={() =>
                                 toggleVendorAddOn(
                                   vendor.id,
@@ -867,6 +915,7 @@ export function VendorDetailDrawer({
             <textarea
               rows={2}
               value={notesDraft}
+              readOnly={vendor.archived}
               onChange={(e) => setNotesDraft(e.target.value)}
               onBlur={() => updateVendor(vendor.id, { notes: notesDraft })}
               placeholder="Couple notes..."

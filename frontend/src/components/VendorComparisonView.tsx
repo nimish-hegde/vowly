@@ -47,7 +47,7 @@ const QUOTE_ROWS: Row[] = [
 function defaultEventId(workspace: WeddingWorkspace, category: VendorCategory, initialEventId?: string): string {
   const requestedEvent = workspace.events.find((event) => event.id === initialEventId);
   if (requestedEvent) return requestedEvent.id;
-  const linked = workspace.vendors.filter((vendor) => vendor.category === category && vendor.status !== 'Declined');
+  const linked = workspace.vendors.filter((vendor) => !vendor.archived && vendor.category === category && vendor.status !== 'Declined');
   const comparable = workspace.events.find((event) =>
     linked.filter((vendor) => vendor.eventIds.includes(event.id) && getVendorActiveQuote(vendor)).length >= 2,
   );
@@ -278,7 +278,8 @@ export function VendorComparisonView({
   const selectedEvent = activeWorkspace.events.find((event) => event.id === eventId)
     ?? activeWorkspace.events.find((event) => event.id === defaultEventId(activeWorkspace, category));
   const packageVendors = activeWorkspace.vendors.filter((vendor) =>
-    vendor.category === category
+    !vendor.archived
+    && vendor.category === category
     && vendor.status !== 'Declined'
     && Boolean(selectedEvent && vendor.eventIds.includes(selectedEvent.id))
     && (getVendorActiveQuote(vendor)?.packages?.length ?? 0) >= 2,

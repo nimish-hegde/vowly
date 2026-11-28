@@ -383,6 +383,7 @@ export interface Vendor {
   contactEmail: string;
   contactPhone: string;
   status: VendorStatus;
+  archived?: boolean;
   isPreferred: boolean; // counts toward projected spend if not booked
   isDemoVenue?: boolean; // true for real GTA venues with fictional pricing
   notes: string;
