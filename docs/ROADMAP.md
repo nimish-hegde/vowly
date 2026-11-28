@@ -41,7 +41,7 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 
 ### Open Issue Audit Status
 - **Closed / Shipped:** `#1` (pre-approval quote revision review, partial updates, coupled-field confirmation gates, and replay protection shipped via `#26`), `#3` (venue comparison & `$500` break-even regression verified and closed on `85e00a9`), `#15` (30-case multimodal holdout & Gemini model benchmark shipped via `#22`, `b76c67c`), `#16` (shared deterministic financial engine shipped via `#23`, `a9b89c0`), `#17` (category-aware vendor & package comparison shipped via `#25`, `4dda164`), `#21` (extraction accuracy for cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous categories shipped via `#24`, `8f46c9a`).
-- **In review:** `#7` adds scratch-onboarding currency selection (CAD by default) and source-preserving manual quote entry after extraction fails. Incomplete quotes can be saved as drafts. PM approval is required before merge.
+- **Closed / Shipped:** `#7` shipped in [PR #27](https://github.com/nimish-hegde/vowly/pull/27). Scratch onboarding offers CAD and USD with CAD preselected. After extraction fails, users can save an incomplete manual quote with its original source.
 - **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
 
 ### Tracked Follow-Up Workstreams
@@ -50,7 +50,7 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 3. **Extraction accuracy follow-up (`#21`, Shipped via `#24`):** Cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous vendor categories improved on `gemini-3.5-flash-lite` (`29/30` strict all-in multimodal, `0` critical financial errors across all 100 live cases).
 4. **Category-aware vendor & package comparison (`#17`, Pending review for `v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
 5. **Vendor archiving & duplicate management (`#18`, Planned for `v0.6+`):** Allow archiving declined/superseded vendors, merging or linking duplicate vendor records, and surfacing duplicate-revision idempotency checks.
-6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add multi-installment (`>2` milestones) custom payment schedules in `BookingModal`. Currency selection and manual quote recovery are in review under `#7`.
+6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add multi-installment (`>2` milestones) custom payment schedules in `BookingModal`. Currency selection and manual quote recovery shipped under `#7`.
 7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
 
 ---
@@ -179,3 +179,10 @@ Record significant product, architecture, and model decisions here as they are m
 - **Browser verification:** Local Chrome UAT verified desktop (`1440 px`) and mobile (`360 px`) flows plus targeted add-on selection/deselection, package-fee conflict resolution (`$1,300 → $1,600`), simple uncoupled AV reduction (`$452` all-in savings), and complex coupled quote-wide tax override confirmation (`$1,130 → $1,000`) with `0` console errors using local fixture responses (no live extraction).
 - **Remaining Limitations:** Complex coupled partial amendments require explicit reviewer confirmation rather than full automatic merging; browser UAT used deterministic local fixtures rather than live Gemini calls; external Codex review could not run on the final commit (`045eaa0`) and was substituted with internal independent adversarial review and bounded validation.
 - **Decision:** **Approved by PM and shipped (`#26`, Issue `#1` closed).**
+
+### D-012 — Issue #7 onboarding currency and manual quote recovery
+
+- **Hypothesis:** A currency choice in the existing form and a source-preserving manual fallback help couples finish setup even when extraction fails.
+- **Changes:** Scratch onboarding offers CAD and USD with CAD preselected. Manual recovery reuses quote review and editing, retains the original text or attachment, and allows incomplete drafts. Existing approval gates block mixed-currency partial revisions. If browser storage is full, the unsaved source stays open in review for retry.
+- **Verification:** Four focused checks passed, along with 66 backend tests, 159 frontend tests, 70 offline mock cases, 33 financial parity tests, type-check, and production build. Local desktop and mobile Chrome verified currency persistence, preservation of an existing workspace, and text, PNG, and PDF recovery with simulated extraction failures. Live API calls totaled zero.
+- **Decision:** PM approved [PR #27](https://github.com/nimish-hegde/vowly/pull/27) after Codex review returned zero findings. The PR shipped in [`1d338f1`](https://github.com/nimish-hegde/vowly/commit/1d338f1e516ae888244e0a541d664a064c34bbc9), and Issue #7 closed as completed.
