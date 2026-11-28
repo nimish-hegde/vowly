@@ -151,6 +151,7 @@ export interface QuoteLineItem {
   label: string;
   pricingModel: LineItemPricingModel;
   unitPrice: number;
+  manualAmountPending?: true;
   quantity?: number; // confirmed quantity; extra hours on a conditional rate
   extractedHours?: number;
   chargeType?: 'mandatory' | 'conditional' | 'optional';
@@ -315,6 +316,7 @@ export interface Quote {
   sourceType: 'pasted_message' | 'pdf' | 'screenshot';
   sourceChannel: string; // e.g., "WhatsApp message", "Email PDF", "Instagram DM"
   sourceText: string;
+  manualEntry?: true;
   currency: CurrencyCode;
   currencySource: CurrencySource;
   locationContext?: string; // e.g., "Mississauga, ON, Canada"

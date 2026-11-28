@@ -29,6 +29,7 @@ import {
   resolveRelativeDeadlineDate,
 } from '../engine/financialCalculator';
 import { findAmbiguousLegacyOvertimeItems } from '../engine/legacyOvertimeReview';
+import { createManualQuoteDraft, hasIncompleteManualPricing } from '../engine/manualQuoteDraft';
 import { buildQuoteRevisionPreview, getApprovedRevisionBaseline } from '../engine/revisionPreview';
 import {
   ExtractionAttachmentInput,
@@ -69,7 +70,7 @@ interface QuoteImportModalProps {
     asDraft: boolean;
     eventName: string;
     plannedGuests: number | null;
-  }) => void;
+  }) => boolean;
 }
 
 const LOADING_MESSAGES = [
@@ -104,6 +105,7 @@ const GENERIC_VENDOR_NAMES = new Set([
   'uploaded pdf',
   'unknown',
   'unknown vendor',
+  'unnamed vendor',
   'vendor',
 ]);
 
@@ -149,6 +151,7 @@ export function QuoteImportModal({
   const [step, setStep] = useState<'input' | 'extracting' | 'review'>('input');
   const [loadingMsgIdx, setLoadingMsgIdx] = useState(0);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [unlinkedNotice, setUnlinkedNotice] = useState<string | null>(null);
   const isExtractingRef = useRef(false);
@@ -204,6 +207,7 @@ export function QuoteImportModal({
     if (!isOpen) return;
 
     setExtractError(null);
+    setSaveError(false);
     setUploadError(null);
     setUnlinkedNotice(null);
     setExtractionMetaLabel(null);
@@ -264,8 +268,8 @@ export function QuoteImportModal({
         const revisionDraft = cloned.revisionDraft
           ?? newRevisionDraft(existingVendor, cloned.id === active?.id ? 'manual' : 'partial');
         setDraftQuote({ ...cloned, revisionDraft });
-        setShowRevisionDetails(revisionDraft?.mode === 'manual');
-        setShowLineItemEditor(revisionDraft?.mode === 'manual');
+        setShowRevisionDetails(Boolean(cloned.manualEntry || revisionDraft?.mode === 'manual'));
+        setShowLineItemEditor(Boolean(cloned.manualEntry || revisionDraft?.mode === 'manual'));
         setGratuityPercentInput(
           cloned.gratuityPercent !== undefined && cloned.gratuityPercent !== null
             ? String(cloned.gratuityPercent)
@@ -578,6 +582,43 @@ export function QuoteImportModal({
     }
   };
 
+  const handleManualEntry = () => {
+    if (!rawText.trim() && !uploadedAttachment) return;
+
+    const target = activeWorkspace.vendors.find((vendor) => vendor.id === initialVendorId);
+    const linked = target?.draftQuote ? undefined : target;
+    const attachmentPreview = uploadedAttachment?.dataUrl ? {
+      fileName: uploadedAttachment.fileName,
+      mimeType: uploadedAttachment.mimeType,
+      dataUrl: uploadedAttachment.dataUrl,
+      sizeBytes: uploadedAttachment.sizeBytes,
+    } : undefined;
+    const draft = createManualQuoteDraft({
+      sourceType,
+      sourceChannel,
+      sourceText: rawText,
+      attachmentPreview,
+    });
+
+    if (target?.draftQuote) {
+      setUnlinkedNotice(`This quote will be saved separately to keep the draft for ${target.name} intact.`);
+    }
+    setVendorName(linked?.name ?? '');
+    setVendorNamePromptOpen(!linked);
+    setVendorCategory(linked?.category ?? 'other');
+    setVendorLocation(linked?.location ?? '');
+    setIsDemoVenue(Boolean(linked?.isDemoVenue));
+    setLinkedVendorId(linked?.id ?? null);
+    setSelectedEventIds(onCompleteForOnboarding ? [] : linked?.eventIds ?? activeWorkspace.events.slice(0, 1).map((event) => event.id));
+    setOnboardingEventName('');
+    setOnboardingPlannedGuests('');
+    setDraftQuote({ ...draft, revisionDraft: newRevisionDraft(linked, 'partial') });
+    setShowRevisionDetails(true);
+    setShowLineItemEditor(true);
+    setStep('review');
+    setMobilePane('extracted');
+  };
+
   const updateQuote = (updater: (q: Quote) => Quote) => {
     setDraftQuote((prev) => (prev ? updater(prev) : prev));
   };
@@ -666,6 +707,7 @@ export function QuoteImportModal({
   const handleSave = (asDraft: boolean) => {
     if (!draftQuote) return;
     if (!asDraft && !canApproveWithVendor) return;
+    setSaveError(false);
 
     const cleanName = vendorName.trim() || 'Unnamed Vendor';
 
@@ -676,7 +718,7 @@ export function QuoteImportModal({
         parseInt(onboardingPlannedGuests.trim(), 10) > 0
           ? parseInt(onboardingPlannedGuests.trim(), 10)
           : null;
-      onCompleteForOnboarding({
+      const saved = onCompleteForOnboarding({
         vendorName: cleanName,
         category: vendorCategory,
         location: vendorLocation.trim(),
@@ -688,7 +730,8 @@ export function QuoteImportModal({
           (vendorCategory === 'venue' ? 'Reception' : 'Wedding Event'),
         plannedGuests: parsedPlanned,
       });
-      onClose();
+      if (saved) onClose();
+      else if (draftQuote.manualEntry) setSaveError(true);
       return;
     }
 
@@ -707,7 +750,10 @@ export function QuoteImportModal({
     };
 
     if (asDraft) {
-      saveDraftQuote(linkedVendorId, newVendorPayload, draftQuote);
+      if (!saveDraftQuote(linkedVendorId, newVendorPayload, draftQuote)) {
+        setSaveError(true);
+        return;
+      }
     } else {
       const approvedVendorId = approveQuote(
         linkedVendorId,
@@ -750,6 +796,7 @@ export function QuoteImportModal({
 
   const needsAttentionCount =
     (isVendorNameValid && !vendorNamePromptOpen ? 0 : 1) +
+    (draftQuote && hasIncompleteManualPricing(draftQuote) ? 1 : 0) +
     (calc?.unresolvedPackageSelection ? 1 : 0) +
     (calc?.unresolvedPackagePrice ? 1 : 0) +
     (calc?.isCurrencyUnknown ? 1 : 0) +
@@ -814,7 +861,7 @@ export function QuoteImportModal({
         {step === 'input' && (
           <div className="p-5 sm:p-6 overflow-y-auto space-y-5">
             {extractError && (
-              <div className="rounded-xl bg-[#FEE2E2] border border-[#FCA5A5] p-4 flex items-start justify-between gap-3">
+              <div className="rounded-xl bg-[#FEE2E2] border border-[#FCA5A5] p-4 flex flex-wrap items-start justify-between gap-3">
                 <div className="flex items-start gap-2.5">
                   <AlertTriangle className="w-4 h-4 text-[#991B1B] mt-0.5 shrink-0" />
                   <div className="text-xs text-[#991B1B] space-y-1">
@@ -822,14 +869,24 @@ export function QuoteImportModal({
                     <div>{extractError}</div>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={handleRunExtraction}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#991B1B] text-white hover:bg-[#7F1D1D] shrink-0 cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Retry
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleManualEntry}
+                    disabled={!rawText.trim() && !uploadedAttachment}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-[#486755] text-white hover:bg-[#395344] cursor-pointer disabled:opacity-50"
+                  >
+                    Continue with manual entry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRunExtraction}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg bg-white text-[#991B1B] hover:bg-[#FEF2F2] cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Retry
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1117,7 +1174,13 @@ export function QuoteImportModal({
                     ) : (
                       <div className="flex items-center gap-2 text-xs text-[#6B655C] py-3 px-2 bg-white rounded-lg border border-[#E5DED2]">
                         <FileText className="w-4 h-4 text-[#486755]" />
-                        PDF document preserved for review
+                        <a
+                          href={draftQuote.attachmentPreview.dataUrl}
+                          download={draftQuote.attachmentPreview.fileName}
+                          className="underline hover:text-[#486755]"
+                        >
+                          Download original PDF
+                        </a>
                       </div>
                     )}
                   </div>
@@ -1285,7 +1348,9 @@ export function QuoteImportModal({
                           Who is this quote from?
                         </label>
                         <p className="text-[11px] text-[#6B655C]">
-                          The vendor name wasn’t stated in the quote. Enter it so we don’t save a placeholder name.
+                          {draftQuote.manualEntry
+                            ? 'Enter the vendor name from the original quote when you have it.'
+                            : 'The vendor name wasn’t stated in the quote. Enter it so we don’t save a placeholder name.'}
                         </p>
                         <div className="flex items-center gap-2">
                           <input
@@ -1382,6 +1447,10 @@ export function QuoteImportModal({
                       </div>
                     )}
 
+                    {hasIncompleteManualPricing(draftQuote) && (
+                      <p className="text-xs text-[#92400E]">Enter a name and amount for each quoted charge before approving. You can save incomplete details as a draft.</p>
+                    )}
+
                     {/* Ambiguous Currency — suggest workspace currency */}
                     {calc.isCurrencyUnknown && (
                       <div className="rounded-xl bg-white border border-[#E5DED2] p-3 space-y-2">
@@ -1389,7 +1458,7 @@ export function QuoteImportModal({
                           Confirm currency
                         </div>
                         <p className="text-[11px] text-[#6B655C]">
-                          The quote only uses “$” without specifying CAD or USD. Should we use your workspace currency ({activeWorkspace.currency})?
+                          Which currency does the original quote use? Your workspace uses {activeWorkspace.currency}.
                         </p>
                         <div className="flex flex-wrap gap-2">
                           <button
@@ -2056,14 +2125,18 @@ export function QuoteImportModal({
                             </select>
                             <input
                               type="number"
-                              value={item.unitPrice}
+                              value={item.manualAmountPending ? '' : item.unitPrice}
                               onChange={(e) => {
                                 const val = parseFloat(e.target.value);
                                 updateQuote((q) => ({
                                   ...q,
                                   lineItems: q.lineItems.map((li) =>
                                     li.id === item.id
-                                      ? { ...li, unitPrice: Number.isNaN(val) ? 0 : val }
+                                      ? {
+                                          ...li,
+                                          unitPrice: Number.isNaN(val) ? 0 : val,
+                                          manualAmountPending: q.manualEntry && Number.isNaN(val) ? true : undefined,
+                                        }
                                       : li
                                   ),
                                 }));
@@ -2297,9 +2370,10 @@ export function QuoteImportModal({
                               ...q.lineItems,
                               {
                                 id: `li-manual-${Date.now()}`,
-                                label: 'New line item',
+                                label: q.manualEntry ? '' : 'New line item',
                                 pricingModel: 'flat',
                                 unitPrice: 0,
+                                manualAmountPending: q.manualEntry,
                                 eventId: selectedEventIds[0],
                               },
                             ],
@@ -2646,7 +2720,11 @@ export function QuoteImportModal({
                             >
                               <option value="">Create as new vendor</option>
                               {activeWorkspace.vendors.map((v) => (
-                                <option key={v.id} value={v.id}>
+                                <option
+                                  key={v.id}
+                                  value={v.id}
+                                  disabled={Boolean(draftQuote.manualEntry && v.draftQuote && v.draftQuote.id !== draftQuote.id)}
+                                >
                                   Update {v.name} ({v.status})
                                 </option>
                               ))}
@@ -2697,6 +2775,11 @@ export function QuoteImportModal({
             </div>
 
             {/* Bottom Review Action Footer */}
+            {saveError && (
+              <p role="alert" className="px-5 py-2 text-xs text-[#991B1B] bg-[#FEE2E2]">
+                Browser storage could not save this quote and its source. Keep this review open and try again after freeing up storage.
+              </p>
+            )}
             <div className="px-5 py-3.5 bg-white border-t border-[#E5DED2] flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
               <div className="text-xs text-[#6B655C]">
                 {revisionDraft

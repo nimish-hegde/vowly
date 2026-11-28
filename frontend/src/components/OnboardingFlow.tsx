@@ -98,6 +98,7 @@ export function OnboardingFlow({ onCloseToWorkspace }: OnboardingFlowProps) {
   const [firstEventDate, setFirstEventDate] = useState('');
   const [firstEventGuestsStr, setFirstEventGuestsStr] = useState('');
   const [firstEventTone, setFirstEventTone] = useState<PastelTone>('sage');
+  const [workspaceCurrency, setWorkspaceCurrency] = useState<WeddingWorkspace['currency']>('CAD');
   const [budgetTargetStr, setBudgetTargetStr] = useState('');
   const [partnerOne, setPartnerOne] = useState('');
   const [partnerTwo, setPartnerTwo] = useState('');
@@ -272,7 +273,7 @@ export function OnboardingFlow({ onCloseToWorkspace }: OnboardingFlowProps) {
         ? formatIsoDateDisplay(firstEventDate)
         : 'Date TBD',
       weddingStyle: 'Wedding Plan',
-      currency: 'CAD',
+      currency: workspaceCurrency,
       budgetTarget,
       isDemoWorkspace: false,
       partners,
@@ -430,7 +431,7 @@ export function OnboardingFlow({ onCloseToWorkspace }: OnboardingFlowProps) {
       ],
     };
 
-    createWorkspace(newWs);
+    return createWorkspace(newWs, payload.quote.manualEntry);
   };
 
   const canContinueStep1 = firstEventName.trim().length > 0;
@@ -626,13 +627,30 @@ export function OnboardingFlow({ onCloseToWorkspace }: OnboardingFlowProps) {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+                  <div>
+                    <label
+                      htmlFor="workspace-currency"
+                      className="block text-xs font-medium text-[#22201D] mb-1"
+                    >
+                      Workspace currency
+                    </label>
+                    <select
+                      id="workspace-currency"
+                      value={workspaceCurrency}
+                      onChange={(e) => setWorkspaceCurrency(e.target.value === 'USD' ? 'USD' : 'CAD')}
+                      className="w-full rounded-xl border border-[#E5DED2] bg-white px-3.5 py-2.5 text-xs text-[#22201D]"
+                    >
+                      <option value="CAD">CAD (Canadian dollar)</option>
+                      <option value="USD">USD (US dollar)</option>
+                    </select>
+                  </div>
                   <div>
                     <label
                       htmlFor="overall-budget"
                       className="block text-xs font-medium text-[#22201D] mb-1"
                     >
-                      Wedding budget target (CAD, optional)
+                      Wedding budget target ({workspaceCurrency}, optional)
                     </label>
                     <input
                       id="overall-budget"

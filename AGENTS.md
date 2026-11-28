@@ -47,6 +47,16 @@ Preserve four distinct financial states at all times:
 
 ## 6. PM-Owned Release Gates
 
+### Pilot product principles
+
+- Prefer simple workflows with visible controls that keep users in charge.
+- Automate only common scenarios with unambiguous inputs and outcomes.
+- Provide a manual override or fallback where users need to correct a result or continue after a failure.
+- Keep uncertain facts unresolved and ask a focused question before acting on them.
+- Defer automation for rare edge cases until pilot feedback shows a need.
+- Preserve financial integrity and require explicit approval at the existing financial decision points.
+- Keep each PR focused on its acceptance criteria and reuse existing components and data paths where they fit. Change architecture only when the scoped outcome requires it.
+
 - Define measurable acceptance criteria in the plan / [docs/ROADMAP.md](docs/ROADMAP.md) before starting implementation.
 - **Critical financial errors are release blockers** (wrong subtotals, double-counted prices, unsupported currency assumptions, silently dropped mandatory fees, or bypassed booking/approval gates).
 - Never merge a PR automatically; **explicit PM/user approval is required before merging**.

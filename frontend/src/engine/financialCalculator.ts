@@ -13,6 +13,7 @@ import type {
 } from '../types/vowly';
 
 import { findAmbiguousLegacyOvertimeItems } from './legacyOvertimeReview.ts';
+import { hasIncompleteManualPricing } from './manualQuoteDraft.ts';
 import { calculateQuote, roundMoney, type LineItem, type PackageOption, type PricingType, type TaxStatus } from '../../../shared/finance/calculator.ts';
 
 export const ONTARIO_HST_RATE = 0.13;
@@ -539,6 +540,9 @@ export function calculateQuoteFinancials(
     }];
   });
   const blockingReasons: string[] = [];
+  if (hasIncompleteManualPricing(quote)) {
+    blockingReasons.push('Enter and name the quoted charges before approving, or Save as Draft.');
+  }
   if (unresolvedPackageSelection) {
     blockingReasons.push(
       'Select one package option before approving this quote, or Save as Draft to keep all options.'

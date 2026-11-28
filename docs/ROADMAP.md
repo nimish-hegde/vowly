@@ -41,7 +41,7 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 
 ### Open Issue Audit Status
 - **Closed / Shipped:** `#1` (pre-approval quote revision review, partial updates, coupled-field confirmation gates, and replay protection shipped via `#26`), `#3` (venue comparison & `$500` break-even regression verified and closed on `85e00a9`), `#15` (30-case multimodal holdout & Gemini model benchmark shipped via `#22`, `b76c67c`), `#16` (shared deterministic financial engine shipped via `#23`, `a9b89c0`), `#17` (category-aware vendor & package comparison shipped via `#25`, `4dda164`), `#21` (extraction accuracy for cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous categories shipped via `#24`, `8f46c9a`).
-- **Partially complete (targeted gaps remain):** `#7` (scratch-onboarding currency selector & `"Continue with manual entry"` fallback on extraction failure).
+- **In review:** `#7` adds scratch-onboarding currency selection (CAD by default) and source-preserving manual quote entry after extraction fails. Incomplete quotes can be saved as drafts. PM approval is required before merge.
 - **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
 
 ### Tracked Follow-Up Workstreams
@@ -50,7 +50,7 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 3. **Extraction accuracy follow-up (`#21`, Shipped via `#24`):** Cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous vendor categories improved on `gemini-3.5-flash-lite` (`29/30` strict all-in multimodal, `0` critical financial errors across all 100 live cases).
 4. **Category-aware vendor & package comparison (`#17`, Pending review for `v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
 5. **Vendor archiving & duplicate management (`#18`, Planned for `v0.6+`):** Allow archiving declined/superseded vendors, merging or linking duplicate vendor records, and surfacing duplicate-revision idempotency checks.
-6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add currency selection in scratch onboarding (`#7`), `"Continue with manual entry"` fallback when AI extraction fails (`#7`), and multi-installment (`>2` milestones) custom payment schedules in `BookingModal`.
+6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add multi-installment (`>2` milestones) custom payment schedules in `BookingModal`. Currency selection and manual quote recovery are in review under `#7`.
 7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
 
 ---

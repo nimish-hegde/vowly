@@ -15,6 +15,7 @@ import {
   normalizeIsoDate,
   resolveRelativeDeadlineDate,
 } from './financialCalculator.ts';
+import { createManualQuoteDraft } from './manualQuoteDraft.ts';
 import {
   BackendQuoteExtractor,
   formatStructuredInclusion,
@@ -59,6 +60,44 @@ function makeCleanQuote(overrides: Partial<Quote> = {}): Quote {
     ...overrides,
   };
 }
+
+test('failed quote import can preserve its original source in an incomplete draft without changing workspace finances', () => {
+  const workspace = createDemoWorkspace();
+  const sourceText = '  Venue reply\nDetails to follow.  ';
+  const attachmentPreview = {
+    fileName: 'original.pdf',
+    mimeType: 'application/pdf',
+    dataUrl: 'data:application/pdf;base64,JVBERg==',
+    sizeBytes: 4,
+  };
+  const draft = createManualQuoteDraft({ sourceType: 'pdf', sourceChannel: 'Email', sourceText, attachmentPreview });
+  const saved = applySaveDraftQuote(workspace, null, null, draft, 'manual-vendor').workspace;
+  const savedDraft = saved.vendors[0].draftQuote;
+  assert.equal(savedDraft?.sourceText, sourceText);
+  assert.deepEqual(savedDraft?.attachmentPreview, attachmentPreview);
+  assert.equal(savedDraft?.currency, 'UNKNOWN');
+  assert.equal(savedDraft?.approvalState, 'draft');
+  assert.deepEqual(saved.vendors.slice(1), workspace.vendors);
+  const before = calculateWorkspaceFinancials(workspace);
+  const after = calculateWorkspaceFinancials(saved);
+  assert.deepEqual(after.budgetRows, before.budgetRows);
+  assert.equal(after.projectedSpend, before.projectedSpend);
+  assert.equal(after.committedSpend, before.committedSpend);
+  assert.equal(after.paidToDate, before.paidToDate);
+});
+
+test('manual approval requires a named charge with an explicitly entered amount and a confirmed currency', () => {
+  const draft = createManualQuoteDraft({ sourceType: 'pasted_message', sourceChannel: 'Email', sourceText: 'Quote details' });
+  const confirmedCurrency: Quote = { ...draft, currency: 'USD', currencySource: 'user_confirmed' };
+  const charge = { id: 'manual-charge', label: 'Room rental', unitPrice: 1000, pricingModel: 'flat' as const };
+  assert.equal(calculateQuoteFinancials(confirmedCurrency, [], []).canApprove, false);
+  assert.equal(calculateQuoteFinancials({ ...confirmedCurrency, lineItems: [{ ...charge, manualAmountPending: true }] }, [], []).canApprove, false);
+  assert.equal(calculateQuoteFinancials({ ...draft, lineItems: [charge] }, [], []).canApprove, false);
+  const priced = calculateQuoteFinancials({ ...confirmedCurrency, lineItems: [charge] }, [], []);
+  assert.equal(priced.canApprove, true);
+  assert.equal(priced.currencyLabel, 'USD');
+  assert.equal(priced.preTaxTotal, 1000);
+});
 
 test('booking eligibility blocks unresolved mandatory fees and confirmBooking refuses to book', () => {
   const ws = createDemoWorkspace();

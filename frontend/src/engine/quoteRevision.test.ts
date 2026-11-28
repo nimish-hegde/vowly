@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createManualQuoteDraft } from './manualQuoteDraft.ts';
 import { createDemoWorkspace } from '../data/demoWorkspace.ts';
 import { calculateQuoteFinancials, calculateWorkspaceFinancials, getVendorBookingEligibility } from './financialCalculator.ts';
 import { reconcileQuoteRevision } from './quoteRevision.ts';
@@ -394,6 +395,22 @@ test('a partial revision cannot mix a foreign-currency fee with retained prices'
   const result = approve(ws, incoming);
   assert.equal(result.approved, false);
   assert.equal(result.workspace, ws);
+});
+
+test('a manual partial revision cannot inherit an unconfirmed currency or mix retained CAD prices with USD', () => {
+  const ws = workspace(original());
+  const draft: Quote = {
+    ...createManualQuoteDraft({ sourceType: 'pasted_message', sourceChannel: 'Email', sourceText: 'Revised AV fee: $300' }),
+    revisionDraft: { baselineQuoteId: 'q-v1', mode: 'partial' },
+    lineItems: [{ id: 'av-manual', label: 'AV fee', pricingModel: 'flat', unitPrice: 300 }],
+  };
+  const pending = approve(ws, draft);
+  assert.equal(pending.approved, false);
+  assert.match(pending.blockingReasons.join(' '), /confirm the currency/i);
+  const foreign = approve(ws, { ...draft, currency: 'USD', currencySource: 'user_confirmed' });
+  assert.equal(foreign.approved, false);
+  assert.match(foreign.blockingReasons.join(' '), /cannot be combined across currencies/i);
+  assert.equal(foreign.workspace, ws);
 });
 
 
