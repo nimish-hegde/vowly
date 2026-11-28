@@ -60,7 +60,7 @@ interface WorkspaceContextValue {
 
   // Workspace management
   switchWorkspace: (workspaceId: string) => void;
-  createWorkspace: (workspace: WeddingWorkspace) => void;
+  createWorkspace: (workspace: WeddingWorkspace, requirePersistence?: boolean) => boolean;
   enterDemoWorkspace: () => void;
   updateWorkspaceMeta: (
     patch: Partial<
@@ -86,7 +86,7 @@ interface WorkspaceContextValue {
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
     draftQuote: Quote
-  ) => string;
+  ) => string | null;
   approveQuote: (
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
@@ -230,12 +230,21 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  const persistQuoteChange = (next: StoredState): boolean => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const mutateActive = (
     updater: (ws: WeddingWorkspace) => WeddingWorkspace,
-    activitySummary?: { summary: string; category: ActivityItem['category'] }
+    activitySummary?: { summary: string; category: ActivityItem['category'] },
+    requirePersistence = false
   ) => {
-    setHasSavedSession(true);
-    setStore((prev) => ({
+    const update = (prev: StoredState): StoredState => ({
       ...prev,
       workspaces: prev.workspaces.map((ws) => {
         if (ws.id !== prev.activeWorkspaceId) return ws;
@@ -254,7 +263,16 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           activities: [act, ...next.activities].slice(0, 18),
         };
       }),
-    }));
+    });
+    if (requirePersistence) {
+      const next = update(store);
+      if (!persistQuoteChange(next)) return false;
+      setStore(next);
+    } else {
+      setStore(update);
+    }
+    setHasSavedSession(true);
+    return true;
   };
 
   const switchWorkspace = (workspaceId: string) => {
@@ -266,17 +284,25 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setActiveNav('overview');
   };
 
-  const createWorkspace = (workspace: WeddingWorkspace) => {
-    setHasSavedSession(true);
-    setStore((prev) => ({
+  const createWorkspace = (workspace: WeddingWorkspace, requirePersistence = false) => {
+    const update = (prev: StoredState): StoredState => ({
       workspaces: [workspace, ...prev.workspaces],
       activeWorkspaceId: workspace.id,
-    }));
+    });
+    if (requirePersistence) {
+      const next = update(store);
+      if (!persistQuoteChange(next)) return false;
+      setStore(next);
+    } else {
+      setStore(update);
+    }
+    setHasSavedSession(true);
     setShowOnboarding(false);
     setSelectedVendorId(null);
     setSelectedEventId(null);
     setActiveNav('overview');
     pushToast(`Created workspace "${workspace.name}"`);
+    return true;
   };
 
   const enterDemoWorkspace = () => {
@@ -484,7 +510,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     vendorId: string | null,
     newVendorPayload: Omit<Vendor, 'id' | 'quotes'> | null,
     draftQuote: Quote
-  ): string => {
+  ): string | null => {
     const targetId = vendorId ?? `ven-${Date.now()}`;
     const existingVendor = vendorId
       ? activeWorkspace.vendors.find((v) => v.id === vendorId)
@@ -492,15 +518,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const vendorName =
       existingVendor?.name || newVendorPayload?.name?.trim() || 'Vendor';
 
-    mutateActive(
+    const saved = mutateActive(
       (ws) =>
         applySaveDraftQuote(ws, vendorId, newVendorPayload, draftQuote, targetId)
           .workspace,
       {
         summary: `Saved draft quote for ${vendorName}.`,
         category: 'quote',
-      }
+      },
+      draftQuote.manualEntry
     );
+    if (!saved) return null;
 
     pushToast(`Saved ${vendorName} quote as Draft — totals unchanged`, 'amber');
     return targetId;
@@ -541,7 +569,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
 
-    mutateActive(
+    const saved = mutateActive(
       (ws) =>
         applyApproveQuote(ws, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote)
           .workspace,
@@ -551,8 +579,13 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           approvedQuote.revisionDraft || (approvedQuote.revisions && approvedQuote.revisions.length > 0)
             ? 'revision'
             : 'quote',
-      }
+      },
+      approvedQuote.manualEntry
     );
+    if (!saved) {
+      pushToast('Browser storage could not save this quote and its source. Keep this review open and try again after freeing up storage.', 'amber');
+      return null;
+    }
 
     pushToast(`Approved quote for ${vendorName}`);
     return targetId;

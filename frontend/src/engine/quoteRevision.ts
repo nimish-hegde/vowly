@@ -4,6 +4,7 @@ import type {
 } from '../types/vowly.ts';
 
 import type { RevisionChange, RevisionDecision } from '../types/vowly.ts';
+import { hasIncompleteManualPricing } from './manualQuoteDraft.ts';
 export type { RevisionChange, RevisionDecision } from '../types/vowly.ts';
 
 export interface QuoteRevisionResult {
@@ -836,6 +837,10 @@ export function reconcileQuoteRevision(
   const changes: RevisionChange[] = [];
   const blockingReasons: string[] = [];
   const partial = mode === 'partial';
+  if (partial && incoming.manualEntry) {
+    if (incoming.currency === 'UNKNOWN') blockingReasons.push('Confirm the currency of the new quote before approving.');
+    if (hasIncompleteManualPricing(incoming)) blockingReasons.push('Enter and name the quoted charges before approving, or Save as Draft.');
+  }
   const evidenceSpans: QuoteEvidenceSpan[] = [...previous.evidenceSpans];
   const usedEvidenceIds = new Set(evidenceSpans.map((span) => span.id));
   const evidenceIds = new Map<string, string>();
