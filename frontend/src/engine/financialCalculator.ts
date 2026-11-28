@@ -103,7 +103,7 @@ export interface QuoteCalculationResult {
     previousPreTax: number;
     currentPreTax: number;
     savingsPreTax: number;
-    savingsWithTax: number;
+    savingsWithTax: number | null;
     summary: string;
   } | null;
 }
@@ -603,12 +603,16 @@ export function calculateQuoteFinancials(
   if (quote.revisions && quote.revisions.length > 0) {
     const latest = quote.revisions[quote.revisions.length - 1];
     const diff = latest.previousPreTaxTotal - latest.newPreTaxTotal;
-    if (diff > 0) {
+    if (diff > 0 && (!latest.previousCurrency || latest.previousCurrency === latest.newCurrency)) {
       revisionSavings = {
         previousPreTax: latest.previousPreTaxTotal,
         currentPreTax: latest.newPreTaxTotal,
         savingsPreTax: diff,
-        savingsWithTax: Math.round(diff * (1 + taxRate) * 100) / 100,
+        savingsWithTax: latest.previousAllInTotal === undefined
+          ? Math.round(diff * (1 + taxRate) * 100) / 100
+          : latest.previousAllInTotal != null && latest.newAllInTotal != null && latest.previousAllInTotal > latest.newAllInTotal
+            ? Math.round((latest.previousAllInTotal - latest.newAllInTotal) * 100) / 100
+            : null,
         summary: latest.summary,
       };
     }

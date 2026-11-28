@@ -397,9 +397,10 @@ export function VendorsView({
                           {hasSavings && (
                             <div className="text-[#234733] font-medium">
                               {calc?.revisionSavings
-                                ? `Revised quote saves ${formatShortCad(
-                                    calc.revisionSavings.savingsWithTax
-                                  )} incl. HST`
+                                ? `Revised quote saves ${formatCurrency(
+                                    calc.revisionSavings.savingsWithTax ?? calc.revisionSavings.savingsPreTax,
+                                    calc.currencyLabel
+                                  )} ${calc.revisionSavings.savingsWithTax === null ? 'pre-tax' : 'all-in'}`
                                 : calc?.brochureSavings
                                   ? `Saves ${formatShortCad(
                                       calc.brochureSavings.savingsWithTax

@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "lint": "tsc --noEmit",
-    "test": "node --test src/engine/financialSafeguards.test.ts src/engine/vendorComparison.test.ts"
+    "test": "node --test src/engine/financialSafeguards.test.ts src/engine/vendorComparison.test.ts src/engine/quoteRevision.test.ts src/engine/quoteRevisionMatrix.test.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

@@ -525,6 +525,17 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     const approval = applyApproveQuote(
       activeWorkspace, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote
     );
+    if (approval.duplicate) {
+      if (approval.workspace !== activeWorkspace) {
+        mutateActive(
+          (ws) =>
+            applyApproveQuote(ws, vendorId, newVendorPayload, approvedQuote, targetId, revisionNote)
+              .workspace
+        );
+      }
+      pushToast('This revision is already applied.');
+      return targetId;
+    }
     if (!approval.approved) {
       pushToast(approval.blockingReasons[0] ?? 'Resolve this quote’s blockers before approving.', 'amber');
       return null;
@@ -537,7 +548,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       {
         summary: `Approved quote "${approvedQuote.title}" for ${vendorName}.`,
         category:
-          approvedQuote.revisions && approvedQuote.revisions.length > 0
+          approvedQuote.revisionDraft || (approvedQuote.revisions && approvedQuote.revisions.length > 0)
             ? 'revision'
             : 'quote',
       }
