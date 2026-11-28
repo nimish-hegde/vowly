@@ -16,8 +16,8 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 | **v0.4** | Interactive React frontend prototype (`frontend/`, mock mode) & financial safeguards | Production build + type-check pass; centralized booking eligibility across all entry points; draft revision isolation; unpaid-by-default deposits; 0 secrets/personal data. | Done (`#12`) | Shipped |
 | **v0.4.x (Framework)** | Reusable Antigravity development framework (`AGENTS.md`, 4 workflow skills, roadmap/decision log, PR template) | Persistent rules cover architecture, financial safeguards, eval standards, UX metrics, agent orchestration, and PM gates; zero application code changes. | Done (`#14`) | Shipped |
 | **v0.5** | Real multimodal AI quote import & progressive-disclosure quote review | Real Gemini text/image/PDF extraction via server-side API; mutually exclusive packages & package-scoped terms; conditional overtime & extra-guest thresholds; unknown tax booking gate; manual editing with revision history; live Gemini evals with **0 critical financial errors** and **0 currency guesses**; browser E2E UAT passing. | Done (`#13`) | **Shipped** (`a0b942c`) — `53/53` backend, `17/17` frontend, `66/66` mock & `66/66` live Gemini (`0` blockers) |
-| **v0.6** | Private pilot readiness: multimodal holdout & model benchmark (`#15`), shared deterministic financial engine (`#16`), extraction accuracy (`#21`), category-aware comparison (`#17`), follow-up delegation (`#4`), backend persistence & partner collaboration (`#20`, `#5`) | Shared backend/frontend deterministic engine (`30/30` parity); frozen 30-case multimodal benchmark; `0` critical financial errors on live evals; category-aware vendor & package comparison; auth, persistence, and helper-link delegation (`#4`, `#5`). | **In Progress** (`#15`, `#16` & `#21` shipped; `#17` pending review; `#18`–`#20`, `#4`, `#5` planned) | In progress |
-| **v0.7+** | Vendor/event/budget UX polish & scale | Vendor archiving & duplicate management (`#18`), event/budget setup improvements (`#19`), Google Places autocomplete, and multi-installment booking schedules. | Planned | Not started |
+| **v0.6** | Private pilot readiness: multimodal holdout & model benchmark (`#15`), shared deterministic financial engine (`#16`), extraction accuracy (`#21`), category-aware comparison (`#17`), follow-up delegation (`#4`), backend persistence & partner collaboration (`#20`, `#5`) | Shared backend/frontend deterministic engine (`30/30` parity); frozen 30-case multimodal benchmark; `0` critical financial errors on live evals; category-aware vendor & package comparison; auth, persistence, and helper-link delegation (`#4`, `#5`). | **In progress** (`#15`, `#16`, `#17`, and `#21` shipped; `#4`, `#5`, and `#20` planned) | In progress |
+| **v0.7+** | Vendor/event/budget UX polish & scale | Vendor archiving & duplicate management (`#18`), event/budget setup improvements (`#19`), Google Places autocomplete, and multi-installment booking schedules. | Basic archiving shipped in [PR #28](https://github.com/nimish-hegde/vowly/pull/28). Duplicate detection and vendor merging are deferred. Other improvements are planned. | Partially shipped |
 
 ---
 
@@ -42,14 +42,15 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 ### Open Issue Audit Status
 - **Closed / Shipped:** `#1` (pre-approval quote revision review, partial updates, coupled-field confirmation gates, and replay protection shipped via `#26`), `#3` (venue comparison & `$500` break-even regression verified and closed on `85e00a9`), `#15` (30-case multimodal holdout & Gemini model benchmark shipped via `#22`, `b76c67c`), `#16` (shared deterministic financial engine shipped via `#23`, `a9b89c0`), `#17` (category-aware vendor & package comparison shipped via `#25`, `4dda164`), `#21` (extraction accuracy for cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous categories shipped via `#24`, `8f46c9a`).
 - **Closed / Shipped:** `#7` shipped in [PR #27](https://github.com/nimish-hegde/vowly/pull/27). Scratch onboarding offers CAD and USD with CAD preselected. After extraction fails, users can save an incomplete manual quote with its original source.
+- **Partially shipped:** `#18` basic vendor archiving, restore, and directory filtering shipped in [PR #28](https://github.com/nimish-hegde/vowly/pull/28). The issue stays open for deferred duplicate management.
 - **Deferred to `v0.6` pilot readiness:** `#4` (assigning open questions from quote + scoped helper link without budget access + helper-submitted price review) and `#5` (5-couple moderated pilot study).
 
 ### Tracked Follow-Up Workstreams
 1. **Model benchmarking & fresh multimodal holdout dataset (`#15`, Shipped via `#22`):** Frozen 30-case synthetic multimodal holdout (`eval-data/held-out-v3-multimodal/`) and 10-dimension benchmark harness shipped; PM approved retaining `gemini-3.5-flash-lite` as default.
 2. **Shared deterministic financial engine (`#16`, Shipped via `#23`):** Consolidated calculation logic into `shared/finance/calculator.ts` with `30/30` frozen multimodal parity (including `I04` multi-package conditional overtime).
 3. **Extraction accuracy follow-up (`#21`, Shipped via `#24`):** Cross-channel pricing-model conflicts, explicit tax/gratuity rates & bases, and ambiguous vendor categories improved on `gemini-3.5-flash-lite` (`29/30` strict all-in multimodal, `0` critical financial errors across all 100 live cases).
-4. **Category-aware vendor & package comparison (`#17`, Pending review for `v0.6`):** Extend `VendorComparisonView` beyond venues to compare any vendor category (photography, catering, DJ, decor) using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
-5. **Vendor archiving & duplicate management (`#18`, Planned for `v0.6+`):** Basic archive, restore, and directory filtering are in review. The archive preserves quote and follow-up history and protects vendors with bookings, contracts, or payments. Duplicate detection and vendor merging remain deferred.
+4. **Category-aware vendor & package comparison (`#17`, Shipped via `#25`):** `VendorComparisonView` supports category-aware comparison using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
+5. **Vendor archiving & duplicate management (`#18`, Partially shipped via `#28`):** Basic archive, restore, and directory filtering preserve quote and follow-up history and protect vendors with bookings, contracts, or payments. Automatic duplicate detection, vendor merging or linking, and surfacing duplicate-revision checks remain deferred.
 6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add multi-installment (`>2` milestones) custom payment schedules in `BookingModal`. Currency selection and manual quote recovery shipped under `#7`.
 7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
 
@@ -73,14 +74,14 @@ Record significant product, architecture, and model decisions here as they are m
 - **Trade-offs:** Temporary duplication between `src/calculator.ts` and `frontend/src/engine/financialCalculator.ts`, mitigated by parity fixtures in `v0.5`.
 - **Decision:** **Shipped** (`#12`).
 
-### D-003 — Real Multimodal Quote Import & Progressive-Disclosure Review (`v0.5`, Pending Manual UAT & PM Approval)
+### D-003 — Real Multimodal Quote Import & Progressive-Disclosure Review (`v0.5`, Shipped)
 - **Hypothesis:** Connecting `frontend/` to real server-side Gemini multimodal extraction (text, images, PDFs) with structured percentage bases, structured inclusions, negotiated-savings handling, and progressive-disclosure review will cut manual quote-entry friction while preserving all `v0.4` safeguards.
 - **Change:** Implemented in PR `#13` (`feat/v0.5-real-quote-import`) with offline parity tests (`47/47` backend, `10/10` frontend, `63/63` mock evals), Codex P2 fixes (add-on pricing models, conditional overtime, confirmed fees in whole-subtotal percentage bases), and live eval fixes (`src/extractor.ts` prompt/schema + `src/calculator.ts`/`frontend/src/engine/financialCalculator.ts` service-charge deduplication).
 - **Live Gemini Benchmark & Multimodal Results (`gemini-3.5-flash-lite`, Nov 26, 2026):**
   - Initial live run scored `55/63` (`2` critical financial errors: duplicate `15%` service-charge line item and `maxCapacity` copied to `minGuests`); post-fix live rerun achieved **`63/63 (100.0%)`** (`60/60` on the original cases vs `59/60` in `v0.3`, **`3/3`** on new UAT Cases A–C, **`0` critical financial errors**, **`0` release blockers**, `2,417 ms` avg latency incl. retries / `1,749 ms` excl. retries, `146,170` in / `25,536` out tokens, `$0.02483` est. paid cost = `$0.000394` per extraction) — see [EVAL_REPORT.md](EVAL_REPORT.md).
   - Live multimodal tests (`quote_venue.png`, `quote_photo.png`, `quote_decor.pdf`): **`3/3` passed** with valid schemas, distinct grounded `pageReference` citations, and verified deterministic calculations (`$16,509.30` all-in venue, `$300` negotiated photo savings, TBD decor lighting fee preserved).
 - **Browser E2E UAT (Nov 26, 2026, `http://localhost:3000/`):** Passed all 6 automated browser checks with **0 console errors** (`2` clicks / ~1s to vendor comparison; Verdi draft/blockers, Crown conflict + cash HST, live error recovery without mock fallback, and Versailles unpaid-by-default deposit reconciliation verified; minor mobile bottom-nav overlap in `PaymentsView` and input placeholder truncation noted).
-- **Decision:** **Hold** — live servers started for user manual UAT; do not merge PR `#13` until PM approves.
+- **Initial decision:** Held PR `#13` for manual UAT and PM approval. It later shipped through `#13` at `a0b942c` after the remediation recorded in D-006.
 
 ### D-004 — Reusable Antigravity Development Framework (`v0.4.x`, Shipped)
 - **Hypothesis:** Codifying persistent project rules (`AGENTS.md`), 4 progressive-disclosure workflow skills (`.agents/skills/`), and a living roadmap/decision log will enforce financial safeguards, evaluation rigor, and independent review consistently across future milestones.
@@ -100,7 +101,7 @@ Record significant product, architecture, and model decisions here as they are m
   - Offline: `50/50` backend tests, `66/66` mock evals, `13/13` frontend tests, `0` lint errors, clean Vite build.
   - Live (`gemini-3.5-flash-lite`): **66/66 (100.0%)** (`23/23 dev`, `6/6 regression`, `25/25 held-out`, `12/12 held-out-v2`), **0 critical financial errors**, **0 release blockers**, avg latency `1,796 ms` excl. retries (`2,798 ms` incl. 8 HTTP-429 retries), est. paid cost `$0.03062` (`$0.000464` / successful extraction).
 - **Trade-offs:** Keeping `packages.items` lean in `GEMINI_RESPONSE_SCHEMA` (routing package-specific fees via `lineItems[].packageId`) avoided schema bloat and kept `gemini-3.5-flash-lite` latency under `1.8s` excl. retries.
-- **Decision:** **Pending fresh Codex review, manual UAT, and explicit PM approval on PR #13 (do not merge yet).**
+- **Initial decision:** Held PR `#13` for fresh review, manual UAT, and PM approval. D-006 records its final approval and merge.
 
 
 ### D-006 — Final PR #13 Targeted Remediation (Codex Parity Findings, Conditional Hourly & Payment Schedule Propagation)
@@ -118,7 +119,7 @@ Record significant product, architecture, and model decisions here as they are m
 - **Deferred to Next Milestone (`v0.6` Non-Blocking Usability Improvements):**
   - Multi-installment (>2 milestones) custom payment schedule builder inside `BookingModal`.
   - Post-event actual overtime reconciliation workflow.
-  - Side-by-side multi-package comparison inside `VendorComparisonView`.
+  - Side-by-side multi-package comparison inside `VendorComparisonView` later shipped in `#25`.
   - Inline editing of package-specific fees/overrides without leaving the package card.
 - **Decision:** **Approved by PM and merged (`#13`).**
 
@@ -167,7 +168,7 @@ Record significant product, architecture, and model decisions here as they are m
 - **Browser verification:** Local Chrome at 1440 px and 360 px exercised all five categories, synthetic DJ and decor tiers, photography overtime, source expansion and quote-editor return, mobile column swaps, and saved-state isolation. A synthetic catering rate correction refreshed the price while preserving the test count. The desktop venue scenario rendered in about 0.32 s in the automated run. PM manual UAT passed photography overtime, venue package comparison, source editing, missing information, and mobile. Participant comprehension and timing remain for pilot UAT.
 - **PR #25 follow-up:** Separately itemized overtime, AV, and staffing appear under extras across categories. The comparison reuses the existing calculated amounts and keeps workspace state unchanged. Hourly-only offers with a saved duration respond to hypothetical hours. The follow-up passes 39 frontend tests, 66 backend tests, 70 mock evals, 30/30 frozen multimodal parity cases, type-check, and build.
 - **Future improvements:** Improve classification of bundled venue and catering charges when quotes do not itemize them. Make key-difference banners name the specific fee or term that differs.
-- **Decision:** Hold for explicit PM merge approval.
+- **Decision:** Shipped in [PR #25](https://github.com/nimish-hegde/vowly/pull/25) at `4dda164`. Issue `#17` is closed.
 
 ### D-011 — Issue #1 pre-approval quote revision review
 
@@ -186,3 +187,10 @@ Record significant product, architecture, and model decisions here as they are m
 - **Changes:** Scratch onboarding offers CAD and USD with CAD preselected. Manual recovery reuses quote review and editing, retains the original text or attachment, and allows incomplete drafts. Existing approval gates block mixed-currency partial revisions. If browser storage is full, the unsaved source stays open in review for retry.
 - **Verification:** Four focused checks passed, along with 66 backend tests, 159 frontend tests, 70 offline mock cases, 33 financial parity tests, type-check, and production build. Local desktop and mobile Chrome verified currency persistence, preservation of an existing workspace, and text, PNG, and PDF recovery with simulated extraction failures. Live API calls totaled zero.
 - **Decision:** PM approved [PR #27](https://github.com/nimish-hegde/vowly/pull/27) after Codex review returned zero findings. The PR shipped in [`1d338f1`](https://github.com/nimish-hegde/vowly/commit/1d338f1e516ae888244e0a541d664a064c34bbc9), and Issue #7 closed as completed.
+
+### D-013 — Issue #18 basic vendor archiving
+
+- **Changes:** The vendor drawer supports archive and restore, and the directory has an Archived vendors filter. Quote and follow-up history remain accessible. Archived follow-ups are hidden from active planning.
+- **Safeguards:** The store blocks archival for vendors with bookings, contracts, or payments. Archiving a preferred vendor requires confirmation before its estimate leaves the forecast. Selecting a replacement or putting a restored vendor back in projected spend requires an explicit user action.
+- **Verification:** PR #28 passed three focused regressions, the consolidated offline suite, and desktop and mobile Chrome UAT with zero API requests.
+- **Decision:** PM approved basic archiving and it shipped in [PR #28](https://github.com/nimish-hegde/vowly/pull/28) at [`26a5867`](https://github.com/nimish-hegde/vowly/commit/26a586766e26df500b3da8e72c404271f85c4bfe). Duplicate detection and vendor merging remain deferred under open Issue #18.
