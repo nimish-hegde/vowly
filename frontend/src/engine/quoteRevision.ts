@@ -290,7 +290,10 @@ const DEPOSIT_LABEL = /\b(deposit|retainer|booking|signing|initial)\b/i;
 const BALANCE_LABEL = /\b(balance|remaining|final|rest|due)\b/i;
 const milestoneSlot = (label: string) => DEPOSIT_LABEL.test(label) ? 'deposit' : BALANCE_LABEL.test(label) ? 'balance' : undefined;
 
-function paymentAmendment<T extends Quote | QuotePackageOption>(old: T, incoming: T) {
+function paymentAmendment(
+  old: Pick<QuotePackageOption, 'paymentTermsSummary' | 'paymentMilestones' | 'depositAmount' | 'depositPercent'>,
+  incoming: Pick<QuotePackageOption, 'paymentTermsSummary' | 'paymentMilestones' | 'depositAmount' | 'depositPercent'>,
+) {
   const amendments = incoming.paymentMilestones ?? [];
   const previous = old.paymentMilestones ?? [];
   const claimed = new Set<QuotePaymentMilestone>();
@@ -308,13 +311,18 @@ function paymentAmendment<T extends Quote | QuotePackageOption>(old: T, incoming
     const next = matchFor(milestone);
     if (!next) return milestone;
     claimed.add(next);
+    const hasTextualDeadline = Boolean(next.relativeDeadlineText?.trim()) &&
+      next.dueDate === undefined && next.relativeDaysBeforeEvent === undefined;
     return {
       ...supplied(milestone, next),
       amount: next.percent !== undefined && next.amount === undefined ? undefined : next.amount ?? milestone.amount,
       percent: next.amount !== undefined && next.percent === undefined ? undefined : next.percent ?? milestone.percent,
-      dueDate: next.relativeDaysBeforeEvent !== undefined && next.dueDate === undefined ? undefined : next.dueDate ?? milestone.dueDate,
-      relativeDaysBeforeEvent: next.dueDate !== undefined && next.relativeDaysBeforeEvent === undefined ? undefined
-        : next.relativeDaysBeforeEvent ?? milestone.relativeDaysBeforeEvent,
+      dueDate: (next.relativeDaysBeforeEvent !== undefined || hasTextualDeadline) && next.dueDate === undefined
+        ? undefined : next.dueDate ?? milestone.dueDate,
+      relativeDaysBeforeEvent: (next.dueDate !== undefined || hasTextualDeadline) && next.relativeDaysBeforeEvent === undefined
+        ? undefined : next.relativeDaysBeforeEvent ?? milestone.relativeDaysBeforeEvent,
+      relativeDeadlineText: (next.dueDate !== undefined || next.relativeDaysBeforeEvent !== undefined) && next.relativeDeadlineText === undefined
+        ? undefined : next.relativeDeadlineText ?? milestone.relativeDeadlineText,
     };
   });
   const schedule = [...milestones, ...amendments.filter((item) => !claimed.has(item))];
@@ -380,7 +388,7 @@ function revisePackages(context: RevisionContext) {
   const touched = new Set<string>();
   const retainedPackages = new Set<string>();
   const mapped = new Map<string, string | undefined>();
-  const explicit = new Map<string, { tax: boolean; gratuity: boolean; minGuests: boolean; hours: boolean }>();
+  const explicit = new Map<string, { tax: boolean; gratuity: boolean; minGuests: boolean; hours: boolean; payment: boolean }>();
   const beforeMap = new Map(before.map((pkg) => [pkg.id, pkg]));
   for (const pkg of proposed) {
     const id = 'package:' + pkg.id;
@@ -432,6 +440,8 @@ function revisePackages(context: RevisionContext) {
         gratuity: (pkg.gratuityStatus !== undefined && pkg.gratuityStatus !== 'unknown') || pkg.gratuityPercent != null,
         minGuests: pkg.minGuests !== undefined,
         hours: pkg.hours !== undefined,
+        payment: Boolean(pkg.paymentMilestones?.length) || pkg.depositAmount !== undefined || pkg.depositPercent !== undefined ||
+          Boolean(pkg.paymentTermsSummary?.trim() && pkg.paymentTermsSummary !== 'Confirm deposit and payment schedule with vendor.'),
       });
     }
     mapped.set(pkg.id, retained || removed ? undefined : packageId);
@@ -464,11 +474,12 @@ function reconcilePackageInheritance(
   context: RevisionContext,
   quote: Quote,
   packages: ReturnType<typeof revisePackages>,
+  quotePaymentChanged: boolean,
 ) {
   const { previous, incoming, decisions, changes, blockingReasons } = context;
-  const resolveScope = <T>(
+  const resolveScope = (
     pkg: QuotePackageOption,
-    key: 'tax' | 'gratuity' | 'minGuests' | 'hours',
+    key: 'tax' | 'gratuity' | 'minGuests' | 'hours' | 'payment',
     field: string,
     blockerMessage: string,
     previousText: string,
@@ -615,6 +626,28 @@ function reconcilePackageInheritance(
         (target) => ({ ...target, hours: quote.serviceDurationHours }),
         'Coverage hours',
       );
+    }
+
+    const pkgForPay = packages.result.get(pkg.id)!;
+    const hasPkgPayment = Boolean(pkgForPay.paymentMilestones?.length) || pkgForPay.depositAmount !== undefined ||
+      pkgForPay.depositPercent !== undefined || Boolean(pkgForPay.paymentTermsSummary?.trim());
+    if (quotePaymentChanged && !exp?.payment && hasPkgPayment) {
+      const amendedPkgPay = paymentAmendment(pkgForPay, incoming);
+      const prevPayLabel = paymentLabel(pkgForPay, previous.currency);
+      const nextPayLabel = paymentLabel({ ...pkgForPay, ...amendedPkgPay }, quote.currency);
+      if (prevPayLabel !== nextPayLabel) {
+        resolveScope(
+          pkgForPay,
+          'payment',
+          'Payment terms',
+          `Confirm whether the updated payment terms also apply to package "${pkgForPay.name}".`,
+          prevPayLabel ?? 'Existing payment terms',
+          nextPayLabel ?? 'Updated payment terms',
+          false,
+          (target) => ({ ...target, ...amendedPkgPay }),
+          'Payment terms',
+        );
+      }
     }
   }
 }
@@ -783,7 +816,7 @@ function reviseCosts(
         !preserved.has(row.key))) {
     blockingReasons.push('Review which previous charges still apply alongside the new package to avoid billing them twice.');
   }
-  return { rows: [...result.values()], mapped, repriced };
+  return { rows: [...result.values()], mapped, repriced, touched };
 }
 
 export function reconcileQuoteRevision(
@@ -870,8 +903,60 @@ export function reconcileQuoteRevision(
   }
 
   const packages = revisePackages(context);
-  if (partial) reconcilePackageInheritance(context, quote, packages);
-  const { rows, mapped, repriced } = reviseCosts(context, packages, quote);
+  const quotePaymentChanged = partial && hasPayment && decisions['quote:payment']?.action !== 'retain' &&
+    paymentLabel(quote, quote.currency) !== paymentLabel(previous, previous.currency);
+  if (partial) reconcilePackageInheritance(context, quote, packages, quotePaymentChanged);
+  const { rows: costRowsResult, mapped, repriced, touched } = reviseCosts(context, packages, quote);
+  let rows = costRowsResult;
+  const quoteGratChanged = partial && (
+    quote.gratuityStatus !== previous.gratuityStatus ||
+    (quote.gratuityPercent ?? undefined) !== (previous.gratuityPercent ?? undefined) ||
+    quote.gratuityBasis !== previous.gratuityBasis
+  );
+  if (quoteGratChanged) {
+    const GRATUITY_LINE_PATTERN = /\b(gratuity|tip|service\s*charge)\b/i;
+    const supersededKeys = new Set<string>();
+    for (const row of rows) {
+      if (row.type !== 'line' || touched.has(row.key)) continue;
+      if (row.item.pricingModel !== 'percentage' || !GRATUITY_LINE_PATTERN.test(row.item.label)) continue;
+      const differs = quote.gratuityStatus === 'included' || quote.gratuityPercent == null ||
+        Math.abs(row.item.unitPrice - quote.gratuityPercent) >= 0.01;
+      if (!differs) continue;
+      const id = 'gratuity-line:' + row.key;
+      const action = decisions[id]?.action;
+      const rowScope = row.packageId ? packages.result.get(row.packageId)?.name ?? row.packageId : row.eventId;
+      if (action === 'accept') {
+        supersededKeys.add(row.key);
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: gratuityLabel(quote), kind: 'changed',
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Gratuity'),
+          canAccept: true,
+        });
+      } else if (action === 'retain') {
+        quote.gratuityStatus = previous.gratuityStatus;
+        quote.gratuityPercent = previous.gratuityPercent;
+        quote.gratuityBasis = previous.gratuityBasis;
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: showCost(row, previous.currency), kind: 'carried',
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Gratuity'),
+          canAccept: true,
+        });
+      } else {
+        changes.push({
+          id, field: row.item.label, scope: rowScope,
+          previous: showCost(row, previous.currency), proposed: gratuityLabel(quote), kind: 'ambiguous',
+          needsDecision: true, canAccept: true,
+          previousEvidence: costEvidence(previous, row), proposedEvidence: evidenceForField(incoming, 'Gratuity'),
+        });
+        blockingReasons.push(`Confirm whether "${row.item.label}" is replaced by the updated gratuity terms or kept as-is.`);
+      }
+    }
+    if (supersededKeys.size > 0) {
+      rows = rows.filter((row) => !supersededKeys.has(row.key));
+    }
+  }
   quote.lineItems = rows.flatMap((row) => row.type === 'line' && !row.nested ? [row.item] : []);
   quote.addOns = rows.flatMap((row) => {
     if (row.type !== 'optional') return [];

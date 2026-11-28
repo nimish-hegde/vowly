@@ -1065,3 +1065,141 @@ test('exact PR #26 P1 guest-minimum reproduction: 150 guests with venue minGuest
   assert.equal(result.approved, true);
   assert.equal(price(active(result.workspace), result.workspace).preTaxTotal, 20000);
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// Coupled gratuity/service-charge lines, package payment terms, and milestone deadline transitions.
+// ---------------------------------------------------------------------------------------------------------
+table('coupled service-charge line and package payment confirmation', [
+  {
+    name: 'revised quote gratuity blocks when a retained percentage service-charge line exists',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      gratuityStatus: 'excluded',
+      gratuityPercent: 18,
+      gratuityBasis: 'entire_subtotal',
+      lineItems: [
+        { id: 'food', label: 'Banquet dinner', pricingModel: 'flat', unitPrice: 1000, isFoodItem: true },
+        { id: 'svc', label: 'Service charge', pricingModel: 'percentage', unitPrice: 18, percentageBasis: 'entire_subtotal' },
+      ],
+    }),
+    text: 'gratuity 18 to 20 blocked by service charge line',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    blocked: true,
+    check: (preview) => assert.ok(preview.changes.some((c) => c.id === 'gratuity-line:svc' && c.needsDecision)),
+  },
+  {
+    name: 'accepting revised gratuity removes the superseded service-charge line and bills the new 20% rate',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      gratuityStatus: 'excluded',
+      gratuityPercent: 18,
+      gratuityBasis: 'entire_subtotal',
+      lineItems: [
+        { id: 'food', label: 'Banquet dinner', pricingModel: 'flat', unitPrice: 1000, isFoodItem: true },
+        { id: 'svc', label: 'Service charge', pricingModel: 'percentage', unitPrice: 18, percentageBasis: 'entire_subtotal' },
+      ],
+    }),
+    text: 'gratuity 18 to 20 accepted',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    decisions: { 'gratuity-line:svc': { action: 'accept' } },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems.some(({ id }) => id === 'svc'), false);
+      assert.equal(preview.quote.gratuityPercent, 20);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1200);
+    },
+  },
+  {
+    name: 'retaining the service-charge line preserves 18% without double-counting',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      gratuityStatus: 'excluded',
+      gratuityPercent: 18,
+      gratuityBasis: 'entire_subtotal',
+      lineItems: [
+        { id: 'food', label: 'Banquet dinner', pricingModel: 'flat', unitPrice: 1000, isFoodItem: true },
+        { id: 'svc', label: 'Service charge', pricingModel: 'percentage', unitPrice: 18, percentageBasis: 'entire_subtotal' },
+      ],
+    }),
+    text: 'gratuity 18 retained',
+    overrides: { lineItems: [{ id: 'food-new', label: 'Banquet dinner', pricingModel: 'flat', unitPrice: 1000, isFoodItem: true }], gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    decisions: { 'gratuity-line:svc': { action: 'retain' } },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems.some(({ id }) => id === 'svc'), true);
+      assert.equal(preview.quote.gratuityPercent, 18);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1180);
+    },
+    blocked: false,
+  },
+  {
+    name: 'quote-wide deposit change blocks when a retained package has its own payment terms',
+    prior: paymentPrior(true),
+    text: 'quote deposit blocked by package payment',
+    overrides: { depositPercent: 30 },
+    blocked: true,
+    check: (preview) => assert.ok(preview.changes.some((c) => c.id === 'package:orchid:payment' && c.needsDecision)),
+  },
+  {
+    name: 'accepting quote-wide deposit updates the retained package payment terms and reverses cleanly',
+    prior: paymentPrior(true),
+    text: 'quote deposit accepted for package',
+    overrides: { depositPercent: 30 },
+    decisions: { 'package:orchid:payment': { action: 'accept' } },
+    check: (preview) => {
+      assert.equal(depositOf(preview.quote), 3000);
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.depositPercent, 30);
+    },
+    then: [{
+      text: 'package deposit reversed to 2500',
+      overrides: () => pkgFragment({ unitPrice: 1000, depositAmount: 2500 }),
+      check: (preview) => assert.equal(depositOf(preview.quote), 2500),
+    }],
+  },
+  {
+    name: 'retaining package payment terms keeps the $2,500 package deposit when quote deposit changes',
+    prior: paymentPrior(true),
+    text: 'quote deposit retained for package',
+    overrides: { depositPercent: 30 },
+    decisions: { 'package:orchid:payment': { action: 'retain' } },
+    check: (preview) => {
+      assert.equal(depositOf(preview.quote), 2500);
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.depositAmount, 2500);
+    },
+  },
+]);
+
+test('textual milestone deadline clears stale calendar dueDate and reverses cleanly', () => {
+  const prior = base({
+    paymentTermsSummary: 'Deposit due August 13, 2027',
+    depositAmount: 2500,
+    paymentMilestones: [{ label: 'Deposit', amount: 2500, dueDate: '2027-08-13' }],
+  });
+  const ws = workspace(prior);
+  const toTextual = fragment(prior, 'deposit upon signing', {
+    paymentMilestones: [{ label: 'Deposit', amount: 2500, relativeDeadlineText: 'Upon signing' }],
+  });
+  const { preview, result } = exercise(ws, toTextual);
+  assert.deepEqual(preview.blockingReasons, []);
+  assert.equal(result.approved, true);
+  const saved = active(result.workspace);
+  assert.equal(saved.paymentMilestones?.[0].dueDate, undefined);
+  assert.equal(saved.paymentMilestones?.[0].relativeDeadlineText, 'Upon signing');
+  const defaults = deriveBookingScheduleDefaults(saved, ws.events, [reception], contract);
+  assert.equal(defaults.depositHasKnownDate, false);
+  assert.equal(defaults.depositDate, '');
+  assert.equal(defaults.depositRelativeLabel, 'Upon signing');
+
+  const backToDate = fragment(saved, 'deposit due 2027-08-13', {
+    paymentMilestones: [{ label: 'Deposit', amount: 2500, dueDate: '2027-08-13' }],
+  });
+  const reversed = exercise(result.workspace, backToDate);
+  assert.equal(reversed.result.approved, true);
+  const savedReversed = active(reversed.result.workspace);
+  assert.equal(savedReversed.paymentMilestones?.[0].dueDate, '2027-08-13');
+  assert.equal(savedReversed.paymentMilestones?.[0].relativeDeadlineText, undefined);
+  const reversedDefaults = deriveBookingScheduleDefaults(savedReversed, ws.events, [reception], contract);
+  assert.equal(reversedDefaults.depositHasKnownDate, true);
+  assert.equal(reversedDefaults.depositDate, '2027-08-13');
+});
