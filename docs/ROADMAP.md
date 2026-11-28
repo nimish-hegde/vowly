@@ -52,7 +52,7 @@ This document is the single living tracker for Vowly milestones, PM-owned accept
 4. **Category-aware vendor & package comparison (`#17`, Shipped via `#25`):** `VendorComparisonView` supports category-aware comparison using structured inclusions, delivery terms, and side-by-side mutually exclusive package tiers within a vendor.
 5. **Vendor archiving & duplicate management (`#18`, Partially shipped via `#28`):** Basic archive, restore, and directory filtering preserve quote and follow-up history and protect vendors with bookings, contracts, or payments. Automatic duplicate detection, vendor merging or linking, and surfacing duplicate-revision checks remain deferred.
 6. **Event & budget setup improvements (`#19`, Planned for `v0.6+`):** Add multi-installment (`>2` milestones) custom payment schedules in `BookingModal`. Currency selection and manual quote recovery shipped under `#7`.
-7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Replace `localStorage`-only persistence with authenticated backend storage, multi-device partner sync, and scoped helper task links (`#4`, `#5`).
+7. **Authentication, persistence & partner collaboration (`#20`, Planned for `v0.6`):** Use managed authentication, database-enforced workspace authorization, and private attachments. The [private pilot security and privacy plan](PRIVATE_PILOT_SECURITY.md) defines the threat model, acceptance evidence, provider configuration, and controls for each implementation PR. Issue `#5` is held until the pilot gates pass. If scoped helper access ships under `#4`, it requires its own permission tests.
 
 ---
 
