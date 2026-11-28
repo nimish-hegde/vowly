@@ -58,6 +58,7 @@ Preserve four distinct financial states at all times:
 - Keep each PR focused on its acceptance criteria and reuse existing components and data paths where they fit. Change architecture only when the scoped outcome requires it.
 
 - Define measurable acceptance criteria in the plan / [docs/ROADMAP.md](docs/ROADMAP.md) before starting implementation.
+- Apply the [private pilot security and privacy gates](docs/PRIVATE_PILOT_SECURITY.md) in each relevant implementation PR. Require synthetic access-isolation evidence before inviting pilot users. Paid provisioning requires explicit PM approval. Real user documents must never use the free Gemini tier.
 - **Critical financial errors are release blockers** (wrong subtotals, double-counted prices, unsupported currency assumptions, silently dropped mandatory fees, or bypassed booking/approval gates).
 - Never merge a PR automatically; **explicit PM/user approval is required before merging**.
 
