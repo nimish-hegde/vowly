@@ -93,12 +93,23 @@ function showCost(cost: Cost, currency: Quote['currency']): string {
   switch (cost.type) {
     case 'line': {
       const base = money(cost.item.unitPrice, currency, cost.item.pricingModel);
+      if (cost.item.pricingModel === 'per_person' && cost.item.minGuests !== undefined) {
+        return `${base} · min ${cost.item.minGuests} guests`;
+      }
+      if (cost.item.pricingModel === 'per_extra_guest' && cost.item.guestThreshold !== undefined) {
+        return `${base} · above ${cost.item.guestThreshold} guests`;
+      }
       if (cost.item.pricingModel === 'hourly') {
+        const above = cost.item.includedPackageHours !== undefined ? ` (above ${cost.item.includedPackageHours}h)` : '';
         if (cost.item.isConditionalOvertime === true && cost.item.quantity === undefined) {
-          return `${base} · conditional`;
+          return `${base} · conditional${above}`;
         }
         const hours = cost.item.quantity ?? cost.item.extractedHours;
-        if (hours !== undefined) return `${base} · ${hours} ${hours === 1 ? 'hour' : 'hours'}`;
+        if (hours !== undefined) return `${base} · ${hours} ${hours === 1 ? 'hour' : 'hours'}${above}`;
+        if (above) return `${base}${above}`;
+      }
+      if (cost.item.pricingModel === 'flat' && cost.item.extractedHours !== undefined) {
+        return `${base} · ${cost.item.extractedHours}h`;
       }
       return base;
     }
@@ -369,6 +380,8 @@ function revisePackages(context: RevisionContext) {
   const touched = new Set<string>();
   const retainedPackages = new Set<string>();
   const mapped = new Map<string, string | undefined>();
+  const explicit = new Map<string, { tax: boolean; gratuity: boolean; minGuests: boolean; hours: boolean }>();
+  const beforeMap = new Map(before.map((pkg) => [pkg.id, pkg]));
   for (const pkg of proposed) {
     const id = 'package:' + pkg.id;
     const decision = decisions[id];
@@ -408,11 +421,19 @@ function revisePackages(context: RevisionContext) {
     const packageId = old?.id ?? reserveId(pkg.id, used);
     if (removed) result.delete(packageId);
     else if (retained && old) retainedPackages.add(old.id);
-    else if (!retained) result.set(packageId, {
-      ...revised, id: packageId, evidenceId: mapEvidenceId(pkg.evidenceId) ?? old?.evidenceId,
-      structuredInclusions: revised.structuredInclusions?.map((item) =>
-        item.packageId === pkg.id ? { ...item, packageId } : item),
-    });
+    else if (!retained) {
+      result.set(packageId, {
+        ...revised, id: packageId, evidenceId: mapEvidenceId(pkg.evidenceId) ?? old?.evidenceId,
+        structuredInclusions: revised.structuredInclusions?.map((item) =>
+          item.packageId === pkg.id ? { ...item, packageId } : item),
+      });
+      explicit.set(packageId, {
+        tax: pkg.taxHandling !== undefined && pkg.taxHandling !== 'unspecified',
+        gratuity: (pkg.gratuityStatus !== undefined && pkg.gratuityStatus !== 'unknown') || pkg.gratuityPercent != null,
+        minGuests: pkg.minGuests !== undefined,
+        hours: pkg.hours !== undefined,
+      });
+    }
     mapped.set(pkg.id, retained || removed ? undefined : packageId);
     const previousValue = old ? packageLabel(old, previous.currency) : null;
     const proposedValue = removed || (retained && !old) ? null
@@ -436,11 +457,219 @@ function revisePackages(context: RevisionContext) {
       kind: remove ? 'removed' : 'carried', previousEvidence: evidence(previous, pkg.evidenceId), canRemove: true, canAccept: false,
     });
   }
-  return { result, mapped, retained: retainedPackages };
+  return { result, mapped, retained: retainedPackages, explicit, beforeMap };
 }
 
-function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revisePackages>, currency: Quote['currency']) {
+function reconcilePackageInheritance(
+  context: RevisionContext,
+  quote: Quote,
+  packages: ReturnType<typeof revisePackages>,
+) {
+  const { previous, incoming, decisions, changes, blockingReasons } = context;
+  const resolveScope = <T>(
+    pkg: QuotePackageOption,
+    key: 'tax' | 'gratuity' | 'minGuests' | 'hours',
+    field: string,
+    blockerMessage: string,
+    previousText: string,
+    proposedText: string,
+    inherited: boolean,
+    apply: (target: QuotePackageOption) => QuotePackageOption,
+    evidenceLabel: string,
+  ) => {
+    if (inherited) {
+      packages.result.set(pkg.id, apply(pkg));
+      return;
+    }
+    const id = 'package:' + pkg.id + ':' + key;
+    const action = decisions[id]?.action;
+    if (action === 'accept') {
+      packages.result.set(pkg.id, apply(pkg));
+      changes.push({
+        id, field, scope: pkg.name, previous: previousText, proposed: proposedText, kind: 'changed',
+        previousEvidence: evidence(previous, pkg.evidenceId), proposedEvidence: evidenceForField(incoming, evidenceLabel),
+        canAccept: true,
+      });
+    } else if (action === 'retain') {
+      changes.push({
+        id, field, scope: pkg.name, previous: previousText, proposed: previousText, kind: 'carried',
+        previousEvidence: evidence(previous, pkg.evidenceId), proposedEvidence: evidenceForField(incoming, evidenceLabel),
+        canAccept: true,
+      });
+    } else {
+      changes.push({
+        id, field, scope: pkg.name, previous: previousText, proposed: proposedText, kind: 'ambiguous',
+        needsDecision: true, canAccept: true,
+        previousEvidence: evidence(previous, pkg.evidenceId), proposedEvidence: evidenceForField(incoming, evidenceLabel),
+      });
+      blockingReasons.push(blockerMessage);
+    }
+  };
+
+  const quoteTaxChanged =
+    quote.taxHandling !== previous.taxHandling || (quote.taxPercent ?? undefined) !== (previous.taxPercent ?? undefined);
+  const quoteGratChanged =
+    quote.gratuityStatus !== previous.gratuityStatus ||
+    (quote.gratuityPercent ?? undefined) !== (previous.gratuityPercent ?? undefined) ||
+    quote.gratuityBasis !== previous.gratuityBasis;
+  const quoteMinChanged = quote.minGuests !== undefined && quote.minGuests !== previous.minGuests;
+  const quoteHoursChanged =
+    quote.serviceDurationHours !== undefined && quote.serviceDurationHours !== previous.serviceDurationHours;
+
+  for (const pkg of [...packages.result.values()]) {
+    if (packages.retained.has(pkg.id)) continue;
+    const exp = packages.explicit.get(pkg.id);
+
+    if (
+      quoteTaxChanged &&
+      !exp?.tax &&
+      pkg.taxHandling &&
+      pkg.taxHandling !== 'unspecified' &&
+      (pkg.taxHandling !== quote.taxHandling || (pkg.taxPercent ?? undefined) !== (quote.taxPercent ?? undefined))
+    ) {
+      const inherited =
+        previous.taxHandling !== 'unspecified' &&
+        pkg.taxHandling === previous.taxHandling &&
+        (pkg.taxPercent ?? undefined) === (previous.taxPercent ?? undefined);
+      resolveScope(
+        pkg,
+        'tax',
+        'Tax',
+        `Confirm whether the updated tax terms also apply to package "${pkg.name}".`,
+        taxLabel(pkg),
+        taxLabel(quote),
+        inherited,
+        (target) => ({ ...target, taxHandling: quote.taxHandling, taxPercent: quote.taxPercent }),
+        'Tax',
+      );
+    }
+
+    const currentPkg = packages.result.get(pkg.id)!;
+    const hasPkgGrat = (currentPkg.gratuityStatus !== undefined && currentPkg.gratuityStatus !== 'unknown') ||
+      currentPkg.gratuityPercent != null;
+    if (
+      quoteGratChanged &&
+      !exp?.gratuity &&
+      hasPkgGrat &&
+      (currentPkg.gratuityStatus !== quote.gratuityStatus ||
+        (currentPkg.gratuityPercent ?? undefined) !== (quote.gratuityPercent ?? undefined) ||
+        currentPkg.gratuityBasis !== quote.gratuityBasis)
+    ) {
+      const prevHasGrat = (previous.gratuityStatus !== undefined && previous.gratuityStatus !== 'unknown') ||
+        previous.gratuityPercent != null;
+      const inherited =
+        prevHasGrat &&
+        currentPkg.gratuityStatus === previous.gratuityStatus &&
+        (currentPkg.gratuityPercent ?? undefined) === (previous.gratuityPercent ?? undefined) &&
+        currentPkg.gratuityBasis === previous.gratuityBasis;
+      resolveScope(
+        currentPkg,
+        'gratuity',
+        'Gratuity',
+        `Confirm whether the updated gratuity terms also apply to package "${currentPkg.name}".`,
+        gratuityLabel(currentPkg),
+        gratuityLabel(quote),
+        inherited,
+        (target) => ({
+          ...target,
+          gratuityStatus: quote.gratuityStatus,
+          gratuityPercent: quote.gratuityPercent,
+          gratuityBasis: quote.gratuityBasis,
+        }),
+        'Gratuity',
+      );
+    }
+
+    const pkgForMin = packages.result.get(pkg.id)!;
+    if (quoteMinChanged && !exp?.minGuests && pkgForMin.minGuests !== undefined && pkgForMin.minGuests !== quote.minGuests) {
+      const inherited = previous.minGuests !== undefined && pkgForMin.minGuests === previous.minGuests;
+      resolveScope(
+        pkgForMin,
+        'minGuests',
+        'Guest minimum',
+        `Confirm whether the updated guest minimum also applies to package "${pkgForMin.name}".`,
+        `${pkgForMin.minGuests} guest minimum`,
+        `${quote.minGuests} guest minimum`,
+        inherited,
+        (target) => ({ ...target, minGuests: quote.minGuests }),
+        'Guest minimum',
+      );
+    }
+
+    const pkgForHours = packages.result.get(pkg.id)!;
+    if (
+      quoteHoursChanged &&
+      !exp?.hours &&
+      pkgForHours.hours !== undefined &&
+      pkgForHours.hours !== quote.serviceDurationHours
+    ) {
+      const inherited = previous.serviceDurationHours !== undefined && pkgForHours.hours === previous.serviceDurationHours;
+      resolveScope(
+        pkgForHours,
+        'hours',
+        'Coverage hours',
+        `Confirm whether the updated coverage hours also apply to package "${pkgForHours.name}".`,
+        `${pkgForHours.hours} hours`,
+        `${quote.serviceDurationHours} hours`,
+        inherited,
+        (target) => ({ ...target, hours: quote.serviceDurationHours }),
+        'Coverage hours',
+      );
+    }
+  }
+}
+
+function reviseCosts(
+  context: RevisionContext,
+  packages: ReturnType<typeof revisePackages>,
+  quote: Pick<Quote, 'currency' | 'minGuests' | 'serviceDurationHours'>,
+) {
   const { previous, incoming, decisions, partial, changes, blockingReasons, mapEvidenceId } = context;
+  const currency = quote.currency;
+  const reconcileInheritedItem = (cost: Cost, incomingRow?: Cost): Cost => {
+    if (!partial) return cost;
+    if (cost.type !== 'line' && cost.type !== 'optional') return cost;
+    const oldPkg = cost.packageId ? packages.beforeMap.get(cost.packageId) : undefined;
+    const newPkg = cost.packageId ? packages.result.get(cost.packageId) : undefined;
+    const oldMin = oldPkg?.minGuests ?? previous.minGuests;
+    const newMin = newPkg?.minGuests ?? quote.minGuests;
+    const oldThreshold = oldPkg ? (oldPkg.includedGuests ?? oldPkg.minGuests ?? previous.minGuests) : previous.minGuests;
+    const newThreshold = newPkg ? (newPkg.includedGuests ?? newPkg.minGuests ?? quote.minGuests) : quote.minGuests;
+    const oldHours = oldPkg?.hours ?? previous.serviceDurationHours;
+    const newHours = newPkg?.hours ?? quote.serviceDurationHours;
+
+    if (cost.type === 'optional') {
+      const incomingOpt = incomingRow?.type === 'optional' ? incomingRow.item : undefined;
+      if (incomingOpt?.minGuests === undefined && oldMin !== undefined && newMin !== undefined && oldMin !== newMin && cost.item.minGuests === oldMin) {
+        return { ...cost, item: { ...cost.item, minGuests: newMin } };
+      }
+      return cost;
+    }
+
+    const incomingLine = incomingRow?.type === 'line' ? incomingRow.item : undefined;
+    let nextItem = cost.item;
+    if (incomingLine?.minGuests === undefined && oldMin !== undefined && newMin !== undefined && oldMin !== newMin && nextItem.minGuests === oldMin) {
+      nextItem = { ...nextItem, minGuests: newMin };
+    }
+    if (
+      nextItem.pricingModel === 'per_extra_guest' &&
+      incomingLine?.guestThreshold === undefined &&
+      oldThreshold !== undefined &&
+      newThreshold !== undefined &&
+      oldThreshold !== newThreshold &&
+      nextItem.guestThreshold === oldThreshold
+    ) {
+      nextItem = { ...nextItem, guestThreshold: newThreshold };
+    }
+    if (oldHours !== undefined && newHours !== undefined && oldHours !== newHours) {
+      if (nextItem.pricingModel === 'hourly' && incomingLine?.includedPackageHours === undefined && nextItem.includedPackageHours === oldHours) {
+        nextItem = { ...nextItem, includedPackageHours: newHours };
+      } else if (nextItem.pricingModel === 'flat' && incomingLine?.extractedHours === undefined && nextItem.extractedHours === oldHours) {
+        nextItem = { ...nextItem, extractedHours: newHours };
+      }
+    }
+    return nextItem === cost.item ? cost : { ...cost, item: nextItem };
+  };
   const oldRows = costRows(previous).filter((row) =>
     !row.packageId || !previous.packages?.some((pkg) => pkg.id === row.packageId) || packages.result.has(row.packageId));
   const proposed = costRows(incoming).flatMap((row) => {
@@ -500,7 +729,9 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
     const scoped = withScope(row, key, partial ? old?.packageId ?? row.packageId : row.packageId,
       partial ? old?.eventId ?? row.eventId : row.eventId, proposedEvidence ?? carriedEvidence);
     const charged = old ? effective(old) : undefined;
-    const amended = old && charged && partial ? amendCost(charged, { ...scoped, nested: old.nested || scoped.nested }) : scoped;
+    const amended = old && charged && partial
+      ? reconcileInheritedItem(amendCost(charged, { ...scoped, nested: old.nested || scoped.nested }), row)
+      : scoped;
     const reviewed = editAmount(amended, decision);
     if (!reviewed) blockingReasons.push('Enter a valid amount for "' + row.item.label + '".');
     const next = reviewed ?? amended;
@@ -529,15 +760,21 @@ function reviseCosts(context: RevisionContext, packages: ReturnType<typeof revis
     const manual = decision?.action === 'manual';
     const edited = editAmount(row, decision);
     if (!edited) blockingReasons.push('Enter a valid amount for "' + row.item.label + '".');
+    const inherited = !removed && !manual && decision?.action !== 'retain' ? reconcileInheritedItem(row) : row;
+    const inheritedChanged = !removed && !manual && !same(costFacts(row), costFacts(inherited));
     if (removed) result.delete(row.key);
     else if (manual && edited) {
       result.set(row.key, edited);
       repriced.add(row.key);
+    } else if (inheritedChanged) {
+      result.set(row.key, inherited);
+      repriced.add(row.key);
     }
     changes.push({
       id, field: row.item.label, scope: scope(row), previous: showCost(row, previous.currency),
-      proposed: removed ? null : showCost(edited ?? row, currency),
-      kind: removed ? 'removed' : manual && edited ? 'changed' : 'carried', previousEvidence: costEvidence(previous, row), canAccept: false,
+      proposed: removed ? null : showCost(edited ?? inherited, currency),
+      kind: removed ? 'removed' : (manual && edited) || inheritedChanged ? 'changed' : 'carried',
+      previousEvidence: costEvidence(previous, row), canAccept: false,
       canEditAmount: row.type !== 'included', canRemove: true,
     });
   }
@@ -633,7 +870,8 @@ export function reconcileQuoteRevision(
   }
 
   const packages = revisePackages(context);
-  const { rows, mapped, repriced } = reviseCosts(context, packages, quote.currency);
+  if (partial) reconcilePackageInheritance(context, quote, packages);
+  const { rows, mapped, repriced } = reviseCosts(context, packages, quote);
   quote.lineItems = rows.flatMap((row) => row.type === 'line' && !row.nested ? [row.item] : []);
   quote.addOns = rows.flatMap((row) => {
     if (row.type !== 'optional') return [];

@@ -131,7 +131,7 @@ function RevisionChangeCard({
               {canRetain && <option value="retain">{change.previous === null ? 'Ignore proposed change' : 'Retain previous value'}</option>}
               {canAccept && (
                 <option value="accept">
-                  {needsDecision ? change.scope === 'Package' ? 'Add as another package' : 'Accept as an additional charge' : 'Accept proposed value'}
+                  {needsDecision && change.previous === null ? (change.scope === 'Package' ? 'Add as another package' : 'Accept as an additional charge') : 'Accept proposed value'}
                 </option>
               )}
               {candidates.map((candidate) => <option key={candidate.id} value={'replace:' + candidate.id}>Replace {candidate.label} ({candidate.value})</option>)}

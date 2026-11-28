@@ -800,3 +800,268 @@ table('charge reclassification', [
     },
   },
 ]);
+
+// ---------------------------------------------------------------------------------------------------------
+// Parent-child financial inheritance: quote -> package -> line items (PR #26 P1s + equivalents).
+// ---------------------------------------------------------------------------------------------------------
+table('parent-child tax and gratuity inheritance', [
+  {
+    name: 'quote-wide tax change prompts for confirmation when a retained package has an independent tax override, and reverses cleanly',
+    prior: packagePrior({ taxHandling: 'excluded_plus_hst', taxPercent: 13 }, { taxHandling: 'unspecified', taxPercent: undefined }),
+    text: 'quote tax blocks independent package override',
+    overrides: { taxHandling: 'included' },
+    blocked: true,
+    check: (preview) => {
+      const change = preview.changes.find((c) => c.id === 'package:orchid:tax');
+      assert.ok(change?.needsDecision);
+      assert.equal(change.scope, 'Orchid');
+      assert.equal(change.previous, 'Plus 13% tax');
+      assert.equal(change.proposed, 'Tax included');
+    },
+  },
+  {
+    name: 'accepting quote-wide tax updates the retained package override and supports reversing back',
+    prior: packagePrior({ taxHandling: 'excluded_plus_hst', taxPercent: 13 }, { taxHandling: 'unspecified', taxPercent: undefined }),
+    text: 'quote tax accepted for package',
+    overrides: { taxHandling: 'included' },
+    decisions: { 'package:orchid:tax': { action: 'accept' } },
+    check: (preview) => {
+      assert.equal(preview.quote.taxHandling, 'included');
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxHandling, 'included');
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1000);
+    },
+    then: [{
+      text: 'quote tax reversed to 13% HST',
+      overrides: () => ({ taxHandling: 'excluded_plus_hst', taxPercent: 13 }),
+      check: (preview) => {
+        assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxHandling, 'excluded_plus_hst');
+        assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxPercent, 13);
+        assert.equal(preview.proposedCalc.estimatedAllInTotal, 1130);
+      },
+    }],
+  },
+  {
+    name: 'retaining an independent package tax override preserves it when quote-wide tax changes',
+    prior: packagePrior({ taxHandling: 'excluded_plus_hst', taxPercent: 13 }, { taxHandling: 'unspecified', taxPercent: undefined }),
+    text: 'quote tax retained for package',
+    overrides: { taxHandling: 'included' },
+    decisions: { 'package:orchid:tax': { action: 'retain' } },
+    check: (preview) => {
+      assert.equal(preview.quote.taxHandling, 'included');
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxHandling, 'excluded_plus_hst');
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1130);
+    },
+  },
+  {
+    name: 'inherited package tax updates automatically while an independent sibling tier prompts',
+    prior: base({
+      lineItems: [],
+      taxHandling: 'excluded_plus_hst',
+      taxPercent: 13,
+      selectedPackageId: 'orchid',
+      packages: [
+        orchid({ taxHandling: 'excluded_plus_hst', taxPercent: 13 }),
+        { ...cedar(), taxHandling: 'included', taxPercent: undefined },
+      ],
+    }),
+    text: 'inherited vs independent sibling tax',
+    overrides: { taxHandling: 'excluded_plus_hst', taxPercent: 15 },
+    decisions: { 'package:cedar:tax': { action: 'retain' } },
+    check: (preview) => {
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.taxPercent, 15);
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'cedar')?.taxHandling, 'included');
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1150);
+    },
+  },
+  {
+    name: 'quote-wide gratuity change prompts for independent package gratuity and accepts or retains cleanly',
+    prior: packagePrior(
+      { taxHandling: 'included', taxPercent: 0, gratuityStatus: 'excluded', gratuityPercent: 18, gratuityBasis: 'entire_subtotal' },
+      { taxHandling: 'included', taxPercent: 0, gratuityStatus: 'unknown' },
+    ),
+    text: 'quote gratuity prompts independent package',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    blocked: true,
+    check: (preview) => assert.ok(preview.changes.some((c) => c.id === 'package:orchid:gratuity' && c.needsDecision)),
+  },
+  {
+    name: 'accepting quote-wide gratuity updates independent package gratuity and reverses',
+    prior: packagePrior(
+      { taxHandling: 'included', taxPercent: 0, gratuityStatus: 'excluded', gratuityPercent: 18, gratuityBasis: 'entire_subtotal' },
+      { taxHandling: 'included', taxPercent: 0, gratuityStatus: 'unknown' },
+    ),
+    text: 'quote gratuity accepted for package',
+    overrides: { gratuityStatus: 'excluded', gratuityPercent: 20, gratuityBasis: 'entire_subtotal' },
+    decisions: { 'package:orchid:gratuity': { action: 'accept' } },
+    check: (preview) => {
+      assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.gratuityPercent, 20);
+      assert.equal(preview.proposedCalc.estimatedAllInTotal, 1200);
+    },
+    then: [{
+      text: 'quote gratuity reversed to 18%',
+      overrides: () => ({ gratuityStatus: 'excluded', gratuityPercent: 18, gratuityBasis: 'entire_subtotal' }),
+      check: (preview) => {
+        assert.equal(preview.quote.packages?.find(({ id }) => id === 'orchid')?.gratuityPercent, 18);
+        assert.equal(preview.proposedCalc.estimatedAllInTotal, 1180);
+      },
+    }],
+  },
+]);
+
+table('parent-child minimum, threshold, and coverage-hour inheritance', [
+  {
+    name: 'changing quote minGuests propagates to inherited per-person line items and reverses',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      minGuests: 250,
+      lineItems: [{ id: 'dinner', label: 'Dinner', pricingModel: 'per_person', unitPrice: 100, minGuests: 250 }],
+    }),
+    text: 'minGuests 250 to 350',
+    overrides: { minGuests: 350 },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems[0].minGuests, 350);
+      assert.equal(preview.proposedCalc.preTaxTotal, 35000);
+    },
+    then: [{
+      text: 'minGuests reversed 350 to 250',
+      overrides: () => ({ minGuests: 250 }),
+      check: (preview) => {
+        assert.equal(preview.quote.lineItems[0].minGuests, 250);
+        assert.equal(preview.proposedCalc.preTaxTotal, 32000);
+      },
+    }],
+  },
+  {
+    name: 'changing quote minGuests preserves an independent line-item minimum override',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      minGuests: 250,
+      lineItems: [{ id: 'dinner', label: 'Dinner', pricingModel: 'per_person', unitPrice: 100, minGuests: 340 }],
+    }),
+    text: 'independent item minGuests preserved',
+    overrides: { minGuests: 350 },
+    check: (preview) => {
+      assert.equal(preview.quote.minGuests, 350);
+      assert.equal(preview.quote.lineItems[0].minGuests, 340);
+      assert.equal(preview.proposedCalc.preTaxTotal, 34000);
+    },
+  },
+  {
+    name: 'changing package minGuests propagates to inherited package fees while preserving independent fee minimums',
+    prior: packagePrior(
+      {
+        pricingModel: 'flat',
+        unitPrice: 0,
+        minGuests: 250,
+        taxHandling: 'included',
+        taxPercent: 0,
+        fees: [
+          { id: 'pkg-dinner', label: 'Banquet dinner', pricingModel: 'per_person', unitPrice: 100, minGuests: 250, packageId: 'orchid' },
+          { id: 'pkg-late', label: 'Late snack', pricingModel: 'per_person', unitPrice: 10, minGuests: 330, packageId: 'orchid' },
+        ],
+      },
+      { taxHandling: 'included', taxPercent: 0 },
+    ),
+    text: 'package minGuests updates inherited fee only',
+    overrides: pkgFragment({ unitPrice: 0, minGuests: 350 }),
+    check: (preview) => {
+      const fees = preview.quote.packages?.find(({ id }) => id === 'orchid')?.fees ?? [];
+      assert.equal(fees.find(({ id }) => id === 'pkg-dinner')?.minGuests, 350);
+      assert.equal(fees.find(({ id }) => id === 'pkg-late')?.minGuests, 330);
+      assert.equal(preview.proposedCalc.preTaxTotal, 38300);
+    },
+  },
+  {
+    name: 'changing quote minGuests updates inherited per_extra_guest threshold and reverses while preserving independent thresholds',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      minGuests: 250,
+      lineItems: [
+        { id: 'extra-inh', label: 'Extra meal', pricingModel: 'per_extra_guest', unitPrice: 50, guestThreshold: 250 },
+        { id: 'extra-ind', label: 'Extra dessert', pricingModel: 'per_extra_guest', unitPrice: 20, guestThreshold: 300 },
+      ],
+    }),
+    text: 'threshold inheritance',
+    overrides: { minGuests: 280 },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems.find(({ id }) => id === 'extra-inh')?.guestThreshold, 280);
+      assert.equal(preview.quote.lineItems.find(({ id }) => id === 'extra-ind')?.guestThreshold, 300);
+      assert.equal(preview.proposedCalc.preTaxTotal, 2400);
+    },
+    then: [{
+      text: 'threshold reversed',
+      overrides: () => ({ minGuests: 250 }),
+      check: (preview) => {
+        assert.equal(preview.quote.lineItems.find(({ id }) => id === 'extra-inh')?.guestThreshold, 250);
+        assert.equal(preview.proposedCalc.preTaxTotal, 3900);
+      },
+    }],
+  },
+  {
+    name: 'changing quote coverage hours updates inherited overtime threshold and flat hours while preserving independent overrides',
+    prior: base({
+      taxHandling: 'included',
+      taxPercent: 0,
+      serviceDurationHours: 8,
+      lineItems: [
+        { id: 'pkg-flat', label: 'Coverage package', pricingModel: 'flat', unitPrice: 2000, extractedHours: 8 },
+        {
+          id: 'ot-inh',
+          label: 'Overtime',
+          pricingModel: 'hourly',
+          unitPrice: 200,
+          includedPackageHours: 8,
+          isConditionalOvertime: true,
+          chargeType: 'conditional',
+        },
+        {
+          id: 'ot-ind',
+          label: 'Assistant overtime',
+          pricingModel: 'hourly',
+          unitPrice: 100,
+          includedPackageHours: 10,
+          isConditionalOvertime: true,
+          chargeType: 'conditional',
+        },
+      ],
+    }),
+    text: 'coverage hours 8 to 6',
+    overrides: { serviceDurationHours: 6 },
+    check: (preview) => {
+      assert.equal(preview.quote.lineItems.find(({ id }) => id === 'pkg-flat')?.extractedHours, 6);
+      assert.equal(preview.quote.lineItems.find(({ id }) => id === 'ot-inh')?.includedPackageHours, 6);
+      assert.equal(preview.quote.lineItems.find(({ id }) => id === 'ot-ind')?.includedPackageHours, 10);
+    },
+    then: [{
+      text: 'coverage hours reversed 6 to 8',
+      overrides: () => ({ serviceDurationHours: 8 }),
+      check: (preview) => {
+        assert.equal(preview.quote.lineItems.find(({ id }) => id === 'pkg-flat')?.extractedHours, 8);
+        assert.equal(preview.quote.lineItems.find(({ id }) => id === 'ot-inh')?.includedPackageHours, 8);
+      },
+    }],
+  },
+]);
+
+test('exact PR #26 P1 guest-minimum reproduction: 150 guests with venue minGuests 100 -> 200 totals 20,000', () => {
+  const baseWs = workspace(base({
+    taxHandling: 'included',
+    taxPercent: 0,
+    minGuests: 100,
+    lineItems: [{ id: 'dinner', label: 'Dinner', pricingModel: 'per_person', unitPrice: 100, minGuests: 100 }],
+  }));
+  const ws150: WeddingWorkspace = {
+    ...baseWs,
+    events: baseWs.events.map((evt) => evt.id === reception ? { ...evt, guestCount: 150 } : evt),
+  };
+  const prior = active(ws150);
+  const incoming = fragment(prior, 'venue minimum 200', { minGuests: 200 });
+  const { preview, result } = exercise(ws150, incoming);
+  assert.deepEqual(preview.blockingReasons, []);
+  assert.equal(preview.proposedCalc.preTaxTotal, 20000);
+  assert.equal(result.approved, true);
+  assert.equal(price(active(result.workspace), result.workspace).preTaxTotal, 20000);
+});
